@@ -297,10 +297,26 @@ sequenceDiagram
 ### Prerequisites
 
 - Node.js 18+
-- Python 3.10+
-- npm or yarn
+- Conda (Miniconda or Anaconda)
 
-### 1. Frontend Setup
+### 1. Backend Setup
+
+```bash
+# Create conda env with Python 3.10 (required for torch 2.5.1)
+conda create -n pyreflect-backend python=3.10 -y
+conda activate pyreflect-backend
+
+# Install dependencies
+cd src/backend
+pip install -r requirements.txt
+
+# Start server
+uvicorn main:app --port 8000
+```
+
+Backend runs at **http://localhost:8000**
+
+### 2. Frontend Setup
 
 ```bash
 cd src/interface
@@ -308,26 +324,12 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:3000** in your browser.
+Frontend runs at **http://localhost:3000**
 
-### 2. Backend Setup (Optional)
-
-The frontend requires the backend for real generation. If the backend is not running, the UI will show **Backend not deployed**.
+### Troubleshooting
 
 ```bash
-cd src/backend
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn main:app --port 8000
-```
-
-Backend runs at **http://localhost:8000**
-
-**Troubleshooting:**
-
-```bash
-# Kill process on port 8000 (if address already in use)
+# Kill process on port 8000
 lsof -ti:8000 | xargs kill -9
 
 # Kill process on port 3000
