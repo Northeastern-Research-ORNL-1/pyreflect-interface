@@ -3,7 +3,6 @@ PyReflect Interface - FastAPI Backend
 Provides REST API for generating NR/SLD curves using pyreflect
 """
 
-import sys
 import tempfile
 import time
 import warnings
@@ -24,14 +23,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-# Add pyreflect to path
+# Backend paths
 BACKEND_ROOT = Path(__file__).parent
 DATA_DIR = BACKEND_ROOT / "data"
 CURVES_DIR = DATA_DIR / "curves"
 EXPT_DIR = CURVES_DIR / "expt"
 SETTINGS_PATH = BACKEND_ROOT / "settings.yml"
-PYREFLECT_PATH = BACKEND_ROOT.parent.parent / "pyreflect" / "src"
-sys.path.insert(0, str(PYREFLECT_PATH))
 
 # Import pyreflect components
 PYREFLECT_AVAILABLE = False
