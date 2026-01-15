@@ -296,22 +296,15 @@ sequenceDiagram
 
 ### Prerequisites
 
-- [Bun](https://bun.sh)
-- Conda (Miniconda or Anaconda)
+- [Bun](https://bun.sh) (frontend)
+- [uv](https://docs.astral.sh/uv/) (backend)
 
 ### 1. Backend Setup
 
 ```bash
-# Create conda env with Python 3.10 (required for torch 2.5.1)
-conda create -n pyreflect-backend python=3.10 -y
-conda activate pyreflect-backend
-
-# Install dependencies
 cd src/backend
-pip install -r requirements.txt
-
-# Start server
-uvicorn main:app --port 8000
+uv sync
+uv run uvicorn main:app --port 8000
 ```
 
 Backend runs at **http://localhost:8000**
@@ -340,9 +333,30 @@ lsof -ti:3000 | xargs kill -9
 
 To deploy with resource limits (prevents abuse):
 
+**Option 1: Environment variable**
 ```bash
-# Backend with production limits
-PRODUCTION=true uvicorn main:app --port 8000
+PRODUCTION=true uv run uvicorn main:app --port 8000
+```
+
+**Option 2: Create `.env` file in `src/backend/`**
+```env
+# .env
+PRODUCTION=true
+
+# Optional: override individual limits
+MAX_CURVES=5000
+MAX_EPOCHS=50
+MAX_BATCH_SIZE=64
+MAX_CNN_LAYERS=12
+MAX_DROPOUT=0.5
+MAX_LATENT_DIM=32
+MAX_AE_EPOCHS=100
+MAX_MLP_EPOCHS=100
+```
+
+Then run normally:
+```bash
+uv run uvicorn main:app --port 8000
 ```
 
 **Production limits:**
@@ -420,7 +434,7 @@ bun dev
 
 # Backend development
 cd src/backend
-uvicorn main:app --reload
+uv run uvicorn main:app --reload
 
 # Build for production
 cd src/interface
