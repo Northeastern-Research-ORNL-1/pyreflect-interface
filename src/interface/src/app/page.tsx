@@ -258,6 +258,30 @@ export default function Home() {
     addLog('Exported all data to pyreflect_results.json');
   }, [graphData, addLog]);
 
+  const handleImportJSON = useCallback(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text) as GenerateResponse;
+        // Validate it has expected structure
+        if (data.nr && data.sld && data.training && data.metrics) {
+          setGraphData(data);
+          addLog(`Imported data from ${file.name}`);
+        } else {
+          addLog(`Error: Invalid JSON structure in ${file.name}`);
+        }
+      } catch (err) {
+        addLog(`Error parsing JSON: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      }
+    };
+    input.click();
+  }, [addLog]);
+
   return (
     <div className="container">
       <header className="header">
@@ -267,6 +291,9 @@ export default function Home() {
           <span className="header__version">v0.0.1</span>
         </div>
         <nav className="header__nav">
+          <button className="header__export-btn" onClick={handleImportJSON}>
+            ↑ Import JSON
+          </button>
           {graphData && (
             <button className="header__export-btn" onClick={handleExportAll}>
               ↓ Export All
