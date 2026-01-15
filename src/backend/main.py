@@ -4,7 +4,11 @@ Provides REST API for generating NR/SLD curves using pyreflect
 """
 
 import os
+from dotenv import load_dotenv
 import tempfile
+
+# Load .env file if present
+load_dotenv()
 import time
 import warnings
 import io
@@ -23,17 +27,30 @@ from typing import Generator, Any
 # =====================
 IS_PRODUCTION = os.getenv("PRODUCTION", "").lower() in ("true", "1", "yes")
 
-# Local: unlimited (high values), Production: strict limits
+# Default limits: Local (unlimited) vs Production (strict)
+_DEFAULT_LIMITS = {
+    "max_curves": (100000, 5000),
+    "max_film_layers": (20, 10),
+    "max_batch_size": (512, 64),
+    "max_epochs": (1000, 50),
+    "max_cnn_layers": (20, 12),
+    "max_dropout": (0.9, 0.5),
+    "max_latent_dim": (128, 32),
+    "max_ae_epochs": (500, 100),
+    "max_mlp_epochs": (500, 100),
+}
+
+# Build limits with optional env var overrides
+def _get_limit(key: str, local_val: int | float, prod_val: int | float) -> int | float:
+    env_key = key.upper()  # e.g., max_curves -> MAX_CURVES
+    env_val = os.getenv(env_key)
+    if env_val is not None:
+        return float(env_val) if isinstance(prod_val, float) else int(env_val)
+    return prod_val if IS_PRODUCTION else local_val
+
 LIMITS = {
-    "max_curves": 5000 if IS_PRODUCTION else 100000,
-    "max_film_layers": 10 if IS_PRODUCTION else 20,
-    "max_batch_size": 64 if IS_PRODUCTION else 512,
-    "max_epochs": 50 if IS_PRODUCTION else 1000,
-    "max_cnn_layers": 12 if IS_PRODUCTION else 20,
-    "max_dropout": 0.5 if IS_PRODUCTION else 0.9,
-    "max_latent_dim": 32 if IS_PRODUCTION else 128,
-    "max_ae_epochs": 100 if IS_PRODUCTION else 500,
-    "max_mlp_epochs": 100 if IS_PRODUCTION else 500,
+    key: _get_limit(key, local, prod)
+    for key, (local, prod) in _DEFAULT_LIMITS.items()
 }
 
 import numpy as np
