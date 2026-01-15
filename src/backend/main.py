@@ -3,6 +3,7 @@ PyReflect Interface - FastAPI Backend
 Provides REST API for generating NR/SLD curves using pyreflect
 """
 
+import os
 import tempfile
 import time
 import warnings
@@ -16,6 +17,24 @@ from contextlib import asynccontextmanager
 
 import json
 from typing import Generator, Any
+
+# =====================
+# Production Limits
+# =====================
+IS_PRODUCTION = os.getenv("PRODUCTION", "").lower() in ("true", "1", "yes")
+
+# Local: unlimited (high values), Production: strict limits
+LIMITS = {
+    "max_curves": 5000 if IS_PRODUCTION else 100000,
+    "max_film_layers": 10 if IS_PRODUCTION else 20,
+    "max_batch_size": 64 if IS_PRODUCTION else 512,
+    "max_epochs": 50 if IS_PRODUCTION else 1000,
+    "max_cnn_layers": 12 if IS_PRODUCTION else 20,
+    "max_dropout": 0.5 if IS_PRODUCTION else 0.9,
+    "max_latent_dim": 32 if IS_PRODUCTION else 128,
+    "max_ae_epochs": 100 if IS_PRODUCTION else 500,
+    "max_mlp_epochs": 100 if IS_PRODUCTION else 500,
+}
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, UploadFile, File
@@ -125,6 +144,32 @@ class TrainingParams(BaseModel):
     latentDim: int = Field(ge=2, le=128, default=16)
     aeEpochs: int = Field(ge=1, le=500, default=50)
     mlpEpochs: int = Field(ge=1, le=500, default=50)
+
+
+def validate_limits(gen_params: GeneratorParams, train_params: TrainingParams) -> None:
+    """Validate request against current limits (enforced in production)."""
+    errors = []
+    if gen_params.numCurves > LIMITS["max_curves"]:
+        errors.append(f"numCurves ({gen_params.numCurves}) exceeds limit ({LIMITS['max_curves']})")
+    if gen_params.numFilmLayers > LIMITS["max_film_layers"]:
+        errors.append(f"numFilmLayers ({gen_params.numFilmLayers}) exceeds limit ({LIMITS['max_film_layers']})")
+    if train_params.batchSize > LIMITS["max_batch_size"]:
+        errors.append(f"batchSize ({train_params.batchSize}) exceeds limit ({LIMITS['max_batch_size']})")
+    if train_params.epochs > LIMITS["max_epochs"]:
+        errors.append(f"epochs ({train_params.epochs}) exceeds limit ({LIMITS['max_epochs']})")
+    if train_params.layers > LIMITS["max_cnn_layers"]:
+        errors.append(f"layers ({train_params.layers}) exceeds limit ({LIMITS['max_cnn_layers']})")
+    if train_params.dropout > LIMITS["max_dropout"]:
+        errors.append(f"dropout ({train_params.dropout}) exceeds limit ({LIMITS['max_dropout']})")
+    if train_params.latentDim > LIMITS["max_latent_dim"]:
+        errors.append(f"latentDim ({train_params.latentDim}) exceeds limit ({LIMITS['max_latent_dim']})")
+    if train_params.aeEpochs > LIMITS["max_ae_epochs"]:
+        errors.append(f"aeEpochs ({train_params.aeEpochs}) exceeds limit ({LIMITS['max_ae_epochs']})")
+    if train_params.mlpEpochs > LIMITS["max_mlp_epochs"]:
+        errors.append(f"mlpEpochs ({train_params.mlpEpochs}) exceeds limit ({LIMITS['max_mlp_epochs']})")
+    
+    if errors:
+        raise HTTPException(status_code=400, detail="; ".join(errors))
 
 
 class GenerateRequest(BaseModel):
@@ -630,6 +675,15 @@ async def health_check():
     }
 
 
+@app.get("/api/limits")
+async def get_limits():
+    """Get current parameter limits (stricter in production)."""
+    return {
+        "production": IS_PRODUCTION,
+        "limits": LIMITS,
+    }
+
+
 @app.post("/api/generate", response_model=GenerateResponse)
 async def generate(request: GenerateRequest):
     """
@@ -638,6 +692,7 @@ async def generate(request: GenerateRequest):
     Returns neutron reflectivity data, SLD profiles, training loss curves,
     and chi parameter predictions.
     """
+    validate_limits(request.generator, request.training)
     if not PYREFLECT_AVAILABLE:
         raise HTTPException(
             status_code=503, 
@@ -657,6 +712,7 @@ async def generate_stream(request: GenerateRequest):
     Stream generation progress via Server-Sent Events.
     Events: log (text message), progress (epoch info), result (final data)
     """
+    validate_limits(request.generator, request.training)
     if not PYREFLECT_AVAILABLE:
         def error_stream():
             yield 'event: error\ndata: "pyreflect not available. Please install pyreflect dependencies."\n\n'

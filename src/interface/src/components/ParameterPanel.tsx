@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, type ChangeEvent, type DragEvent } from 'react';
-import { FilmLayer, GeneratorParams, TrainingParams } from '@/types';
+import { FilmLayer, GeneratorParams, TrainingParams, Limits, DEFAULT_LIMITS } from '@/types';
 import EditableValue from './EditableValue';
 import styles from './ParameterPanel.module.css';
 
@@ -26,6 +26,8 @@ export interface ParameterPanelProps {
   isGenerating: boolean;
   isUploading: boolean;
   backendStatus: BackendStatus | null;
+  limits?: Limits;
+  isProduction?: boolean;
 }
 
 export default function ParameterPanel({
@@ -41,6 +43,8 @@ export default function ParameterPanel({
   isGenerating,
   isUploading,
   backendStatus,
+  limits = DEFAULT_LIMITS,
+  isProduction = false,
 }: ParameterPanelProps) {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isDragActive, setIsDragActive] = useState(false);
@@ -313,12 +317,12 @@ export default function ParameterPanel({
         
         <div className="control">
           <div className="control__label">
-            <span>Number of Curves</span>
+            <span>Number of Curves{isProduction && ` (max ${limits.max_curves})`}</span>
             <EditableValue
               value={generatorParams.numCurves}
-              onChange={(v) => onGeneratorParamsChange({ ...generatorParams, numCurves: Math.round(v) })}
+              onChange={(v) => onGeneratorParamsChange({ ...generatorParams, numCurves: Math.min(Math.round(v), limits.max_curves) })}
               min={10}
-              max={100000}
+              max={limits.max_curves}
               step={10}
               decimals={0}
             />
@@ -327,8 +331,8 @@ export default function ParameterPanel({
             type="range"
             className="slider"
             min="100"
-            max="100000"
-            step="1000"
+            max={limits.max_curves}
+            step="100"
             value={generatorParams.numCurves}
             onChange={(e) => onGeneratorParamsChange({ 
               ...generatorParams, 
@@ -372,12 +376,12 @@ export default function ParameterPanel({
         
         <div className="control">
           <div className="control__label">
-            <span>Batch Size</span>
+            <span>Batch Size{isProduction && ` (max ${limits.max_batch_size})`}</span>
             <EditableValue
               value={trainingParams.batchSize}
-              onChange={(v) => onTrainingParamsChange({ ...trainingParams, batchSize: Math.round(v) })}
+              onChange={(v) => onTrainingParamsChange({ ...trainingParams, batchSize: Math.min(Math.round(v), limits.max_batch_size) })}
               min={1}
-              max={512}
+              max={limits.max_batch_size}
               step={8}
               decimals={0}
             />
@@ -386,7 +390,7 @@ export default function ParameterPanel({
             type="range"
             className="slider"
             min="8"
-            max="256"
+            max={limits.max_batch_size}
             step="8"
             value={trainingParams.batchSize}
             onChange={(e) => onTrainingParamsChange({ 
@@ -398,13 +402,13 @@ export default function ParameterPanel({
 
         <div className="control">
           <div className="control__label">
-            <span>Epochs</span>
+            <span>Epochs{isProduction && ` (max ${limits.max_epochs})`}</span>
             <EditableValue
               value={trainingParams.epochs}
-              onChange={(v) => onTrainingParamsChange({ ...trainingParams, epochs: Math.round(v) })}
+              onChange={(v) => onTrainingParamsChange({ ...trainingParams, epochs: Math.min(Math.round(v), limits.max_epochs) })}
               min={1}
-              max={10000}
-              step={10}
+              max={limits.max_epochs}
+              step={1}
               decimals={0}
             />
           </div>
@@ -412,7 +416,7 @@ export default function ParameterPanel({
             type="range"
             className="slider"
             min="1"
-            max="1000"
+            max={limits.max_epochs}
             step="1"
             value={trainingParams.epochs}
             onChange={(e) => onTrainingParamsChange({ 
@@ -424,12 +428,12 @@ export default function ParameterPanel({
 
         <div className="control">
           <div className="control__label">
-            <span>CNN Layers</span>
+            <span>CNN Layers{isProduction && ` (max ${limits.max_cnn_layers})`}</span>
             <EditableValue
               value={trainingParams.layers}
-              onChange={(v) => onTrainingParamsChange({ ...trainingParams, layers: Math.round(v) })}
+              onChange={(v) => onTrainingParamsChange({ ...trainingParams, layers: Math.min(Math.round(v), limits.max_cnn_layers) })}
               min={1}
-              max={20}
+              max={limits.max_cnn_layers}
               step={1}
               decimals={0}
             />
@@ -438,7 +442,7 @@ export default function ParameterPanel({
             type="range"
             className="slider"
             min="1"
-            max="20"
+            max={limits.max_cnn_layers}
             step="1"
             value={trainingParams.layers}
             onChange={(e) => onTrainingParamsChange({ 
@@ -450,12 +454,12 @@ export default function ParameterPanel({
 
         <div className="control">
           <div className="control__label">
-            <span>Dropout</span>
+            <span>Dropout{isProduction && ` (max ${limits.max_dropout})`}</span>
             <EditableValue
               value={trainingParams.dropout}
-              onChange={(v) => onTrainingParamsChange({ ...trainingParams, dropout: v })}
+              onChange={(v) => onTrainingParamsChange({ ...trainingParams, dropout: Math.min(v, limits.max_dropout) })}
               min={0}
-              max={0.9}
+              max={limits.max_dropout}
               step={0.01}
               decimals={2}
             />
@@ -464,7 +468,7 @@ export default function ParameterPanel({
             type="range"
             className="slider"
             min="0"
-            max="0.9"
+            max={limits.max_dropout}
             step="0.05"
             value={trainingParams.dropout}
             onChange={(e) => onTrainingParamsChange({ 
@@ -476,12 +480,12 @@ export default function ParameterPanel({
 
         <div className="control">
           <div className="control__label">
-            <span>Latent Dimension</span>
+            <span>Latent Dimension{isProduction && ` (max ${limits.max_latent_dim})`}</span>
             <EditableValue
               value={trainingParams.latentDim}
-              onChange={(v) => onTrainingParamsChange({ ...trainingParams, latentDim: Math.round(v) })}
+              onChange={(v) => onTrainingParamsChange({ ...trainingParams, latentDim: Math.min(Math.round(v), limits.max_latent_dim) })}
               min={2}
-              max={256}
+              max={limits.max_latent_dim}
               step={4}
               decimals={0}
             />
@@ -490,7 +494,7 @@ export default function ParameterPanel({
             type="range"
             className="slider"
             min="4"
-            max="64"
+            max={limits.max_latent_dim}
             step="4"
             value={trainingParams.latentDim}
             onChange={(e) => onTrainingParamsChange({ 
@@ -502,12 +506,12 @@ export default function ParameterPanel({
 
         <div className="control">
           <div className="control__label">
-            <span>AE Epochs</span>
+            <span>AE Epochs{isProduction && ` (max ${limits.max_ae_epochs})`}</span>
             <EditableValue
               value={trainingParams.aeEpochs}
-              onChange={(v) => onTrainingParamsChange({ ...trainingParams, aeEpochs: Math.round(v) })}
+              onChange={(v) => onTrainingParamsChange({ ...trainingParams, aeEpochs: Math.min(Math.round(v), limits.max_ae_epochs) })}
               min={1}
-              max={1000}
+              max={limits.max_ae_epochs}
               step={10}
               decimals={0}
             />
@@ -516,7 +520,7 @@ export default function ParameterPanel({
             type="range"
             className="slider"
             min="10"
-            max="200"
+            max={limits.max_ae_epochs}
             step="10"
             value={trainingParams.aeEpochs}
             onChange={(e) => onTrainingParamsChange({ 
@@ -528,12 +532,12 @@ export default function ParameterPanel({
 
         <div className="control">
           <div className="control__label">
-            <span>MLP Epochs</span>
+            <span>MLP Epochs{isProduction && ` (max ${limits.max_mlp_epochs})`}</span>
             <EditableValue
               value={trainingParams.mlpEpochs}
-              onChange={(v) => onTrainingParamsChange({ ...trainingParams, mlpEpochs: Math.round(v) })}
+              onChange={(v) => onTrainingParamsChange({ ...trainingParams, mlpEpochs: Math.min(Math.round(v), limits.max_mlp_epochs) })}
               min={1}
-              max={1000}
+              max={limits.max_mlp_epochs}
               step={10}
               decimals={0}
             />
@@ -542,7 +546,7 @@ export default function ParameterPanel({
             type="range"
             className="slider"
             min="10"
-            max="200"
+            max={limits.max_mlp_epochs}
             step="10"
             value={trainingParams.mlpEpochs}
             onChange={(e) => onTrainingParamsChange({ 

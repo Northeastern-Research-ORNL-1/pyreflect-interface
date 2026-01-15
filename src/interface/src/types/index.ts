@@ -58,3 +58,33 @@ export interface GenerateResponse {
   chi: ChiData[];
   metrics: Metrics;
 }
+
+export interface Limits {
+  max_curves: number;
+  max_film_layers: number;
+  max_batch_size: number;
+  max_epochs: number;
+  max_cnn_layers: number;
+  max_dropout: number;
+  max_latent_dim: number;
+  max_ae_epochs: number;
+  max_mlp_epochs: number;
+}
+
+export interface LimitsResponse {
+  production: boolean;
+  limits: Limits;
+}
+
+// Default limits (local/unlimited)
+export const DEFAULT_LIMITS: Limits = {
+  max_curves: 100000,
+  max_film_layers: 20,
+  max_batch_size: 512,
+  max_epochs: 1000,
+  max_cnn_layers: 20,
+  max_dropout: 0.9,
+  max_latent_dim: 128,
+  max_ae_epochs: 500,
+  max_mlp_epochs: 500,
+};
