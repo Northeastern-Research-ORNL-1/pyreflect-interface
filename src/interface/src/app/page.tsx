@@ -6,6 +6,7 @@ import GraphDisplay from '../components/GraphDisplay';
 import ConsoleOutput from '../components/ConsoleOutput';
 import { FilmLayer, GeneratorParams, TrainingParams, GenerateResponse, Limits, LimitsResponse, DEFAULT_LIMITS } from '@/types';
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const STORAGE_KEY = 'pyreflect_state';
 
 interface BackendStatus {
@@ -136,8 +137,8 @@ export default function Home() {
     const fetchStatus = async () => {
       try {
         const [statusRes, limitsRes] = await Promise.all([
-          fetch('http://localhost:8000/api/status'),
-          fetch('http://localhost:8000/api/limits'),
+          fetch(`${API_URL}/api/status`),
+          fetch(`${API_URL}/api/limits`),
         ]);
         if (statusRes.ok) {
           const status: BackendStatus = await statusRes.json();
@@ -170,7 +171,7 @@ export default function Home() {
     addLog(`Params: ${generatorParams.numCurves} curves, ${trainingParams.epochs} epochs`);
     
     try {
-      const response = await fetch('http://localhost:8000/api/generate/stream', {
+      const response = await fetch(`${API_URL}/api/generate/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -237,7 +238,7 @@ export default function Home() {
     files.forEach((file) => formData.append('files', file));
 
     try {
-      const response = await fetch('http://localhost:8000/api/upload', {
+      const response = await fetch(`${API_URL}/api/upload`, {
         method: 'POST',
         body: formData,
       });
