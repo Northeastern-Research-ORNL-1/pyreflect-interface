@@ -264,6 +264,7 @@ export default function Home() {
         <div className="header__logo">
           <span>◇</span>
           <span>PYREFLECT</span>
+          <span className="header__version">v0.0.1</span>
         </div>
         <nav className="header__nav">
           {graphData && (

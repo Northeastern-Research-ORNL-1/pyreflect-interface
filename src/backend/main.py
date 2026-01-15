@@ -8,9 +8,11 @@ import tempfile
 import time
 import warnings
 import io
+import threading
+import queue
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
-from typing import List
+from typing import List, TextIO, cast
 from contextlib import asynccontextmanager
 
 import json
@@ -250,6 +252,27 @@ def generate_with_pyreflect_streaming(
             yield emit("log", f"Warning ({context}): {w.message}")
         if len(warning_list) > max_warnings:
             yield emit("log", f"Warning ({context}): {len(warning_list) - max_warnings} more warnings...")
+
+    class QueueWriter(io.TextIOBase):
+        def __init__(self, q: "queue.Queue[str]") -> None:
+            super().__init__()
+            self.q = q
+            self._buffer = ""
+
+        def write(self, s: str) -> int:
+            if not s:
+                return 0
+            self._buffer += s
+            while "\n" in self._buffer:
+                line, self._buffer = self._buffer.split("\n", 1)
+                if line.strip():
+                    self.q.put(line)
+            return len(s)
+
+        def flush(self) -> None:
+            if self._buffer.strip():
+                self.q.put(self._buffer.strip())
+            self._buffer = ""
     
     yield emit("log", f"Generating {gen_params.numCurves} synthetic curves with {gen_params.numFilmLayers} film layers...")
     
@@ -257,15 +280,41 @@ def generate_with_pyreflect_streaming(
         num_layers=gen_params.numFilmLayers,
     )
     gen_start = time.perf_counter()
-    gen_output = io.StringIO()
-    with warnings.catch_warnings(record=True) as gen_warnings:
-        warnings.simplefilter("always")
-        with redirect_stdout(gen_output), redirect_stderr(gen_output):
-            nr_curves, sld_curves = data_generator.generate(gen_params.numCurves)
+    log_queue: "queue.Queue[str]" = queue.Queue()
+    gen_warnings: list[warnings.WarningMessage] = []
+    gen_result: dict[str, Any] = {}
+    gen_error: list[BaseException] = []
+
+    def run_generate() -> None:
+        writer = QueueWriter(log_queue)
+        try:
+            with warnings.catch_warnings(record=True) as warn_list:
+                warnings.simplefilter("always")
+                with redirect_stdout(cast(TextIO, writer)), redirect_stderr(cast(TextIO, writer)):
+                    result = data_generator.generate(gen_params.numCurves)
+            gen_warnings.extend(warn_list)
+            gen_result["data"] = result
+        except Exception as exc:
+            gen_error.append(exc)
+        finally:
+            writer.flush()
+
+    gen_thread = threading.Thread(target=run_generate, daemon=True)
+    gen_thread.start()
+
+    while gen_thread.is_alive() or not log_queue.empty():
+        try:
+            line = log_queue.get(timeout=0.2)
+            if line.strip():
+                yield emit("log", line.rstrip())
+        except queue.Empty:
+            pass
+
+    gen_thread.join()
+    if gen_error:
+        raise gen_error[0]
+    nr_curves, sld_curves = gen_result["data"]
     gen_time = time.perf_counter() - gen_start
-    for line in gen_output.getvalue().splitlines():
-        if line.strip():
-            yield emit("log", line.rstrip())
     yield emit("log", f"   Generated NR shape: {nr_curves.shape}, SLD shape: {sld_curves.shape}")
     yield emit("log", f"Generation took {gen_time:.2f}s")
     for warning_msg in emit_warnings("generation", gen_warnings):
