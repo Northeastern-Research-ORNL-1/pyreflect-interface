@@ -28,10 +28,6 @@ A minimal, monochrome web interface for the [pyreflect](https://github.com/willi
 
 ```
 pyreflect-interface/
-├── pyreflect/              # Research package (NR-SCFT-ML)
-│   ├── src/pyreflect/      # Package source code
-│   ├── examples/           # Jupyter notebooks
-│   └── datasets/           # Data files (not in repo, see README)
 ├── src/
 │   ├── interface/          # Next.js frontend
 │   └── backend/            # FastAPI backend
@@ -41,6 +37,8 @@ pyreflect-interface/
 │           └── curves/     # NR/SLD curve files
 └── README.md
 ```
+
+> **Note**: The `pyreflect` package is installed from [TestPyPI](https://test.pypi.org/project/pyreflect/) rather than bundled in this repo.
 
 ## Architecture
 
@@ -320,7 +318,11 @@ The frontend requires the backend for real generation. If the backend is not run
 cd src/backend
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install pyreflect from TestPyPI (+ other deps from PyPI)
+pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple pyreflect>=1.4.0
 pip install -r requirements.txt
+
 uvicorn main:app --port 8000
 ```
 
@@ -409,5 +411,5 @@ npm run build
 
 ## Credits
 
-- [pyreflect](./pyreflect) - NR-SCFT-ML package by Yuqing Qiao
+- [pyreflect](https://github.com/williamQyq/pyreflect) - NR-SCFT-ML package by Yuqing Qiao
 - Based on research by Brian Qu, Dr. Rajeev Kumar, Prof. Miguel Fuentes-Cabrera
