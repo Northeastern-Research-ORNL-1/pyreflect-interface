@@ -1,0 +1,9 @@
+.idea/
+*.yml
+data/
+__pycache__/
+*.pyc
+*.pyo
+dist/
+PLAN.md
+.ipynb_checkpoints/
