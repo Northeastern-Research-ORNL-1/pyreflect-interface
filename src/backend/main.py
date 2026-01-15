@@ -119,7 +119,7 @@ class GeneratorParams(BaseModel):
 class TrainingParams(BaseModel):
     """Parameters for model training"""
     batchSize: int = Field(ge=1, le=512, default=32)
-    epochs: int = Field(ge=1, le=1000, default=3)
+    epochs: int = Field(ge=1, le=1000, default=10)
     layers: int = Field(ge=1, le=20, default=12)
     dropout: float = Field(ge=0, le=0.9, default=0.0)
     latentDim: int = Field(ge=2, le=128, default=16)
@@ -287,6 +287,8 @@ def generate_with_pyreflect_streaming(
         try:
             with warnings.catch_warnings(record=True) as warn_list:
                 warnings.simplefilter("always")
+                # Suppress refl1d deprecation warning about data argument
+                warnings.filterwarnings("ignore", message=".*data argument is deprecated.*")
                 with redirect_stdout(cast(TextIO, writer)), redirect_stderr(cast(TextIO, writer)):
                     result = data_generator.generate(gen_params.numCurves)
             gen_warnings.extend(warn_list)

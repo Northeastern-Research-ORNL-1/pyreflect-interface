@@ -31,7 +31,7 @@ const DEFAULT_GENERATOR: GeneratorParams = {
 
 const DEFAULT_TRAINING: TrainingParams = {
   batchSize: 32,
-  epochs: 3,
+  epochs: 10,
   layers: 12,
   dropout: 0.0,
   latentDim: 16,
