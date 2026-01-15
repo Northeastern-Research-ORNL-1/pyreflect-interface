@@ -320,8 +320,8 @@ Backend runs at **http://localhost:8000**
 
 ```bash
 cd src/interface
-npm install
-npm run dev
+bun install
+bun dev
 ```
 
 Frontend runs at **http://localhost:3000**
