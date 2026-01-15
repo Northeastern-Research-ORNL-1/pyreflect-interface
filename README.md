@@ -13,7 +13,7 @@ A minimal, monochrome web interface for the [pyreflect](./pyreflect) neutron ref
 
 - **Adjustable Parameters**: Film layers (SLD, thickness, roughness), generator settings, training configuration
 - **Ground Truth vs Predicted**: NR and SLD charts show both ground truth (solid) and model predictions (dashed)
-- **Graph Visualization**: NR curves, SLD profiles, training loss, Chi parameter scatter plots
+- **Graph Visualization**: Downloadable & interactive NR curves, SLD profiles, training loss, Chi parameter scatter plots
 - **Monochrome Design**: Clean black/white aesthetic with JetBrains Mono font
 - **Real-time Updates**: Instant parameter feedback with generate-on-demand
 - **Editable Values**: Click any numeric value to type custom inputs beyond slider limits
