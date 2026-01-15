@@ -1,6 +1,6 @@
 # PyReflect Interface
 
-A minimal, monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyreflect) neutron reflectivity analysis package and its local copy in this repo.
+A minimal, monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyreflect) neutron reflectivity analysis package.
 
 ![Interface Preview](https://img.shields.io/badge/status-development-black)
 ![Version](https://img.shields.io/badge/version-v0.0.1-black)
@@ -8,7 +8,7 @@ A minimal, monochrome web interface for the [pyreflect](https://github.com/willi
 ## Version
 
 - **v0.0.1** — Initial GUI release with streaming backend, charts, and uploads.
-- **NOTE** — Curve set to 1000 default globally 
+    - **NOTE** — Curve set to 1000 default globally 
 
 ## Features
 
