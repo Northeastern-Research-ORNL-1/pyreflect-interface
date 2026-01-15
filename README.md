@@ -296,7 +296,7 @@ sequenceDiagram
 
 ### Prerequisites
 
-- Node.js 18+
+- [Bun](https://bun.sh)
 - Conda (Miniconda or Anaconda)
 
 ### 1. Backend Setup
@@ -396,7 +396,7 @@ Files from `pyreflect/datasets/` can be uploaded:
 ```bash
 # Frontend development
 cd src/interface
-npm run dev
+bun dev
 
 # Backend development
 cd src/backend
@@ -404,7 +404,7 @@ uvicorn main:app --reload
 
 # Build for production
 cd src/interface
-npm run build
+bun run build
 ```
 
 ## Credits
