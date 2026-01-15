@@ -6,12 +6,6 @@ pydantic>=2.0.0
 numpy>=2.1.0
 python-multipart>=0.0.6
 
-# PyReflect dependencies
-torch>=2.5.1
-pandas>=2.2.3
-scipy>=1.15.1
-scikit-learn>=1.6.1
-typer>=0.15.0
-tqdm>=4.67.0
-refl1d>=0.8.0
-refnx>=0.1.0
+# PyReflect from TestPyPI (install with: pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple pyreflect)
+# Note: pyreflect pulls in torch, pandas, scipy, scikit-learn, refl1d, refnx, etc.
+pyreflect>=1.4.0
