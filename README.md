@@ -336,6 +336,26 @@ lsof -ti:8000 | xargs kill -9
 lsof -ti:3000 | xargs kill -9
 ```
 
+### Production Deployment
+
+To deploy with resource limits (prevents abuse):
+
+```bash
+# Backend with production limits
+PRODUCTION=true uvicorn main:app --port 8000
+```
+
+**Production limits:**
+| Parameter | Local | Production |
+|-----------|-------|------------|
+| Curves | 100,000 | 5,000 |
+| Epochs | 1,000 | 50 |
+| Batch Size | 512 | 64 |
+| CNN Layers | 20 | 12 |
+| Dropout | 0.9 | 0.5 |
+| Latent Dim | 128 | 32 |
+| AE/MLP Epochs | 500 | 100 |
+
 ### 3. Using the Interface
 
 1. Adjust parameters in the left sidebar:
