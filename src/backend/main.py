@@ -115,7 +115,7 @@ class FilmLayer(BaseModel):
 
 class GeneratorParams(BaseModel):
     """Parameters for curve generation"""
-    numCurves: int = Field(ge=1, le=100000, default=50000)
+    numCurves: int = Field(ge=1, le=100000, default=1000)
     numFilmLayers: int = Field(ge=1, le=20, default=5)
 
 
