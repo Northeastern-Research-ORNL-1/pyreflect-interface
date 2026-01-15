@@ -1,6 +1,6 @@
 # PyReflect Interface
 
-A minimal, monochrome web interface for the [pyreflect](./pyreflect) neutron reflectivity analysis package.
+A minimal, monochrome web interface for the pyreflect neutron reflectivity analysis package (local folder in this repo).
 
 ![Interface Preview](https://img.shields.io/badge/status-development-black)
 ![Version](https://img.shields.io/badge/version-v0.0.1-black)
