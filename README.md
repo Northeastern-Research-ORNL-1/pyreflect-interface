@@ -343,6 +343,9 @@ PRODUCTION=true uv run uvicorn main:app --port 8000
 # .env
 PRODUCTION=true
 
+# CORS (comma-separated origins)
+CORS_ORIGINS=http://localhost:3000,https://your-app.vercel.app
+
 # Optional: override individual limits
 MAX_CURVES=5000
 MAX_EPOCHS=50
@@ -358,6 +361,31 @@ Then run normally:
 ```bash
 uv run uvicorn main:app --port 8000
 ```
+
+## Vercel Deployment (Frontend)
+
+### 1. Deploy frontend to Vercel
+
+```bash
+cd src/interface
+vercel
+```
+
+### 2. Set environment variable in Vercel dashboard
+
+| Variable | Value |
+|----------|-------|
+| `NEXT_PUBLIC_API_URL` | `https://your-backend.railway.app` (or wherever backend is hosted) |
+
+### 3. Configure backend CORS
+
+In your backend `.env`, add your Vercel URL:
+
+```env
+CORS_ORIGINS=http://localhost:3000,https://your-app.vercel.app
+```
+
+---
 
 **Production limits:**
 | Parameter | Local | Production |
