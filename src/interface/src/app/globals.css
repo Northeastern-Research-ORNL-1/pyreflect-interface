@@ -138,6 +138,17 @@ a:hover {
   letter-spacing: -0.03em;
 }
 
+.header__version {
+  align-self: center;
+  font-size: var(--font-size-xs);
+  font-weight: 1000;
+  color: var(--color-white);
+  text-transform: lowercase;
+  letter-spacing: 0.05em;
+  margin-left: var(--space-sm);
+  padding: 2px 2px;
+}
+
 .header__nav {
   display: flex;
   align-items: center;

@@ -3,6 +3,11 @@
 A minimal, monochrome web interface for the [pyreflect](./pyreflect) neutron reflectivity analysis package.
 
 ![Interface Preview](https://img.shields.io/badge/status-development-black)
+![Version](https://img.shields.io/badge/version-v0.0.1-black)
+
+## Version
+
+- **v0.0.1** — Initial GUI release with streaming backend, charts, and uploads.
 
 ## Features
 
@@ -315,7 +320,7 @@ cd src/backend
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+uvicorn main:app --port 8000
 ```
 
 Backend runs at **http://localhost:8000**
