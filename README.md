@@ -38,7 +38,7 @@ pyreflect-interface/
 └── README.md
 ```
 
-> **Note**: The `pyreflect` package is installed from [TestPyPI](https://test.pypi.org/project/pyreflect/) rather than bundled in this repo.
+> **Note**: The `pyreflect` package is installed directly from [GitHub](https://github.com/williamQyq/pyreflect) rather than bundled in this repo.
 
 ## Architecture
 
@@ -318,11 +318,7 @@ The frontend requires the backend for real generation. If the backend is not run
 cd src/backend
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Install pyreflect from TestPyPI (+ other deps from PyPI)
-pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple pyreflect>=1.4.0
 pip install -r requirements.txt
-
 uvicorn main:app --port 8000
 ```
 
