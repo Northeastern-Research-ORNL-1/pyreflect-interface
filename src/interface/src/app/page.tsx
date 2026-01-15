@@ -25,7 +25,7 @@ const DEFAULT_LAYERS: FilmLayer[] = [
 ];
 
 const DEFAULT_GENERATOR: GeneratorParams = {
-  numCurves: 50000,
+  numCurves: 1000,
   numFilmLayers: 5,
 };
 

@@ -83,7 +83,7 @@ nr_predict_sld:
   models:
     model: data/trained_nr_sld_model_no_dropout.pth
     num_film_layers: 5
-    num_curves: 50000
+    num_curves: 1000
     epochs: 3
     batch_size: 32
     layers: 12
