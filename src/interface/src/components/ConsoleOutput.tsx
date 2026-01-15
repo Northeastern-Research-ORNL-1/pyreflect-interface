@@ -16,7 +16,6 @@ export default function ConsoleOutput({ logs, isGenerating, startTimeMs }: Conso
 
   useEffect(() => {
     if (!isGenerating || startTimeMs === null) {
-      setElapsedMs(0);
       return;
     }
     const update = () => setElapsedMs(Date.now() - startTimeMs);
@@ -36,11 +35,9 @@ export default function ConsoleOutput({ logs, isGenerating, startTimeMs }: Conso
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);
     const seconds = totalSeconds % 60;
-    if (hours > 0) {
-      return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-    }
-    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
   };
+  const displayElapsed = isGenerating && startTimeMs !== null ? elapsedMs : 0;
 
   return (
     <div className={styles.container}>
@@ -54,7 +51,7 @@ export default function ConsoleOutput({ logs, isGenerating, startTimeMs }: Conso
         </span>
         <span className={styles.meta}>
           <span className={styles.elapsed}>
-            {isGenerating && startTimeMs !== null ? formatElapsed(elapsedMs) : '--:--'}
+            {isGenerating && startTimeMs !== null ? formatElapsed(displayElapsed) : '--:--:--'}
           </span>
           <span className={styles.count}>{logs.length}</span>
         </span>
