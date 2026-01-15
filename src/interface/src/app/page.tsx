@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect } from 'react';
 import ParameterPanel from '../components/ParameterPanel';
 import GraphDisplay from '../components/GraphDisplay';
 import ConsoleOutput from '../components/ConsoleOutput';
-import { FilmLayer, GeneratorParams, TrainingParams, GenerateResponse } from '@/types';
+import { FilmLayer, GeneratorParams, TrainingParams, GenerateResponse, Limits, LimitsResponse, DEFAULT_LIMITS } from '@/types';
 
 const STORAGE_KEY = 'pyreflect_state';
 
@@ -51,6 +51,8 @@ export default function Home() {
   const [consoleLogs, setConsoleLogs] = useState<string[]>([]);
   const [generationStart, setGenerationStart] = useState<number | null>(null);
   const [backendStatus, setBackendStatus] = useState<BackendStatus | null>(null);
+  const [limits, setLimits] = useState<Limits>(DEFAULT_LIMITS);
+  const [isProduction, setIsProduction] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
 
   const addLog = useCallback((message: string) => {
@@ -128,18 +130,29 @@ export default function Home() {
     localStorage.setItem(`${STORAGE_KEY}_logs`, JSON.stringify(consoleLogs));
   }, [consoleLogs, isHydrated]);
 
-  // Fetch backend status on mount
+  // Fetch backend status and limits on mount
   useEffect(() => {
     if (!isHydrated) return;
     const fetchStatus = async () => {
       try {
-        const response = await fetch('http://localhost:8000/api/status');
-        if (response.ok) {
-          const status: BackendStatus = await response.json();
+        const [statusRes, limitsRes] = await Promise.all([
+          fetch('http://localhost:8000/api/status'),
+          fetch('http://localhost:8000/api/limits'),
+        ]);
+        if (statusRes.ok) {
+          const status: BackendStatus = await statusRes.json();
           setBackendStatus(status);
           addLog(`Backend connected. pyreflect: ${status.pyreflect_available ? 'available' : 'unavailable'}`);
           if (status.data_files.length > 0) {
             addLog(`Data files: ${status.data_files.join(', ')}`);
+          }
+        }
+        if (limitsRes.ok) {
+          const limitsData: LimitsResponse = await limitsRes.json();
+          setLimits(limitsData.limits);
+          setIsProduction(limitsData.production);
+          if (limitsData.production) {
+            addLog(`Production mode: limits enforced (max ${limitsData.limits.max_curves} curves, ${limitsData.limits.max_epochs} epochs)`);
           }
         }
       } catch {
@@ -289,6 +302,7 @@ export default function Home() {
           <span>◇</span>
           <span>PYREFLECT</span>
           <span className="header__version">v0.0.1</span>
+          {isProduction && <span className="header__version" style={{ color: '#f59e0b', marginLeft: '8px' }}>PROD</span>}
         </div>
         <nav className="header__nav">
           <button className="header__export-btn" onClick={handleImportJSON}>
@@ -319,6 +333,8 @@ export default function Home() {
             onReset={handleReset}
             isGenerating={isGenerating}
             onUploadFiles={handleUploadFiles}
+            limits={limits}
+            isProduction={isProduction}
             isUploading={isUploading}
             backendStatus={backendStatus}
           />
