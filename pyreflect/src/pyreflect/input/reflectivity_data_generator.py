@@ -60,7 +60,7 @@ def calculate_reflectivity(q, model_description, q_resolution=0.0294855):
     dq = q_resolution * q / 2.355
 
     # The QProbe object represents the beam
-    probe = QProbe(q, dq, R=zeros, dR=zeros)
+    probe = QProbe(q, dq, data=(zeros, zeros))
 
     layers = model_description['layers']
     sample = Slab(material=SLD(name=layers[0]['name'],
