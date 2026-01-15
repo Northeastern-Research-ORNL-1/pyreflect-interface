@@ -8,6 +8,7 @@ A minimal, monochrome web interface for the [pyreflect](https://github.com/willi
 ## Version
 
 - **v0.0.1** — Initial GUI release with streaming backend, charts, and uploads.
+- **NOTE** — Curve set to 1000 default globally 
 
 ## Features
 
