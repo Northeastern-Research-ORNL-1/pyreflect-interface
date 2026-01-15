@@ -83,7 +83,7 @@ nr_predict_sld:
   models:
     model: data/trained_nr_sld_model_no_dropout.pth
     num_film_layers: 5
-    num_curves: 50000
+    num_curves: 1000
     epochs: 3
     batch_size: 32
     layers: 12
@@ -115,7 +115,7 @@ class FilmLayer(BaseModel):
 
 class GeneratorParams(BaseModel):
     """Parameters for curve generation"""
-    numCurves: int = Field(ge=1, le=100000, default=50000)
+    numCurves: int = Field(ge=1, le=100000, default=1000)
     numFilmLayers: int = Field(ge=1, le=20, default=5)
 
 
