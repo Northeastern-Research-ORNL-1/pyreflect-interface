@@ -1,104 +1,163 @@
 # PyReflect Interface
 
-A minimal, monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyreflect) neutron reflectivity analysis package.
+A monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyreflect) neutron reflectivity analysis package.
 
-![Interface Preview](https://img.shields.io/badge/status-development-black)
-![Version](https://img.shields.io/badge/version-v0.0.3-black)
+![Status](https://img.shields.io/badge/status-development-black)
 
-## Version
+## Highlights
 
-- **v0.0.3** — Added history explorer, automatic named saving, and deletion functionality.
-- **v0.0.2** — Added GitHub OAuth, MongoDB persistence, SSE heartbeats, and info tooltips.
-- **v0.0.1** — Initial GUI release with streaming backend, charts, and uploads.
-  - **NOTE** — Curve set to 1000 default globally
+- GitHub OAuth via NextAuth with optional MongoDB persistence for saved generations
+- History explorer with search, restore, delete, and local/HF model availability
+- Named runs, auto-save on generation, plus import/export of full sessions (params + results)
+- Film layer editor (add/remove, collapse) with inline numeric edits beyond slider limits
+- Real-time SSE logs, progress, and elapsed time during generation
+- Interactive charts (NR, SLD, training loss, chi scatter) with PNG export and fullscreen expand
+- Dataset/model upload for `.npy`, `.pth`, `.pt`, and `settings*.yml/.yaml`
+- Model download with size lookup; optional Hugging Face dataset offload
+- Local state persistence across refreshes (params, results, logs)
+- Monochrome UI with JetBrains Mono and responsive layout
 
-## Features
+## Architecture
 
-- **GitHub Authentication**: Sign in with GitHub to save and track your generations
-- **History Explorer**: Browse, search, and restore past generations
-- **Automatic Persistence**: Generations are automatically saved with custom names to MongoDB
-- **Info Tooltips**: Hover over (ⓘ) icons to learn what each parameter does
-- **SSE Heartbeats**: Prevents Cloudflare proxy timeouts during long training runs
-- **Adjustable Parameters**: Film layers (SLD, thickness, roughness), generator settings, training configuration
-- **Ground Truth vs Predicted**: NR and SLD charts show both ground truth (solid) and model predictions (dashed)
-- **Graph Visualization**: Downloadable & interactive NR curves, SLD profiles, training loss, Chi parameter scatter plots
-- **Monochrome Design**: Clean black/white aesthetic with JetBrains Mono font
-- **Real-time Updates**: Instant parameter feedback with generate-on-demand
-- **Editable Values**: Click any numeric value to type custom inputs beyond slider limits
-- **Live Streaming Logs**: Real-time training progress streamed from backend via SSE
-- **Timing + Warnings**: Generation/training/inference timings and backend warnings streamed to console
-- **Data Upload**: Drag-and-drop upload for `.npy` datasets and `.pth` model weights
-- **State Persistence**: Parameters and results persist across browser refreshes
-- **Reset + Collapse**: One-click reset to example defaults and per-layer collapse/expand controls
+### System Overview
+
+```mermaid
+flowchart LR
+  subgraph Browser
+    UI[Next.js UI]
+  end
+
+  subgraph NextApp[Next.js App]
+    Auth[NextAuth GitHub OAuth]
+  end
+
+  subgraph Backend
+    API[FastAPI API]
+    PY[pyreflect + torch]
+    FS[(Local data/models)]
+  end
+
+  subgraph External
+    GH[GitHub]
+    DB[(MongoDB)]
+    HF[(Hugging Face Dataset)]
+  end
+
+  UI <-->|REST + SSE| API
+  UI <-->|Auth session| Auth
+  Auth --> GH
+  API --> PY
+  API --> FS
+  API -. optional .-> DB
+  API -. optional .-> HF
+```
+
+### Generation Flow (SSE)
+
+```mermaid
+sequenceDiagram
+  participant UI as Next.js UI
+  participant API as FastAPI
+  participant PY as pyreflect/torch
+  participant DB as MongoDB (optional)
+  participant HF as Hugging Face (optional)
+
+  UI->>API: POST /api/generate/stream (params, name, X-User-ID)
+  API->>PY: generate + train
+  API-->>UI: SSE log/progress events
+  API->>API: save model to local data/models
+  API->>HF: upload model (if configured)
+  API-->>UI: SSE result (nr/sld/metrics, model_id)
+  API->>DB: persist history (if configured)
+```
 
 ## Project Structure
 
 ```
 pyreflect-interface/
 ├── src/
-│   ├── interface/          # Next.js frontend
-│   │   ├── src/app/
-│   │   │   ├── api/auth/   # NextAuth GitHub OAuth
-│   │   │   └── page.tsx    # Main app
-│   │   └── .env.local      # Frontend secrets
-│   └── backend/            # FastAPI backend
-│       ├── main.py         # API server
-│       ├── settings.yml    # Config (auto-generated)
-│       ├── .env            # Backend secrets
-│       └── data/           # Uploaded datasets & models
-│           └── curves/     # NR/SLD curve files
+│   ├── interface/             # Next.js frontend
+│   │   ├── src/app/            # App router + UI
+│   │   ├── src/components/     # Panels, charts, history sidebar
+│   │   ├── public/             # Static assets
+│   │   └── .env.local          # Frontend secrets
+│   └── backend/                # FastAPI backend
+│       ├── main.py             # API server
+│       ├── settings.yml        # Config (auto-generated)
+│       ├── data/               # Uploaded datasets & models
+│       │   ├── models/          # Saved .pth models
+│       │   └── curves/          # NR/SLD curve files
+│       │       └── expt/        # Experimental curves
+│       └── .env                # Backend secrets
 └── README.md
 ```
 
-> **Note**: The `pyreflect` package is installed directly from [GitHub](https://github.com/williamQyq/pyreflect) rather than bundled in this repo.
+> Note: The `pyreflect` package is installed directly from GitHub rather than bundled in this repo.
 
 ## Quick Start
 
 ### Prerequisites
 
-- [Bun](https://bun.sh) or [npm](https://nodejs.org) (frontend)
+- Node or Bun (frontend)
 - [uv](https://docs.astral.sh/uv/) (backend)
-- Python 3.10-3.12 (torch requires ≤3.12)
+- Python 3.10-3.12 (torch requires <=3.12)
 
 ### 1. Backend Setup
 
 ```bash
 cd src/backend
-uv python pin 3.12      # Pin to Python 3.12 (required for torch)
-uv sync                 # Install dependencies
-cp .env.example .env    # Configure environment
+uv python pin 3.12
+uv sync
+cp .env.example .env
 uv run uvicorn main:app --reload --port 8000
 ```
 
-Backend runs at **http://localhost:8000**
+Backend runs at `http://localhost:8000`.
 
 ### 2. Frontend Setup
 
 ```bash
 cd src/interface
-npm install             # or: bun install
+bun install
 cp .env.example .env.local
-npm run dev             # or: bun dev
+bun run dev
 ```
 
-Frontend runs at **http://localhost:3000**
+Frontend runs at `http://localhost:3000`.
 
-### 3. Environment Variables
+## Environment Variables
 
-**Backend (`src/backend/.env`):**
+### Backend (`src/backend/.env`)
 
 ```env
 PRODUCTION=false
 CORS_ORIGINS=http://localhost:3000,https://pyreflect.shlawg.com
+
+# MongoDB (optional)
 MONGODB_URI=mongodb+srv://user:password@cluster.mongodb.net/?appName=shlawg
+
+# Hugging Face (optional model offload)
+HF_TOKEN=hf_...
+HF_REPO_ID=your-username/pyreflect-models
+
+# Production limits (only used when PRODUCTION=true)
+MAX_CURVES=5000
+MAX_FILM_LAYERS=10
+MAX_BATCH_SIZE=64
+MAX_EPOCHS=50
+MAX_CNN_LAYERS=12
+MAX_DROPOUT=0.5
+MAX_LATENT_DIM=32
+MAX_AE_EPOCHS=100
+MAX_MLP_EPOCHS=100
 ```
 
-**Frontend (`src/interface/.env.local`):**
+### Frontend (`src/interface/.env.local`)
 
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:8000
 NEXTAUTH_URL=http://localhost:3000
-NEXTAUTH_SECRET=your-secret-here   # Generate with: openssl rand -base64 32
+NEXTAUTH_SECRET=your-secret-here
 GITHUB_CLIENT_ID=your-github-oauth-app-id
 GITHUB_CLIENT_SECRET=your-github-oauth-app-secret
 ```
@@ -107,15 +166,15 @@ GITHUB_CLIENT_SECRET=your-github-oauth-app-secret
 
 1. Go to [GitHub Developer Settings](https://github.com/settings/developers)
 2. Create a new OAuth App:
-   - **Homepage URL**: `http://localhost:3000` (or production URL)
-   - **Authorization callback URL**: `http://localhost:3000/api/auth/callback/github`
+   - Homepage URL: `http://localhost:3000` (or production URL)
+   - Authorization callback URL: `http://localhost:3000/api/auth/callback/github`
 3. Copy Client ID and Client Secret to `.env.local`
 
 ## MongoDB Setup
 
 1. Create a [MongoDB Atlas](https://www.mongodb.com/atlas) cluster
 2. Get your connection string (with username/password)
-3. Add to `MONGODB_URI` in backend `.env`
+3. Add it to `MONGODB_URI` in `src/backend/.env`
 4. The `generations` collection is created automatically on first save
 
 ### MongoDB Document Structure
@@ -134,62 +193,57 @@ Each saved generation contains:
     "training": { "epochs": 10, "batchSize": 32, ... }
   },
   "result": {
-    "nr": { "q": [...], "reflectivity": [...] },
-    "sld": { "z": [...], "sld": [...] },
-    "training": { "epochs": [...], "loss": [...] },
+    "nr": { "q": [...], "groundTruth": [...], "computed": [...] },
+    "sld": { "z": [...], "groundTruth": [...], "predicted": [...] },
+    "training": { "epochs": [...], "trainingLoss": [...], "validationLoss": [...] },
     "chi": [...],
-    "metrics": { ... }
+    "metrics": { "mse": 0.0, "r2": 0.0, "mae": 0.0 },
+    "model_id": "uuid"
   }
 }
 ```
 
 ## API Endpoints
 
-| Endpoint               | Method | Description                             |
-| ---------------------- | ------ | --------------------------------------- |
-| `/api/health`          | GET    | Health check                            |
-| `/api/generate`        | POST   | Generate NR/SLD curves                  |
-| `/api/generate/stream` | POST   | Generate with real-time SSE log stream  |
-| `/api/defaults`        | GET    | Get default parameters                  |
-| `/api/status`          | GET    | Backend status and available data files |
-| `/api/limits`          | GET    | Get current parameter limits            |
-| `/api/upload`          | POST   | Upload dataset/model files              |
-| `/api/history`         | GET    | Get list of saved generations           |
-| `/api/history/{id}`    | GET    | Get full details of a save              |
-| `/api/history/{id}`    | DELETE | Delete a saved generation               |
+| Endpoint                    | Method | Description                             |
+| --------------------------- | ------ | --------------------------------------- |
+| `/api/health`               | GET    | Health check                            |
+| `/api/limits`               | GET    | Current limits and production flag      |
+| `/api/defaults`             | GET    | Default parameters                      |
+| `/api/generate`             | POST   | Generate NR/SLD curves (non-streaming)  |
+| `/api/generate/stream`      | POST   | Generate with SSE log stream            |
+| `/api/status`               | GET    | Backend status and data files           |
+| `/api/upload`               | POST   | Upload dataset/model files              |
+| `/api/history`              | GET    | List saved generations                  |
+| `/api/history`              | POST   | Save a generation manually              |
+| `/api/history/{id}`         | GET    | Get full details of a save              |
+| `/api/history/{id}`         | DELETE | Delete a saved generation               |
+| `/api/models/{model_id}`    | GET    | Download a saved model                  |
+| `/api/models/{model_id}`    | DELETE | Delete a local model file               |
+| `/api/models/{model_id}/info` | GET  | Get model size and source               |
 
-## Production Deployment
+## Production Limits
 
-### Backend Limits
+Set `PRODUCTION=true` in `src/backend/.env` to enable limits.
 
-| Parameter     | Local   | Production |
-| ------------- | ------- | ---------- |
-| Curves        | 100,000 | 5,000      |
-| Epochs        | 1,000   | 50         |
-| Batch Size    | 512     | 64         |
-| CNN Layers    | 20      | 12         |
-| Dropout       | 0.9     | 0.5        |
-| Latent Dim    | 128     | 32         |
-| AE/MLP Epochs | 500     | 100        |
+| Parameter       | Local     | Production |
+| --------------- | --------- | ---------- |
+| Curves          | 100,000   | 5,000      |
+| Film Layers     | 20        | 10         |
+| Batch Size      | 512       | 64         |
+| Epochs          | 1,000     | 50         |
+| CNN Layers      | 20        | 12         |
+| Dropout         | 0.9       | 0.5        |
+| Latent Dim      | 128       | 32         |
+| AE Epochs       | 500       | 100        |
+| MLP Epochs      | 500       | 100        |
 
-Set `PRODUCTION=true` in backend `.env` to enable limits.
+## Model Storage Notes
 
-### Vercel Deployment (Frontend)
+- Local storage keeps up to 2 models; runs will fail if the limit is reached.
+- Set `HF_TOKEN` and `HF_REPO_ID` to offload models to Hugging Face and auto-clean local files.
 
-```bash
-cd src/interface
-vercel
-```
-
-Set environment variables in Vercel dashboard:
-
-- `NEXT_PUBLIC_API_URL` - Backend URL
-- `NEXTAUTH_URL` - Frontend URL
-- `NEXTAUTH_SECRET` - Random secret
-- `GITHUB_CLIENT_ID` - OAuth app ID
-- `GITHUB_CLIENT_SECRET` - OAuth app secret
-
-### Troubleshooting
+## Troubleshooting
 
 ```bash
 # Kill process on port 8000
@@ -197,24 +251,4 @@ lsof -ti:8000 | xargs kill -9
 
 # Kill process on port 3000
 lsof -ti:3000 | xargs kill -9
-
-# Check Python version (must be 3.10-3.12)
-python --version
-
-# Force Python 3.12 for backend
-uv python pin 3.12
-uv sync
 ```
-
-## Technology Stack
-
-- **Frontend**: Next.js 16, React 19, TypeScript, Recharts, NextAuth.js
-- **Backend**: FastAPI, Pydantic, NumPy, PyMongo
-- **ML Package**: pyreflect (PyTorch, refl1d, refnx)
-- **Database**: MongoDB Atlas
-- **Auth**: GitHub OAuth via NextAuth
-
-## Credits
-
-- [pyreflect](https://github.com/williamQyq/pyreflect) - NR-SCFT-ML package by Yuqing Qiao
-- Based on research by Brian Qu, Dr. Rajeev Kumar, Prof. Miguel Fuentes-Cabrera
