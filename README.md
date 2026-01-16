@@ -9,7 +9,7 @@ A monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyr
 
 - GitHub OAuth via NextAuth with optional MongoDB persistence for saved generations
 - History explorer with search, restore, delete, and local/HF model availability
-  - ObjectStorage via [Hugging Face](https://huggingface.co/Northeastern-Research-ORNL-1)
+  - Object Storage via [Hugging Face](https://huggingface.co/Northeastern-Research-ORNL-1)
 - Named runs, auto-save on generation, plus import/export of full sessions (params + results)
 - Film layer editor (add/remove, collapse) with inline numeric edits beyond slider limits
 - Real-time SSE logs, progress, and elapsed time during generation
@@ -19,6 +19,8 @@ A monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyr
 - Model download with size lookup; optional Hugging Face dataset offload
 - Local state persistence across refreshes (params, results, logs)
 - Monochrome UI with JetBrains Mono and responsive layout
+- Mobile-friendly design with touch-friendly controls and responsive layout
+- MOST IMPORTANTLY: Dark mode natively supported
 
 ## Architecture
 
@@ -123,13 +125,6 @@ When uploading datasets, assign a role so `settings.yml` is updated correctly:
 - `sld_chi_model_sld_file` → `sld_predict_chi.file.model_sld_file`
 - `sld_chi_model_chi_params_file` → `sld_predict_chi.file.model_chi_params_file`
 
-The UI defaults to `auto` and will infer roles from common PyReflect filenames when possible.
-
-### Train vs Infer (NR → SLD)
-
-- **Train**: Uses `nr_train` + `sld_train` to train NR → SLD. If auto‑generate is enabled, the model (`.pth`) and normalization stats (`.npy`) are created and saved to the configured `settings.yml` paths.
-- **Infer**: Uses `experimental_nr` + existing model + normalization stats to predict SLD. In NR → SLD → Chi, chi is computed from the inferred SLD output.
-
 ## Project Structure
 
 ```
@@ -153,7 +148,7 @@ pyreflect-interface/
 
 > Note: The `pyreflect` package is installed directly from GitHub rather than bundled in this repo.
 
-## Quick Start
+## Quick Start Self Hosted
 
 ### Prerequisites
 
@@ -201,14 +196,7 @@ HF_REPO_ID=your-username/pyreflect-models
 
 # Production limits (only used when PRODUCTION=true)
 MAX_CURVES=5000
-MAX_FILM_LAYERS=10
-MAX_BATCH_SIZE=64
-MAX_EPOCHS=50
-MAX_CNN_LAYERS=12
-MAX_DROPOUT=0.5
-MAX_LATENT_DIM=32
-MAX_AE_EPOCHS=100
-MAX_MLP_EPOCHS=100
+...
 ```
 
 ### Frontend (`src/interface/.env.local`)

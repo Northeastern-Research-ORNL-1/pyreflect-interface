@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useSession, signIn, signOut } from 'next-auth/react';
 import ParameterPanel from '../components/ParameterPanel';
 import GraphDisplay from '../components/GraphDisplay';
@@ -8,10 +8,24 @@ import ConsoleOutput from '../components/ConsoleOutput';
 import ExploreSidebar from '../components/ExploreSidebar';
 import { FilmLayer, GeneratorParams, TrainingParams, GenerateResponse, Limits, LimitsResponse, DEFAULT_LIMITS, DataSource, Workflow, NrSldMode, UploadRole } from '@/types';
 import packageJson from '../../package.json';
+import { toPng } from 'html-to-image';
+import { zipSync, strToU8 } from 'fflate';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const STORAGE_KEY = 'pyreflect_state';
 const APP_VERSION = `v${packageJson.version}`;
+
+const EXPORT_CHARTS = [
+  { id: 'nr', filename: 'neutron_reflectivity.png' },
+  { id: 'sld', filename: 'sld_profile.png' },
+  { id: 'training', filename: 'training_loss.png' },
+  { id: 'chi', filename: 'chi_parameters.png' },
+];
+
+type BundlePayload = {
+  params: { layers: FilmLayer[]; generator: GeneratorParams; training: TrainingParams };
+  result: GenerateResponse;
+};
 
 interface BackendStatus {
   pyreflect_available: boolean;
@@ -78,6 +92,8 @@ export default function Home() {
   const [_error, setError] = useState<string | null>(null);
   const [consoleLogs, setConsoleLogs] = useState<string[]>([]);
   const [generationStart, setGenerationStart] = useState<number | null>(null);
+  const [epochProgress, setEpochProgress] = useState<{ current: number; total: number } | null>(null);
+  const [activeGenerationName, setActiveGenerationName] = useState<string | null>(null);
   const [backendStatus, setBackendStatus] = useState<BackendStatus | null>(null);
   const [limits, setLimits] = useState<Limits>(DEFAULT_LIMITS);
   const [isProduction, setIsProduction] = useState(false);
@@ -88,14 +104,33 @@ export default function Home() {
   const [autoGenerateModelStats, setAutoGenerateModelStats] = useState(true);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showActionsMenu, setShowActionsMenu] = useState(false);
+  const [showJsonMenu, setShowJsonMenu] = useState(false);
+  const [showJsonMenuMobile, setShowJsonMenuMobile] = useState(false);
+  const [showBundleConfirm, setShowBundleConfirm] = useState(false);
+  const [bundlePayload, setBundlePayload] = useState<BundlePayload | null>(null);
+  const [bundleEstimate, setBundleEstimate] = useState<{
+    jsonBytes: number;
+    pngBytes: number;
+    modelBytes: number | null;
+    modelSource?: string | null;
+    totalBytes: number | null;
+    estimating: boolean;
+  }>({
+    jsonBytes: 0,
+    pngBytes: 0,
+    modelBytes: null,
+    modelSource: null,
+    totalBytes: null,
+    estimating: false,
+  });
+  const [bundleEstimateError, setBundleEstimateError] = useState<string | null>(null);
   const [showExplore, setShowExplore] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [importNamePopup, setImportNamePopup] = useState(false);
   const [pendingImportData, setPendingImportData] = useState<GenerateResponse | null>(null);
   const [importName, setImportName] = useState('');
-  const [showDownloadConfirm, setShowDownloadConfirm] = useState(false);
-  const [downloadTarget, setDownloadTarget] = useState<{model_id: string, model_size_mb?: number} | null>(null);
-  const [fetchedSize, setFetchedSize] = useState<number | null>(null);
+  const jsonMenuRef = useRef<HTMLDivElement>(null);
+  const bundlePngCacheRef = useRef<{ payload: BundlePayload | null; files: Record<string, Uint8Array> } | null>(null);
 
   const addLog = useCallback((message: string) => {
     const timestamp = new Date().toLocaleTimeString();
@@ -269,6 +304,16 @@ export default function Home() {
     localStorage.setItem(`${STORAGE_KEY}_autoGenerate`, String(autoGenerateModelStats));
   }, [autoGenerateModelStats, isHydrated]);
 
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (jsonMenuRef.current && !jsonMenuRef.current.contains(event.target as Node)) {
+        setShowJsonMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   // Fetch backend status and limits on mount
   useEffect(() => {
     if (!isHydrated) return;
@@ -304,6 +349,8 @@ export default function Home() {
   const handleGenerate = useCallback(async (name?: string) => {
     setIsGenerating(true);
     setGenerationStart(Date.now());
+    setEpochProgress(null);
+    setActiveGenerationName(name ?? null);
     setError(null);
     addLog('Starting generation...');
     if (dataSource === 'real') {
@@ -364,7 +411,9 @@ export default function Home() {
             if (currentEvent === 'log') {
               addLog(data);
             } else if (currentEvent === 'progress') {
-              // Could update a progress bar here
+              if (typeof data.epoch === 'number' && typeof data.total === 'number') {
+                setEpochProgress({ current: data.epoch, total: data.total });
+              }
             } else if (currentEvent === 'result') {
               setGraphData(data as GenerateResponse);
               addLog(`Generation complete. MSE: ${data.metrics.mse.toFixed(4)}`);
@@ -381,6 +430,8 @@ export default function Home() {
     } finally {
       setIsGenerating(false);
       setGenerationStart(null);
+      setEpochProgress(null);
+      setActiveGenerationName(null);
     }
   }, [filmLayers, generatorParams, trainingParams, addLog, session, dataSource, workflow, nrSldMode, autoGenerateModelStats]);
 
@@ -505,99 +556,275 @@ export default function Home() {
     addLog('Loaded saved session from history');
   }, [addLog]);
 
-  const handleExportAll = useCallback(() => {
-    if (!graphData) return;
-    
-    // Create export object containing params and result
-    const exportData = {
-        params: {
-            layers: filmLayers,
-            generator: generatorParams,
-            training: trainingParams
-        },
-        result: graphData
-    };
+  const buildExportPayload = useCallback(
+    (
+      params: { layers: FilmLayer[]; generator: GeneratorParams; training: TrainingParams },
+      result: GenerateResponse
+    ) => ({
+      params: {
+        layers: params.layers,
+        generator: params.generator,
+        training: params.training,
+      },
+      result,
+    }),
+    []
+  );
 
-    const fileName = `pyreflect_export_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-    const jsonStr = JSON.stringify(exportData, null, 2);
+  const downloadJsonPayload = useCallback((payload: object, fileName?: string) => {
+    const name = fileName ?? `pyreflect_export_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    const jsonStr = JSON.stringify(payload, null, 2);
     const blob = new Blob([jsonStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    
     const link = document.createElement('a');
     link.href = url;
-    link.download = fileName;
+    link.download = name;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    addLog('Exported full session data (params + results)');
-  }, [graphData, filmLayers, generatorParams, trainingParams, addLog]);
+  }, []);
 
-  const handleDownloadModelClick = useCallback(() => {
-     if (!graphData?.model_id) return;
-     setDownloadTarget(null); // Clear specific target to use current graphData
-     setShowDownloadConfirm(true);
-  }, [graphData]);
-  
-  const handleSidebarDownloadRequest = useCallback((model_id: string, model_size_mb?: number) => {
-      setDownloadTarget({ model_id, model_size_mb });
-      setShowDownloadConfirm(true);
+  const formatBytes = useCallback((bytes: number | null) => {
+    if (bytes === null) return '—';
+    if (bytes < 1024) return `${bytes} B`;
+    const kb = bytes / 1024;
+    if (kb < 1024) return `${kb.toFixed(1)} KB`;
+    const mb = kb / 1024;
+    return `${mb.toFixed(2)} MB`;
+  }, []);
+
+  const waitForCharts = useCallback(async () => {
+    for (let i = 0; i < 8; i += 1) {
+      const nodes = document.querySelectorAll('[data-export-id]');
+      if (nodes.length > 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }
+  }, []);
+
+  const captureChartPngs = useCallback(async () => {
+    await waitForCharts();
+    const files: Record<string, Uint8Array> = {};
+    for (const chart of EXPORT_CHARTS) {
+      const node = document.querySelector(`[data-export-id="${chart.id}"]`) as HTMLElement | null;
+      if (!node) continue;
+      const { clientWidth, clientHeight } = node;
+      if (clientWidth === 0 || clientHeight === 0) continue;
+      const dataUrl = await toPng(node, {
+        cacheBust: true,
+        backgroundColor: '#000000',
+        width: clientWidth,
+        height: clientHeight,
+        style: {
+          transform: 'none',
+          position: 'static',
+          top: '0',
+          left: '0',
+          right: 'auto',
+          bottom: 'auto',
+          margin: '0',
+          width: `${clientWidth}px`,
+          height: `${clientHeight}px`,
+          animation: 'none',
+        },
+      });
+      const pngBuffer = await fetch(dataUrl).then((res) => res.arrayBuffer());
+      files[chart.filename] = new Uint8Array(pngBuffer);
+    }
+    return files;
+  }, [waitForCharts]);
+
+  const openBundleConfirm = useCallback((payload: BundlePayload) => {
+    setBundlePayload(payload);
+    setShowBundleConfirm(true);
+    bundlePngCacheRef.current = null;
   }, []);
 
   useEffect(() => {
-    if (!showDownloadConfirm) {
-        setFetchedSize(null);
-        return;
-    }
-    const target = downloadTarget || graphData;
-    if (!target?.model_id) return;
+    if (!showBundleConfirm || !bundlePayload) return;
+    let cancelled = false;
 
-    if (target.model_size_mb) {
-        setFetchedSize(target.model_size_mb);
-    } else {
-        fetch(`${API_URL}/api/models/${target.model_id}/info`)
-          .then(res => res.json())
-          .then(data => {
-             if (data.size_mb) setFetchedSize(data.size_mb);
-          })
-          .catch(err => console.error("Size fetch failed", err));
-    }
-  }, [showDownloadConfirm, downloadTarget, graphData]);
+    const estimate = async () => {
+      setBundleEstimateError(null);
+      setBundleEstimate({
+        jsonBytes: 0,
+        pngBytes: 0,
+        modelBytes: null,
+        modelSource: null,
+        totalBytes: null,
+        estimating: true,
+      });
 
-  const confirmDownloadModel = useCallback(() => {
-    const target = downloadTarget || graphData;
-    if (!target?.model_id) return;
-    
-    const link = document.createElement('a');
-    link.href = `${API_URL}/api/models/${target.model_id}`;
-    link.download = `model_${target.model_id}.pth`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    addLog('Downloading model file...');
-    setShowDownloadConfirm(false);
-    setDownloadTarget(null);
-  }, [graphData, downloadTarget, addLog]);
+      const exportData = buildExportPayload(bundlePayload.params, bundlePayload.result);
+      const jsonStr = JSON.stringify(exportData, null, 2);
+      const jsonBytes = new TextEncoder().encode(jsonStr).length;
 
-  const handleDeleteModel = useCallback(async () => {
-    if (!graphData?.model_id) return;
-    if (!confirm('Are you sure you want to delete the local model file? This cannot be undone if not uploaded.')) return;
-    
-    try {
-        const res = await fetch(`${API_URL}/api/models/${graphData.model_id}`, { method: 'DELETE' });
-        if (res.ok) {
-            addLog('Local model file deleted.');
-            setShowDownloadConfirm(false);
-        } else {
-            throw new Error('Failed to delete');
+      let pngBytes = 0;
+      try {
+        const files = await captureChartPngs();
+        pngBytes = Object.values(files).reduce((sum, file) => sum + file.length, 0);
+        bundlePngCacheRef.current = { payload: bundlePayload, files };
+      } catch (err) {
+        setBundleEstimateError('Could not estimate PNG size.');
+      }
+
+      let modelBytes: number | null = null;
+      let modelSource: string | null = null;
+      if (bundlePayload.result.model_id) {
+        try {
+          const res = await fetch(`${API_URL}/api/models/${bundlePayload.result.model_id}/info`);
+          if (res.ok) {
+            const data = await res.json();
+            if (typeof data.size_mb === 'number') {
+              modelBytes = data.size_mb * 1024 * 1024;
+            }
+            modelSource = data.source || null;
+          }
+        } catch {
+          modelSource = null;
         }
-    } catch (e) {
-        addLog(`Error deleting model: ${e}`);
-        alert('Could not delete local model (maybe it is already gone or permission denied).');
+      }
+
+      const totalBytes = jsonBytes + pngBytes + (modelBytes ?? 0);
+
+      if (cancelled) return;
+      setBundleEstimate({
+        jsonBytes,
+        pngBytes,
+        modelBytes,
+        modelSource,
+        totalBytes,
+        estimating: false,
+      });
+    };
+
+    estimate();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showBundleConfirm, bundlePayload, buildExportPayload, captureChartPngs]);
+
+  const handleExportAll = useCallback(() => {
+    if (!graphData) return;
+    
+    const exportData = buildExportPayload(
+      { layers: filmLayers, generator: generatorParams, training: trainingParams },
+      graphData
+    );
+    downloadJsonPayload(exportData);
+    addLog('Exported full session data (params + results)');
+  }, [graphData, filmLayers, generatorParams, trainingParams, addLog, buildExportPayload, downloadJsonPayload]);
+
+  const handleDownloadBundle = useCallback(async (payload?: BundlePayload) => {
+    const resolvedResult = payload?.result ?? graphData;
+    if (!resolvedResult) {
+      addLog('Nothing to download yet.');
+      return;
     }
-  }, [graphData, addLog]);
 
+    const resolvedParams = payload?.params ?? {
+      layers: filmLayers,
+      generator: generatorParams,
+      training: trainingParams,
+    };
 
+    const exportData = buildExportPayload(resolvedParams, resolvedResult);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const baseName = resolvedResult.name
+      ? resolvedResult.name.replace(/[^a-z0-9_-]+/gi, '_').slice(0, 32)
+      : `pyreflect_bundle_${timestamp}`;
+    const files: Record<string, Uint8Array> = {
+      'output.json': strToU8(JSON.stringify(exportData, null, 2)),
+    };
+
+    try {
+      addLog('Preparing download bundle...');
+      const cached = bundlePngCacheRef.current;
+      const pngFiles =
+        cached && cached.payload === payload
+          ? cached.files
+          : await captureChartPngs();
+      Object.assign(files, pngFiles);
+
+      if (resolvedResult.model_id) {
+        const modelRes = await fetch(`${API_URL}/api/models/${resolvedResult.model_id}`);
+        if (modelRes.ok) {
+          const modelBuffer = await modelRes.arrayBuffer();
+          files[`model_${resolvedResult.model_id}.pth`] = new Uint8Array(modelBuffer);
+        } else {
+          addLog('Model file not found for this run.');
+        }
+      } else {
+        addLog('No model file associated with this run.');
+      }
+
+      const zipData = zipSync(files, { level: 6 });
+      const blob = new Blob([zipData], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${baseName}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      addLog('Download bundle ready.');
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to build download bundle';
+      addLog(`Download error: ${errorMsg}`);
+    }
+  }, [graphData, filmLayers, generatorParams, trainingParams, buildExportPayload, captureChartPngs, addLog]);
+
+  const handleDownloadBundleClick = useCallback(() => {
+    if (!graphData) {
+      addLog('No results to download yet.');
+      return;
+    }
+    openBundleConfirm({
+      params: { layers: filmLayers, generator: generatorParams, training: trainingParams },
+      result: graphData,
+    });
+  }, [graphData, filmLayers, generatorParams, trainingParams, openBundleConfirm, addLog]);
+
+  const handleSidebarDownloadRequest = useCallback(async (saveId: string) => {
+    if (!session?.user || !('id' in session.user)) {
+      alert('Please sign in to download history items.');
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_URL}/api/history/${saveId}`, {
+        headers: {
+          'X-User-ID': session.user.id as string,
+        },
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to load history item for download.');
+      }
+
+      const data = await res.json();
+      if (!data?.params || !data?.result) {
+        throw new Error('History item is missing data.');
+      }
+
+      handleLoadSave(data.params, data.result);
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      openBundleConfirm({ params: data.params, result: data.result });
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Download failed';
+      addLog(`Download error: ${errorMsg}`);
+    }
+  }, [session, handleLoadSave, openBundleConfirm, addLog]);
+
+  const handleConfirmBundleDownload = useCallback(async () => {
+    if (!bundlePayload) return;
+    await handleDownloadBundle(bundlePayload);
+    setShowBundleConfirm(false);
+    setBundlePayload(null);
+  }, [bundlePayload, handleDownloadBundle]);
 
   return (
     <div className="container">
@@ -609,34 +836,80 @@ export default function Home() {
           {isProduction && <span className="header__version" style={{ color: '#f59e0b', marginLeft: '8px' }}>PROD</span>}
           <span className={`status ${isGenerating ? 'status--training' : 'status--active'}`} style={{ marginLeft: '12px' }}>
             <span className="status__dot"></span>
-            <span className="header__status-text">{isGenerating ? 'Training...' : 'Ready'}</span>
+            <span className="header__status-text">
+              {isGenerating
+                ? epochProgress
+                  ? `Training... (${epochProgress.current}/${epochProgress.total})`
+                  : 'Training...'
+                : 'Ready'}
+            </span>
           </span>
         </div>
         <nav className="header__nav">
           {/* Desktop: show buttons inline */}
           <div className="header__actions-desktop">
+            <a
+              className="header__export-btn"
+              href="https://github.com/Northeastern-Research-ORNL-1/pyreflect-interface"
+              target="_blank"
+              rel="noopener noreferrer"
+              title="View on GitHub"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M12 .5C5.65.5.5 5.82.5 12.38c0 5.25 3.44 9.7 8.21 11.27.6.11.82-.27.82-.6 0-.3-.01-1.1-.02-2.16-3.34.75-4.04-1.66-4.04-1.66-.55-1.44-1.34-1.82-1.34-1.82-1.09-.77.08-.76.08-.76 1.2.09 1.83 1.27 1.83 1.27 1.07 1.88 2.8 1.34 3.49 1.03.11-.8.42-1.34.76-1.65-2.66-.31-5.47-1.36-5.47-6.06 0-1.34.46-2.44 1.23-3.31-.12-.31-.53-1.57.12-3.27 0 0 1.01-.33 3.3 1.26a11.2 11.2 0 0 1 3-.41c1.02 0 2.04.14 3 .41 2.29-1.59 3.3-1.26 3.3-1.26.65 1.7.24 2.96.12 3.27.77.87 1.23 1.97 1.23 3.31 0 4.71-2.81 5.75-5.49 6.05.43.38.81 1.13.81 2.28 0 1.65-.01 2.98-.01 3.39 0 .33.22.72.83.6 4.76-1.57 8.2-6.02 8.2-11.27C23.5 5.82 18.35.5 12 .5z" />
+              </svg>
+              <span className="header__btn-label">GitHub</span>
+            </a>
             <button className="header__export-btn" onClick={() => setShowExplore(true)}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
               </svg>
               <span className="header__btn-label">History</span>
             </button>
-            <button className="header__export-btn" onClick={handleImportJSON}>
-              <span>↑</span><span className="header__btn-label">Import</span>
-            </button>
-            {graphData && (
-              <button className="header__export-btn" onClick={handleExportAll}>
-                <span>↓</span><span className="header__btn-label">Export</span>
+            <div className="header__menu" ref={jsonMenuRef}>
+              <button
+                className="header__export-btn"
+                onClick={() => setShowJsonMenu((prev) => !prev)}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M1.5 12s3.6-7 10.5-7 10.5 7 10.5 7-3.6 7-10.5 7-10.5-7-10.5-7z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+                <span className="header__btn-label">View</span>
               </button>
-            )}
-            {graphData?.model_id && (
-              <button className="header__export-btn" onClick={handleDownloadModelClick}>
+              {showJsonMenu && (
+                <div className="header__dropdown">
+                  <button
+                    className="header__dropdown-item"
+                    onClick={() => {
+                      handleImportJSON();
+                      setShowJsonMenu(false);
+                    }}
+                  >
+                    <span>↑</span> Import JSON
+                  </button>
+                  {graphData && (
+                    <button
+                      className="header__dropdown-item"
+                      onClick={() => {
+                        handleExportAll();
+                        setShowJsonMenu(false);
+                      }}
+                    >
+                      <span>↓</span> Export JSON
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+            {graphData && (
+              <button className="header__export-btn" onClick={handleDownloadBundleClick}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                   <polyline points="7 10 12 15 17 10"></polyline>
                   <line x1="12" y1="15" x2="12" y2="3"></line>
                 </svg>
-                <span className="header__btn-label">Model</span>
+                <span className="header__btn-label">Download</span>
               </button>
             )}
           </div>
@@ -645,29 +918,74 @@ export default function Home() {
           <div className="header__actions-mobile">
             <button 
               className="header__export-btn" 
-              onClick={() => setShowActionsMenu(!showActionsMenu)}
+              onClick={() => {
+                setShowActionsMenu(!showActionsMenu);
+                if (showActionsMenu) {
+                  setShowJsonMenuMobile(false);
+                }
+              }}
             >
               <span>≡</span>
             </button>
             {showActionsMenu && (
               <div className="header__dropdown">
+                <a
+                  className="header__dropdown-item"
+                  href="https://github.com/Northeastern-Research-ORNL-1/pyreflect-interface"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setShowActionsMenu(false)}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M12 .5C5.65.5.5 5.82.5 12.38c0 5.25 3.44 9.7 8.21 11.27.6.11.82-.27.82-.6 0-.3-.01-1.1-.02-2.16-3.34.75-4.04-1.66-4.04-1.66-.55-1.44-1.34-1.82-1.34-1.82-1.09-.77.08-.76.08-.76 1.2.09 1.83 1.27 1.83 1.27 1.07 1.88 2.8 1.34 3.49 1.03.11-.8.42-1.34.76-1.65-2.66-.31-5.47-1.36-5.47-6.06 0-1.34.46-2.44 1.23-3.31-.12-.31-.53-1.57.12-3.27 0 0 1.01-.33 3.3 1.26a11.2 11.2 0 0 1 3-.41c1.02 0 2.04.14 3 .41 2.29-1.59 3.3-1.26 3.3-1.26.65 1.7.24 2.96.12 3.27.77.87 1.23 1.97 1.23 3.31 0 4.71-2.81 5.75-5.49 6.05.43.38.81 1.13.81 2.28 0 1.65-.01 2.98-.01 3.39 0 .33.22.72.83.6 4.76-1.57 8.2-6.02 8.2-11.27C23.5 5.82 18.35.5 12 .5z" />
+                  </svg>
+                  GitHub
+                </a>
                 <button className="header__dropdown-item" onClick={() => { setShowExplore(true); setShowActionsMenu(false); }}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
                   </svg> 
                   History
                 </button>
-                <button className="header__dropdown-item" onClick={() => { handleImportJSON(); setShowActionsMenu(false); }}>
-                  <span>↑</span> Import
+                <button
+                  className="header__dropdown-item"
+                  onClick={() => setShowJsonMenuMobile((prev) => !prev)}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M1.5 12s3.6-7 10.5-7 10.5 7 10.5 7-3.6 7-10.5 7-10.5-7-10.5-7z" />
+                    <circle cx="12" cy="12" r="3" />
+                  </svg>
+                  <span>{showJsonMenuMobile ? '▾' : '▸'}</span> JSON
                 </button>
-                {graphData && (
-                  <button className="header__dropdown-item" onClick={() => { handleExportAll(); setShowActionsMenu(false); }}>
-                    <span>↓</span> Export
-                  </button>
+                {showJsonMenuMobile && (
+                  <div className="header__dropdown-sub">
+                    <button
+                      className="header__dropdown-item header__dropdown-item--sub"
+                      onClick={() => {
+                        handleImportJSON();
+                        setShowJsonMenuMobile(false);
+                        setShowActionsMenu(false);
+                      }}
+                    >
+                      <span>↑</span> Import
+                    </button>
+                    {graphData && (
+                      <button
+                        className="header__dropdown-item header__dropdown-item--sub"
+                        onClick={() => {
+                          handleExportAll();
+                          setShowJsonMenuMobile(false);
+                          setShowActionsMenu(false);
+                        }}
+                      >
+                        <span>↓</span> Export
+                      </button>
+                    )}
+                  </div>
                 )}
-                {graphData?.model_id && (
-                  <button className="header__dropdown-item" onClick={() => { handleDownloadModelClick(); setShowActionsMenu(false); }}>
-                    <span>↓</span> Model
+                {graphData && (
+                  <button className="header__dropdown-item" onClick={() => { handleDownloadBundleClick(); setShowActionsMenu(false); setShowJsonMenuMobile(false); }}>
+                    <span>↓</span> Download
                   </button>
                 )}
               </div>
@@ -747,7 +1065,73 @@ export default function Home() {
         userId={session?.user ? (session.user as any).id : undefined}
         onLoadSave={handleLoadSave}
         onRequestDownload={handleSidebarDownloadRequest}
+        inProgress={isGenerating ? { name: activeGenerationName, epochProgress } : null}
       />
+
+      {showBundleConfirm && bundlePayload && (
+        <>
+          <div
+            className="model-download-overlay"
+            onClick={() => {
+              setShowBundleConfirm(false);
+              setBundlePayload(null);
+            }}
+          />
+          <div className="model-download-popup">
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '13px', marginBottom: '16px', lineHeight: '1.4' }}>
+              <div style={{ fontWeight: 600, marginBottom: '8px' }}>Download Bundle?</div>
+              <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginBottom: '10px' }}>
+                Includes model (.pth), chart PNGs, and output.json. Model is pulled from Hugging Face if not local.
+              </div>
+              <div style={{ display: 'grid', gap: '6px', fontSize: '12px' }}>
+                <div>Model: <span style={{ color: 'var(--text-secondary)' }}>
+                  {bundlePayload.result.model_id
+                    ? bundleEstimate.modelBytes !== null
+                      ? `${formatBytes(bundleEstimate.modelBytes)}${bundleEstimate.modelSource ? ` (${bundleEstimate.modelSource})` : ''}`
+                      : bundleEstimate.estimating
+                        ? 'Estimating...'
+                        : 'Unknown'
+                    : 'Not available'}
+                </span></div>
+                <div>PNGs: <span style={{ color: 'var(--text-secondary)' }}>
+                  {bundleEstimate.estimating ? 'Estimating...' : formatBytes(bundleEstimate.pngBytes)}
+                </span></div>
+                <div>JSON: <span style={{ color: 'var(--text-secondary)' }}>
+                  {bundleEstimate.estimating ? 'Estimating...' : formatBytes(bundleEstimate.jsonBytes)}
+                </span></div>
+                <div>Total: <span style={{ color: 'var(--text-secondary)' }}>
+                  {bundleEstimate.estimating ? 'Estimating...' : formatBytes(bundleEstimate.totalBytes)}
+                  {bundlePayload.result.model_id && bundleEstimate.modelBytes === null ? ' + model' : ''}
+                </span></div>
+              </div>
+              {bundleEstimateError && (
+                <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: '8px' }}>
+                  {bundleEstimateError}
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button 
+                className="btn btn--outline" 
+                onClick={() => {
+                  setShowBundleConfirm(false);
+                  setBundlePayload(null);
+                }}
+                style={{ padding: '6px 12px', fontSize: '11px' }}
+              >
+                CANCEL
+              </button>
+              <button 
+                className="btn" 
+                onClick={handleConfirmBundleDownload}
+                style={{ padding: '6px 12px', fontSize: '11px' }}
+              >
+                DOWNLOAD
+              </button>
+            </div>
+          </div>
+        </>
+      )}
       
       {importNamePopup && (
         <div className="modal-overlay">
@@ -774,38 +1158,6 @@ export default function Home() {
             </div>
           </div>
         </div>
-      )}
-      {showDownloadConfirm && (
-        <>
-          <div className="model-download-overlay" onClick={() => setShowDownloadConfirm(false)} />
-          <div className="model-download-popup">
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '13px', marginBottom: '16px', lineHeight: '1.4' }}>
-              <div style={{ fontWeight: 600, marginBottom: '8px' }}>Download Trained Model?</div>
-              <div>Size: <span style={{ color: 'var(--text-secondary)' }}>
-                {fetchedSize ? `~${fetchedSize.toFixed(2)} MB` : 'Checking...'}
-              </span></div>
-              <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: '4px' }}>
-                This is the raw PyTorch state dictionary (.pth)
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-              <button 
-                className="btn btn--outline" 
-                onClick={() => { setShowDownloadConfirm(false); setDownloadTarget(null); }}
-                style={{ padding: '6px 12px', fontSize: '11px' }}
-              >
-                CANCEL
-              </button>
-              <button 
-                className="btn" 
-                onClick={confirmDownloadModel}
-                style={{ padding: '6px 12px', fontSize: '11px' }}
-              >
-                DOWNLOAD
-              </button>
-            </div>
-          </div>
-        </>
       )}
     </div>
   );
