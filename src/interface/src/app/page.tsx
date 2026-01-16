@@ -660,7 +660,6 @@ export default function Home() {
         isOpen={showExplore} 
         onClose={() => setShowExplore(false)} 
         userId={session?.user ? (session.user as any).id : undefined}
-        userId={session?.user ? (session.user as any).id : undefined}
         onLoadSave={handleLoadSave}
         onRequestDownload={handleSidebarDownloadRequest}
       />
@@ -726,4 +725,3 @@ export default function Home() {
     </div>
   );
 }
-
