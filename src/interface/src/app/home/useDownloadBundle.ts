@@ -272,7 +272,7 @@ export function useDownloadBundle({
   }, [graphData, exportPngs, currentParams, addLog]);
 
   const handleDownloadBundle = useCallback(
-    async (payload?: BundlePayload) => {
+    async (payload?: BundlePayload, onCaptureComplete?: () => void) => {
       const resolvedResult = payload?.result ?? graphData;
       if (!resolvedResult) {
         addLog('Nothing to download yet.');
@@ -340,6 +340,9 @@ export function useDownloadBundle({
           }
         }
 
+        // Signal that capture phase is done - overlay can dismiss now
+        onCaptureComplete?.();
+
         if (bundleSelection.includeJson) {
           const { export_pngs: _exportPngs, ...resultWithoutPngs } = resolvedResult;
           void _exportPngs;
@@ -389,7 +392,7 @@ export function useDownloadBundle({
             else resolve(data);
           });
         });
-        const blob = new Blob([zipData], { type: 'application/zip' });
+        const blob = new Blob([zipData.buffer.slice(zipData.byteOffset, zipData.byteOffset + zipData.byteLength) as ArrayBuffer], { type: 'application/zip' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
@@ -457,8 +460,14 @@ export function useDownloadBundle({
     closeBundleConfirm();
     await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
     try {
-      await handleDownloadBundle(bundlePayload);
+      await handleDownloadBundle(bundlePayload, () => {
+        // Dismiss overlay once capture is done (bundling continues in background)
+        setIsDownloadingBundle(false);
+      });
+    } catch {
+      // Error already logged in handleDownloadBundle
     } finally {
+      // Ensure overlay is dismissed even if callback wasn't reached
       setIsDownloadingBundle(false);
     }
   }, [bundlePayload, handleDownloadBundle, closeBundleConfirm, isDownloadingBundle]);
