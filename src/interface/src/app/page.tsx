@@ -6,7 +6,7 @@ import ParameterPanel from '../components/ParameterPanel';
 import GraphDisplay from '../components/GraphDisplay';
 import ConsoleOutput from '../components/ConsoleOutput';
 import ExploreSidebar from '../components/ExploreSidebar';
-import { FilmLayer, GeneratorParams, TrainingParams, GenerateResponse, Limits, LimitsResponse, DEFAULT_LIMITS } from '@/types';
+import { FilmLayer, GeneratorParams, TrainingParams, GenerateResponse, Limits, LimitsResponse, DEFAULT_LIMITS, DataSource, Workflow, NrSldMode, UploadRole } from '@/types';
 import packageJson from '../../package.json';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -19,6 +19,28 @@ interface BackendStatus {
   data_files: string[];
   curve_files: string[];
   expt_files: string[];
+  model_files?: string[];
+  settings_paths?: {
+    nr_predict_sld?: {
+      file?: Record<string, string>;
+      models?: {
+        model?: string;
+        normalization_stats?: string;
+      };
+    };
+    sld_predict_chi?: {
+      file?: Record<string, string>;
+    };
+  };
+  settings_status?: {
+    nr_predict_sld?: {
+      file?: Record<string, boolean>;
+      models?: Record<string, boolean>;
+    };
+    sld_predict_chi?: {
+      file?: Record<string, boolean>;
+    };
+  };
 }
 
 const DEFAULT_LAYERS: FilmLayer[] = [
@@ -60,6 +82,10 @@ export default function Home() {
   const [limits, setLimits] = useState<Limits>(DEFAULT_LIMITS);
   const [isProduction, setIsProduction] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [dataSource, setDataSource] = useState<DataSource>('synthetic');
+  const [workflow, setWorkflow] = useState<Workflow>('nr_sld');
+  const [nrSldMode, setNrSldMode] = useState<NrSldMode>('train');
+  const [autoGenerateModelStats, setAutoGenerateModelStats] = useState(true);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showActionsMenu, setShowActionsMenu] = useState(false);
   const [showExplore, setShowExplore] = useState(false);
@@ -144,12 +170,20 @@ export default function Home() {
     setGraphData(null);
     setConsoleLogs([]);
     setError(null);
+    setDataSource('synthetic');
+    setWorkflow('nr_sld');
+    setNrSldMode('train');
+    setAutoGenerateModelStats(true);
     if (typeof window !== 'undefined') {
       localStorage.removeItem(`${STORAGE_KEY}_layers`);
       localStorage.removeItem(`${STORAGE_KEY}_generator`);
       localStorage.removeItem(`${STORAGE_KEY}_training`);
       localStorage.removeItem(`${STORAGE_KEY}_graphData`);
       localStorage.removeItem(`${STORAGE_KEY}_logs`);
+      localStorage.removeItem(`${STORAGE_KEY}_dataSource`);
+      localStorage.removeItem(`${STORAGE_KEY}_workflow`);
+      localStorage.removeItem(`${STORAGE_KEY}_mode`);
+      localStorage.removeItem(`${STORAGE_KEY}_autoGenerate`);
     }
   }, []);
 
@@ -161,12 +195,20 @@ export default function Home() {
       const storedTraining = localStorage.getItem(`${STORAGE_KEY}_training`);
       const storedGraphData = localStorage.getItem(`${STORAGE_KEY}_graphData`);
       const storedLogs = localStorage.getItem(`${STORAGE_KEY}_logs`);
+      const storedDataSource = localStorage.getItem(`${STORAGE_KEY}_dataSource`);
+      const storedWorkflow = localStorage.getItem(`${STORAGE_KEY}_workflow`);
+      const storedMode = localStorage.getItem(`${STORAGE_KEY}_mode`);
+      const storedAutoGenerate = localStorage.getItem(`${STORAGE_KEY}_autoGenerate`);
 
       if (storedLayers) setFilmLayers(JSON.parse(storedLayers));
       if (storedGenerator) setGeneratorParams(JSON.parse(storedGenerator));
       if (storedTraining) setTrainingParams(JSON.parse(storedTraining));
       if (storedGraphData) setGraphData(JSON.parse(storedGraphData));
       if (storedLogs) setConsoleLogs(JSON.parse(storedLogs));
+      if (storedDataSource) setDataSource(storedDataSource as DataSource);
+      if (storedWorkflow) setWorkflow(storedWorkflow as Workflow);
+      if (storedMode) setNrSldMode(storedMode as NrSldMode);
+      if (storedAutoGenerate !== null) setAutoGenerateModelStats(storedAutoGenerate === 'true');
     } catch {
       // Ignore parse errors
     }
@@ -207,6 +249,26 @@ export default function Home() {
     localStorage.setItem(`${STORAGE_KEY}_logs`, JSON.stringify(consoleLogs));
   }, [consoleLogs, isHydrated]);
 
+  useEffect(() => {
+    if (!isHydrated) return;
+    localStorage.setItem(`${STORAGE_KEY}_dataSource`, dataSource);
+  }, [dataSource, isHydrated]);
+
+  useEffect(() => {
+    if (!isHydrated) return;
+    localStorage.setItem(`${STORAGE_KEY}_workflow`, workflow);
+  }, [workflow, isHydrated]);
+
+  useEffect(() => {
+    if (!isHydrated) return;
+    localStorage.setItem(`${STORAGE_KEY}_mode`, nrSldMode);
+  }, [nrSldMode, isHydrated]);
+
+  useEffect(() => {
+    if (!isHydrated) return;
+    localStorage.setItem(`${STORAGE_KEY}_autoGenerate`, String(autoGenerateModelStats));
+  }, [autoGenerateModelStats, isHydrated]);
+
   // Fetch backend status and limits on mount
   useEffect(() => {
     if (!isHydrated) return;
@@ -244,8 +306,14 @@ export default function Home() {
     setGenerationStart(Date.now());
     setError(null);
     addLog('Starting generation...');
+    if (dataSource === 'real') {
+      const modeLabel = workflow === 'sld_chi' ? '' : ` (${nrSldMode})`;
+      addLog(`Real data: ${workflow}${modeLabel}`);
+    }
     if (name) addLog(`Name: ${name}`);
-    addLog(`Params: ${generatorParams.numCurves} curves, ${trainingParams.epochs} epochs`);
+    if (dataSource === 'synthetic') {
+      addLog(`Params: ${generatorParams.numCurves} curves, ${trainingParams.epochs} epochs`);
+    }
     
     try {
       // Build headers with user ID for MongoDB persistence
@@ -262,6 +330,10 @@ export default function Home() {
           generator: generatorParams,
           training: trainingParams,
           name: name,
+          dataSource,
+          workflow,
+          mode: nrSldMode,
+          autoGenerateModelStats,
         }),
       });
 
@@ -310,16 +382,19 @@ export default function Home() {
       setIsGenerating(false);
       setGenerationStart(null);
     }
-  }, [filmLayers, generatorParams, trainingParams, addLog, session]);
+  }, [filmLayers, generatorParams, trainingParams, addLog, session, dataSource, workflow, nrSldMode, autoGenerateModelStats]);
 
-  const handleUploadFiles = useCallback(async (files: File[]) => {
-    if (files.length === 0) return;
+  const handleUploadFiles = useCallback(async (uploads: { file: File; role: UploadRole }[]) => {
+    if (uploads.length === 0) return;
     setIsUploading(true);
     setError(null);
-    addLog(`Uploading ${files.length} file(s)...`);
+    addLog(`Uploading ${uploads.length} file(s)...`);
 
     const formData = new FormData();
-    files.forEach((file) => formData.append('files', file));
+    uploads.forEach(({ file, role }) => {
+      formData.append('files', file);
+      formData.append('roles', role);
+    });
 
     try {
       const response = await fetch(`${API_URL}/api/upload`, {
@@ -647,6 +722,14 @@ export default function Home() {
             isProduction={isProduction}
             isUploading={isUploading}
             backendStatus={backendStatus}
+            dataSource={dataSource}
+            workflow={workflow}
+            nrSldMode={nrSldMode}
+            autoGenerateModelStats={autoGenerateModelStats}
+            onDataSourceChange={setDataSource}
+            onWorkflowChange={setWorkflow}
+            onNrSldModeChange={setNrSldMode}
+            onAutoGenerateModelStatsChange={setAutoGenerateModelStats}
             isCollapsed={sidebarCollapsed}
             onToggleCollapse={() => setSidebarCollapsed(prev => !prev)}
           />

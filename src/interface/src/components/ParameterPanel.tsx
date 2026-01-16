@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, type ChangeEvent, type DragEvent } from 'react';
-import { FilmLayer, GeneratorParams, TrainingParams, Limits, DEFAULT_LIMITS } from '@/types';
+import { FilmLayer, GeneratorParams, TrainingParams, Limits, DEFAULT_LIMITS, DataSource, Workflow, NrSldMode, UploadRole } from '@/types';
 import EditableValue from './EditableValue';
 import InfoTooltip from './InfoTooltip';
 import styles from './ParameterPanel.module.css';
@@ -12,6 +12,28 @@ interface BackendStatus {
   data_files: string[];
   curve_files: string[];
   expt_files: string[];
+  model_files?: string[];
+  settings_paths?: {
+    nr_predict_sld?: {
+      file?: Record<string, string>;
+      models?: {
+        model?: string;
+        normalization_stats?: string;
+      };
+    };
+    sld_predict_chi?: {
+      file?: Record<string, string>;
+    };
+  };
+  settings_status?: {
+    nr_predict_sld?: {
+      file?: Record<string, boolean>;
+      models?: Record<string, boolean>;
+    };
+    sld_predict_chi?: {
+      file?: Record<string, boolean>;
+    };
+  };
 }
 
 export interface ParameterPanelProps {
@@ -23,10 +45,18 @@ export interface ParameterPanelProps {
   onTrainingParamsChange: (params: TrainingParams) => void;
   onGenerate: (name?: string) => void;
   onReset: () => void;
-  onUploadFiles: (files: File[]) => void;
+  onUploadFiles: (files: { file: File; role: UploadRole }[]) => void;
   isGenerating: boolean;
   isUploading: boolean;
   backendStatus: BackendStatus | null;
+  dataSource: DataSource;
+  workflow: Workflow;
+  nrSldMode: NrSldMode;
+  autoGenerateModelStats: boolean;
+  onDataSourceChange: (value: DataSource) => void;
+  onWorkflowChange: (value: Workflow) => void;
+  onNrSldModeChange: (value: NrSldMode) => void;
+  onAutoGenerateModelStatsChange: (value: boolean) => void;
   limits?: Limits;
   isProduction?: boolean;
   isCollapsed?: boolean;
@@ -46,12 +76,20 @@ export default function ParameterPanel({
   isGenerating,
   isUploading,
   backendStatus,
+  dataSource,
+  workflow,
+  nrSldMode,
+  autoGenerateModelStats,
+  onDataSourceChange,
+  onWorkflowChange,
+  onNrSldModeChange,
+  onAutoGenerateModelStatsChange,
   limits = DEFAULT_LIMITS,
   isProduction = false,
   isCollapsed = false,
   onToggleCollapse,
 }: ParameterPanelProps) {
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [selectedFiles, setSelectedFiles] = useState<{ file: File; role: UploadRole }[]>([]);
   const [isDragActive, setIsDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [expandedLayers, setExpandedLayers] = useState(() =>
@@ -60,6 +98,171 @@ export default function ParameterPanel({
 
   const [showNamePopup, setShowNamePopup] = useState(false);
   const [generationName, setGenerationName] = useState('');
+
+  const shouldShowTraining =
+    dataSource === 'synthetic' ||
+    (dataSource === 'real' && (workflow === 'sld_chi' || workflow === 'nr_sld_chi' || nrSldMode === 'train'));
+
+  const settingsPaths = backendStatus?.settings_paths;
+  const settingsStatus = backendStatus?.settings_status;
+  const getSettingPath = (role: UploadRole): string | undefined => {
+    if (!settingsPaths) return undefined;
+    switch (role) {
+      case 'nr_train':
+        return settingsPaths.nr_predict_sld?.file?.nr_train;
+      case 'sld_train':
+        return settingsPaths.nr_predict_sld?.file?.sld_train;
+      case 'experimental_nr':
+        return settingsPaths.nr_predict_sld?.file?.experimental_nr_file;
+      case 'normalization_stats':
+        return settingsPaths.nr_predict_sld?.models?.normalization_stats;
+      case 'nr_sld_model':
+        return settingsPaths.nr_predict_sld?.models?.model;
+      case 'sld_chi_experimental_profile':
+        return settingsPaths.sld_predict_chi?.file?.model_experimental_sld_profile;
+      case 'sld_chi_model_sld_file':
+        return settingsPaths.sld_predict_chi?.file?.model_sld_file;
+      case 'sld_chi_model_chi_params_file':
+        return settingsPaths.sld_predict_chi?.file?.model_chi_params_file;
+      default:
+        return undefined;
+    }
+  };
+
+  const hasSettingFile = (role: UploadRole): boolean => {
+    if (!settingsStatus) return false;
+    switch (role) {
+      case 'nr_train':
+        return !!settingsStatus.nr_predict_sld?.file?.nr_train;
+      case 'sld_train':
+        return !!settingsStatus.nr_predict_sld?.file?.sld_train;
+      case 'experimental_nr':
+        return !!settingsStatus.nr_predict_sld?.file?.experimental_nr_file;
+      case 'normalization_stats':
+        return !!settingsStatus.nr_predict_sld?.models?.normalization_stats;
+      case 'nr_sld_model':
+        return !!settingsStatus.nr_predict_sld?.models?.model;
+      case 'sld_chi_experimental_profile':
+        return !!settingsStatus.sld_predict_chi?.file?.model_experimental_sld_profile;
+      case 'sld_chi_model_sld_file':
+        return !!settingsStatus.sld_predict_chi?.file?.model_sld_file;
+      case 'sld_chi_model_chi_params_file':
+        return !!settingsStatus.sld_predict_chi?.file?.model_chi_params_file;
+      default:
+        return false;
+    }
+  };
+
+  const uploadRequirementLabels: Record<UploadRole, string> = {
+    auto: 'Auto',
+    nr_train: 'NR Train (.npy)',
+    sld_train: 'SLD Train (.npy)',
+    experimental_nr: 'Experimental NR (.npy)',
+    normalization_stats: 'Normalization Stats (.npy)',
+    nr_sld_model: 'NR→SLD Model (.pth/.pt)',
+    sld_chi_experimental_profile: 'SLD→Chi Experimental (.npy)',
+    sld_chi_model_sld_file: 'SLD→Chi SLD Train (.npy)',
+    sld_chi_model_chi_params_file: 'SLD→Chi Chi Params (.npy)',
+  };
+
+  const requiredUploads: UploadRole[] = (() => {
+    if (dataSource !== 'real') return [];
+    if (workflow === 'sld_chi') {
+      return ['sld_chi_experimental_profile', 'sld_chi_model_sld_file', 'sld_chi_model_chi_params_file'];
+    }
+    if (workflow === 'nr_sld_chi') {
+      if (nrSldMode === 'infer') {
+        return ['experimental_nr', 'nr_sld_model', 'normalization_stats', 'sld_chi_model_sld_file', 'sld_chi_model_chi_params_file'];
+      }
+      return [
+        'nr_train',
+        'sld_train',
+        ...(autoGenerateModelStats ? [] : ['nr_sld_model', 'normalization_stats']),
+        'sld_chi_model_sld_file',
+        'sld_chi_model_chi_params_file',
+      ];
+    }
+    if (nrSldMode === 'infer') {
+      return ['experimental_nr', 'nr_sld_model', 'normalization_stats'];
+    }
+    return ['nr_train', 'sld_train', ...(autoGenerateModelStats ? [] : ['nr_sld_model', 'normalization_stats'])];
+  })();
+
+  const pipelineRoles: UploadRole[] = (() => {
+    if (dataSource !== 'real') return [];
+    if (workflow === 'sld_chi') {
+      return ['sld_chi_experimental_profile', 'sld_chi_model_sld_file', 'sld_chi_model_chi_params_file'];
+    }
+    if (workflow === 'nr_sld_chi') {
+      if (nrSldMode === 'infer') {
+        return [
+          'experimental_nr',
+          'nr_sld_model',
+          'normalization_stats',
+          'sld_chi_model_sld_file',
+          'sld_chi_model_chi_params_file',
+        ];
+      }
+      return [
+        'nr_train',
+        'sld_train',
+        'nr_sld_model',
+        'normalization_stats',
+        'sld_chi_model_sld_file',
+        'sld_chi_model_chi_params_file',
+      ];
+    }
+    if (nrSldMode === 'infer') {
+      return ['experimental_nr', 'nr_sld_model', 'normalization_stats'];
+    }
+    return ['nr_train', 'sld_train', 'nr_sld_model', 'normalization_stats'];
+  })();
+
+  const missingUploads = requiredUploads.filter((role) => !hasSettingFile(role));
+  const canGenerate = dataSource === 'synthetic' || (requiredUploads.length === 0 ? true : missingUploads.length === 0);
+  const generateBlockReason = missingUploads.length
+    ? `Missing: ${missingUploads.map((role) => uploadRequirementLabels[role]).join(', ')}`
+    : undefined;
+
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+  const [pendingUploadRole, setPendingUploadRole] = useState<UploadRole | null>(null);
+
+  const roleAcceptMap: Record<UploadRole, string> = {
+    auto: '.npy,.pth,.pt',
+    nr_train: '.npy',
+    sld_train: '.npy',
+    experimental_nr: '.npy',
+    normalization_stats: '.npy',
+    nr_sld_model: '.pth,.pt',
+    sld_chi_experimental_profile: '.npy',
+    sld_chi_model_sld_file: '.npy',
+    sld_chi_model_chi_params_file: '.npy',
+  };
+
+  const handleRoleUploadClick = (role: UploadRole) => {
+    setPendingUploadRole(role);
+    uploadInputRef.current?.click();
+  };
+
+  const handleRoleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !pendingUploadRole) return;
+    onUploadFiles([{ file, role: pendingUploadRole }]);
+    setPendingUploadRole(null);
+    event.target.value = '';
+  };
+
+  const uploadRoleOptions: { value: UploadRole; label: string }[] = [
+    { value: 'auto', label: 'Auto (filename)' },
+    { value: 'nr_train', label: 'NR Train (.npy)' },
+    { value: 'sld_train', label: 'SLD Train (.npy)' },
+    { value: 'experimental_nr', label: 'Experimental NR (.npy)' },
+    { value: 'normalization_stats', label: 'Normalization Stats (.npy)' },
+    { value: 'nr_sld_model', label: 'NR→SLD Model (.pth/.pt)' },
+    { value: 'sld_chi_experimental_profile', label: 'SLD→Chi Experimental (.npy)' },
+    { value: 'sld_chi_model_sld_file', label: 'SLD→Chi SLD Train (.npy)' },
+    { value: 'sld_chi_model_chi_params_file', label: 'SLD→Chi Chi Params (.npy)' },
+  ];
 
   const handleGenerateClick = () => {
     setShowNamePopup(true);
@@ -137,7 +340,7 @@ export default function ParameterPanel({
   };
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files ?? []);
+    const files = Array.from(event.target.files ?? []).map((file) => ({ file, role: 'auto' as UploadRole }));
     setSelectedFiles((prev) => [...prev, ...files]);
   };
 
@@ -154,7 +357,7 @@ export default function ParameterPanel({
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setIsDragActive(false);
-    const files = Array.from(event.dataTransfer.files);
+    const files = Array.from(event.dataTransfer.files).map((file) => ({ file, role: 'auto' as UploadRole }));
     setSelectedFiles((prev) => [...prev, ...files]);
   };
 
@@ -164,6 +367,12 @@ export default function ParameterPanel({
 
   const removeSelectedFile = (index: number) => {
     setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const updateFileRole = (index: number, role: UploadRole) => {
+    setSelectedFiles((prev) =>
+      prev.map((item, i) => (i === index ? { ...item, role } : item))
+    );
   };
 
   const handleUpload = () => {
@@ -190,421 +399,510 @@ export default function ParameterPanel({
 
   return (
     <div className={styles.panel}>
-      {/* Film Layers Section */}
+      {/* Workflow */}
       <div className="section">
         <div className="section__header">
-          <h3 className="section__title">Film Layers</h3>
-          <div className={styles.layerActions}>
-            <button
-              className="btn btn--outline"
-              onClick={expandedLayers.size ? collapseAllLayers : expandAllLayers}
-              type="button"
-              style={{ height: '28px', padding: '0 12px', fontSize: '11px' }}
-            >
-              {expandedLayers.size ? 'COLLAPSE' : 'EXPAND'}
-            </button>
-            <button
-              className="btn btn--outline"
-              onClick={addLayer}
-              type="button"
-              style={{ height: '28px', padding: '0 12px', fontSize: '11px' }}
-            >
-
-              + ADD
-            </button>
-            <button
-               className="btn btn--outline"
-               onClick={onToggleCollapse}
-               type="button"
-               style={{ height: '28px', padding: '0 8px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-               title="Collapse Sidebar"
-            >
-               ◀
-            </button>
-          </div>
-        </div>
-        
-        <div className={styles.layers}>
-          {filmLayers.map((layer, index) => (
-            <div key={index} className="layer-item">
-              <div className={`layer-item__header ${styles.layerHeader} ${expandedLayers.has(index) ? '' : styles.layerHeaderCollapsed}`}>
-                <div className={styles.layerHeaderLeft}>
-                  <button
-                    className={styles.collapseBtn}
-                    type="button"
-                    onClick={() => toggleLayer(index)}
-                    aria-expanded={expandedLayers.has(index)}
-                    title={expandedLayers.has(index) ? 'Collapse layer' : 'Expand layer'}
-                  >
-                    {expandedLayers.has(index) ? '▼' : '▶'}
-                  </button>
-                  <input
-                    type="text"
-                    value={layer.name}
-                    onChange={(e) => updateLayer(index, 'name', e.target.value)}
-                    className={styles.nameInput}
-                  />
-                </div>
-                {index !== 0 && index !== filmLayers.length - 1 && (
-                  <button 
-                    className="layer-item__remove" 
-                    onClick={() => removeLayer(index)}
-                    type="button"
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
-
-              {expandedLayers.has(index) && (
-                <div className={styles.layerParams}>
-                <div className="control">
-                  <div className="control__label">
-                    <span>SLD<InfoTooltip hint="Scattering Length Density (×10⁻⁶ Å⁻²). Determines neutron contrast of this layer." /></span>
-                    <EditableValue
-                      value={layer.sld}
-                      onChange={(v) => updateLayer(index, 'sld', v)}
-                      min={0}
-                      max={10}
-                      step={0.01}
-                      decimals={2}
-                    />
-                  </div>
-                  <input
-                    type="range"
-                    className="slider"
-                    min="0"
-                    max="6.4"
-                    step="0.01"
-                    value={layer.sld}
-                    onChange={(e) => updateLayer(index, 'sld', parseFloat(e.target.value))}
-                  />
-                </div>
-
-                <div className="control">
-                  <div className="control__label">
-                    <span>Thickness (Å)<InfoTooltip hint="Layer thickness in Angstroms. Affects fringe spacing in reflectivity curve." /></span>
-                    <EditableValue
-                      value={layer.thickness}
-                      onChange={(v) => updateLayer(index, 'thickness', v)}
-                      min={0}
-                      max={2000}
-                      step={1}
-                      decimals={0}
-                      disabled={index === 0 || index === filmLayers.length - 1}
-                    />
-                  </div>
-                  <input
-                    type="range"
-                    className="slider"
-                    min="0"
-                    max="500"
-                    step="1"
-                    value={layer.thickness}
-                    onChange={(e) => updateLayer(index, 'thickness', parseFloat(e.target.value))}
-                    disabled={index === 0 || index === filmLayers.length - 1}
-                  />
-                </div>
-
-                <div className="control">
-                  <div className="control__label">
-                    <span>Roughness (Å)<InfoTooltip hint="Interfacial roughness in Angstroms. Smears the interface and reduces fringe amplitude." /></span>
-                    <EditableValue
-                      value={layer.roughness}
-                      onChange={(v) => updateLayer(index, 'roughness', v)}
-                      min={0}
-                      max={500}
-                      step={0.5}
-                      decimals={1}
-                    />
-                  </div>
-                  <input
-                    type="range"
-                    className="slider"
-                    min="0"
-                    max="150"
-                    step="0.5"
-                    value={layer.roughness}
-                    onChange={(e) => updateLayer(index, 'roughness', parseFloat(e.target.value))}
-                  />
-                </div>
-
-                <div className="control">
-                  <div className="control__label">
-                    <span>iSLD<InfoTooltip hint="Imaginary SLD. Represents absorption in the layer (typically small or zero)." /></span>
-                    <EditableValue
-                      value={layer.isld}
-                      onChange={(v) => updateLayer(index, 'isld', v)}
-                      min={0}
-                      max={1}
-                      step={0.001}
-                      decimals={3}
-                    />
-                  </div>
-                  <input
-                    type="range"
-                    className="slider"
-                    min="0"
-                    max="1"
-                    step="0.001"
-                    value={layer.isld}
-                    onChange={(e) => updateLayer(index, 'isld', parseFloat(e.target.value))}
-                  />
-                </div>
-              </div>
-              )}
+          <h3 className="section__title">Workflow</h3>
+          {onToggleCollapse && (
+            <div className={styles.sectionActions}>
+              <button
+                className="btn btn--outline"
+                onClick={onToggleCollapse}
+                type="button"
+                style={{ height: '28px', padding: '0 8px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                title="Collapse Sidebar"
+              >
+                ◀
+              </button>
             </div>
-          ))}
+          )}
         </div>
+
+        <div className="control">
+          <div className="control__label">
+            <span>
+              Data Source
+              <InfoTooltip hint={"Synthetic uses film layers to generate data.\n\nReal data uses settings.yml files and ignores film layers and generator settings."} />
+            </span>
+          </div>
+          <select
+            className="control__input"
+            value={dataSource}
+            onChange={(e) => onDataSourceChange(e.target.value as DataSource)}
+          >
+            <option value="synthetic" title="Generate synthetic curves from film layers.">
+              Synthetic (film layers)
+            </option>
+            <option value="real" title="Use uploaded .npy files referenced in settings.yml.">
+              Real data (.npy)
+            </option>
+          </select>
+        </div>
+
+        {dataSource === 'real' && (
+          <>
+            <div className="control">
+              <div className="control__label">
+                <span>
+                  Pipeline
+                  <InfoTooltip hint={"NR → SLD predicts SLD from NR.\n\nSLD → Chi predicts chi from SLD.\n\nNR → SLD → Chi chains both in one run and uses predicted SLD as chi input."} />
+                </span>
+              </div>
+              <select
+                className="control__input"
+                value={workflow}
+                onChange={(e) => onWorkflowChange(e.target.value as Workflow)}
+              >
+                <option value="nr_sld" title="Predict SLD profiles from NR curves.">
+                  NR → SLD
+                </option>
+                <option value="sld_chi" title="Predict chi parameters from SLD profiles.">
+                  SLD → Chi
+                </option>
+                <option value="nr_sld_chi" title="Predict SLD from NR, then chi from predicted SLD.">
+                  NR → SLD → Chi
+                </option>
+              </select>
+            </div>
+
+            {(workflow === 'nr_sld' || workflow === 'nr_sld_chi') && (
+              <div className="control">
+                <div className="control__label">
+                  <span>
+                    Mode
+                    <InfoTooltip hint={"Train: uses nr_train/sld_train to train NR→SLD and (if enabled) generate model + stats. In NR→SLD→Chi, chi is predicted from the trained SLD output.\n\nInfer: uses experimental_nr with existing model + stats to predict SLD. In NR→SLD→Chi, chi is predicted from that inferred SLD."} />
+                  </span>
+                </div>
+                <select
+                  className="control__input"
+                  value={nrSldMode}
+                  onChange={(e) => onNrSldModeChange(e.target.value as NrSldMode)}
+                >
+                  <option value="train" title="Train a new NR→SLD model from train datasets.">
+                    Train
+                  </option>
+                  <option value="infer" title="Run inference using experimental NR with existing model + stats.">
+                    Infer
+                  </option>
+                </select>
+              </div>
+            )}
+
+          </>
+        )}
       </div>
 
-      {/* Generator Parameters */}
-      <div className="section">
-        <div className="section__header">
-          <h3 className="section__title">Generator</h3>
-        </div>
-        
-        <div className="control">
-          <div className="control__label">
-            <span>Number of Curves<InfoTooltip hint="How many synthetic NR curves to generate for training. More curves = better model but longer training." />{isProduction && ` (max ${limits.max_curves})`}</span>
-            <EditableValue
-              value={generatorParams.numCurves}
-              onChange={(v) => onGeneratorParamsChange({ ...generatorParams, numCurves: Math.min(Math.round(v), limits.max_curves) })}
-              min={10}
-              max={limits.max_curves}
-              step={10}
-              decimals={0}
-            />
-          </div>
-          <input
-            type="range"
-            className="slider"
-            min="100"
-            max={limits.max_curves}
-            step="100"
-            value={generatorParams.numCurves}
-            onChange={(e) => onGeneratorParamsChange({ 
-              ...generatorParams, 
-              numCurves: parseInt(e.target.value) 
-            })}
-          />
-        </div>
+      {dataSource === 'synthetic' && (
+        <>
+          {/* Film Layers Section */}
+          <div className="section">
+            <div className="section__header">
+              <h3 className="section__title">Film Layers</h3>
+              <div className={styles.layerActions}>
+                <button
+                  className="btn btn--outline"
+                  onClick={expandedLayers.size ? collapseAllLayers : expandAllLayers}
+                  type="button"
+                  style={{ height: '28px', padding: '0 12px', fontSize: '11px' }}
+                >
+                  {expandedLayers.size ? 'COLLAPSE' : 'EXPAND'}
+                </button>
+                <button
+                  className="btn btn--outline"
+                  onClick={addLayer}
+                  type="button"
+                  style={{ height: '28px', padding: '0 12px', fontSize: '11px' }}
+                >
 
-        <div className="control">
-          <div className="control__label">
-            <span>Max Film Layers<InfoTooltip hint="Maximum number of film layers to include in the synthetic data generation." /></span>
-            <EditableValue
-              value={generatorParams.numFilmLayers}
-              onChange={(v) => onGeneratorParamsChange({ ...generatorParams, numFilmLayers: Math.min(Math.max(1, Math.round(v)), filmLayers.length) })}
-              min={1}
-              max={filmLayers.length}
-              step={1}
-              decimals={0}
-            />
-          </div>
-          <input
-            type="range"
-            className="slider"
-            min="1"
-            max={filmLayers.length}
-            step="1"
-            value={generatorParams.numFilmLayers}
-            onChange={(e) => onGeneratorParamsChange({ 
-              ...generatorParams, 
-              numFilmLayers: Math.min(parseInt(e.target.value), filmLayers.length) 
-            })}
-          />
-        </div>
-      </div>
+                  + ADD
+                </button>
+              </div>
+            </div>
+            
+            <div className={styles.layers}>
+              {filmLayers.map((layer, index) => (
+                <div key={index} className="layer-item">
+                  <div className={`layer-item__header ${styles.layerHeader} ${expandedLayers.has(index) ? '' : styles.layerHeaderCollapsed}`}>
+                    <div className={styles.layerHeaderLeft}>
+                      <button
+                        className={styles.collapseBtn}
+                        type="button"
+                        onClick={() => toggleLayer(index)}
+                        aria-expanded={expandedLayers.has(index)}
+                        title={expandedLayers.has(index) ? 'Collapse layer' : 'Expand layer'}
+                      >
+                        {expandedLayers.has(index) ? '▼' : '▶'}
+                      </button>
+                      <input
+                        type="text"
+                        value={layer.name}
+                        onChange={(e) => updateLayer(index, 'name', e.target.value)}
+                        className={styles.nameInput}
+                      />
+                    </div>
+                    {index !== 0 && index !== filmLayers.length - 1 && (
+                      <button 
+                        className="layer-item__remove" 
+                        onClick={() => removeLayer(index)}
+                        type="button"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
 
-      {/* Training Parameters */}
-      <div className="section">
-        <div className="section__header">
-          <h3 className="section__title">Training</h3>
-        </div>
-        
-        <div className="control">
-          <div className="control__label">
-            <span>Batch Size<InfoTooltip hint="Number of samples processed together in one training step. Larger = faster but uses more memory." />{isProduction && ` (max ${limits.max_batch_size})`}</span>
-            <EditableValue
-              value={trainingParams.batchSize}
-              onChange={(v) => onTrainingParamsChange({ ...trainingParams, batchSize: Math.min(Math.round(v), limits.max_batch_size) })}
-              min={1}
+                  {expandedLayers.has(index) && (
+                    <div className={styles.layerParams}>
+                    <div className="control">
+                      <div className="control__label">
+                        <span>SLD<InfoTooltip hint={"Scattering Length Density (×10⁻⁶ Å⁻²).\n\nDetermines neutron contrast of this layer."} /></span>
+                        <EditableValue
+                          value={layer.sld}
+                          onChange={(v) => updateLayer(index, 'sld', v)}
+                          min={0}
+                          max={10}
+                          step={0.01}
+                          decimals={2}
+                        />
+                      </div>
+                      <input
+                        type="range"
+                        className="slider"
+                        min="0"
+                        max="6.4"
+                        step="0.01"
+                        value={layer.sld}
+                        onChange={(e) => updateLayer(index, 'sld', parseFloat(e.target.value))}
+                      />
+                    </div>
+
+                    <div className="control">
+                      <div className="control__label">
+                        <span>Thickness (Å)<InfoTooltip hint={"Layer thickness in Angstroms.\n\nAffects fringe spacing in reflectivity curve."} /></span>
+                        <EditableValue
+                          value={layer.thickness}
+                          onChange={(v) => updateLayer(index, 'thickness', v)}
+                          min={0}
+                          max={2000}
+                          step={1}
+                          decimals={0}
+                          disabled={index === 0 || index === filmLayers.length - 1}
+                        />
+                      </div>
+                      <input
+                        type="range"
+                        className="slider"
+                        min="0"
+                        max="500"
+                        step="1"
+                        value={layer.thickness}
+                        onChange={(e) => updateLayer(index, 'thickness', parseFloat(e.target.value))}
+                        disabled={index === 0 || index === filmLayers.length - 1}
+                      />
+                    </div>
+
+                    <div className="control">
+                      <div className="control__label">
+                        <span>Roughness (Å)<InfoTooltip hint={"Interfacial roughness in Angstroms.\n\nSmears the interface and reduces fringe amplitude."} /></span>
+                        <EditableValue
+                          value={layer.roughness}
+                          onChange={(v) => updateLayer(index, 'roughness', v)}
+                          min={0}
+                          max={500}
+                          step={0.5}
+                          decimals={1}
+                        />
+                      </div>
+                      <input
+                        type="range"
+                        className="slider"
+                        min="0"
+                        max="150"
+                        step="0.5"
+                        value={layer.roughness}
+                        onChange={(e) => updateLayer(index, 'roughness', parseFloat(e.target.value))}
+                      />
+                    </div>
+
+                    <div className="control">
+                      <div className="control__label">
+                        <span>iSLD<InfoTooltip hint={"Imaginary SLD.\nRepresents absorption in the layer (typically small or zero)."} /></span>
+                        <EditableValue
+                          value={layer.isld}
+                          onChange={(v) => updateLayer(index, 'isld', v)}
+                          min={0}
+                          max={1}
+                          step={0.001}
+                          decimals={3}
+                        />
+                      </div>
+                      <input
+                        type="range"
+                        className="slider"
+                        min="0"
+                        max="1"
+                        step="0.001"
+                        value={layer.isld}
+                        onChange={(e) => updateLayer(index, 'isld', parseFloat(e.target.value))}
+                      />
+                    </div>
+                  </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Generator Parameters */}
+          <div className="section">
+            <div className="section__header">
+              <h3 className="section__title">Generator</h3>
+            </div>
+            
+            <div className="control">
+              <div className="control__label">
+                <span>Number of Curves<InfoTooltip hint={"How many synthetic NR curves to generate for training.\n\nMore curves = better model but longer training."} />{isProduction && ` (max ${limits.max_curves})`}</span>
+                <EditableValue
+                  value={generatorParams.numCurves}
+                  onChange={(v) => onGeneratorParamsChange({ ...generatorParams, numCurves: Math.min(Math.round(v), limits.max_curves) })}
+                  min={10}
+                  max={limits.max_curves}
+                  step={10}
+                  decimals={0}
+                />
+              </div>
+              <input
+                type="range"
+                className="slider"
+                min="100"
+                max={limits.max_curves}
+                step="100"
+                value={generatorParams.numCurves}
+                onChange={(e) => onGeneratorParamsChange({ 
+                  ...generatorParams, 
+                  numCurves: parseInt(e.target.value) 
+                })}
+              />
+            </div>
+
+            <div className="control">
+              <div className="control__label">
+                <span>Max Film Layers<InfoTooltip hint="Maximum number of film layers to include in the synthetic data generation." /></span>
+                <EditableValue
+                  value={generatorParams.numFilmLayers}
+                  onChange={(v) => onGeneratorParamsChange({ ...generatorParams, numFilmLayers: Math.min(Math.max(1, Math.round(v)), filmLayers.length) })}
+                  min={1}
+                  max={filmLayers.length}
+                  step={1}
+                  decimals={0}
+                />
+              </div>
+              <input
+                type="range"
+                className="slider"
+                min="1"
+                max={filmLayers.length}
+                step="1"
+                value={generatorParams.numFilmLayers}
+                onChange={(e) => onGeneratorParamsChange({ 
+                  ...generatorParams, 
+                  numFilmLayers: Math.min(parseInt(e.target.value), filmLayers.length) 
+                })}
+              />
+            </div>
+          </div>
+        </>
+      )}
+
+      {shouldShowTraining && (
+        <div className="section">
+          <div className="section__header">
+            <h3 className="section__title">Training</h3>
+          </div>
+          
+          <div className="control">
+            <div className="control__label">
+              <span>Batch Size<InfoTooltip hint={"Number of samples processed together in one training step.\n\nLarger = faster but uses more memory."} />{isProduction && ` (max ${limits.max_batch_size})`}</span>
+              <EditableValue
+                value={trainingParams.batchSize}
+                onChange={(v) => onTrainingParamsChange({ ...trainingParams, batchSize: Math.min(Math.round(v), limits.max_batch_size) })}
+                min={1}
+                max={limits.max_batch_size}
+                step={8}
+                decimals={0}
+              />
+            </div>
+            <input
+              type="range"
+              className="slider"
+              min="8"
               max={limits.max_batch_size}
-              step={8}
-              decimals={0}
+              step="8"
+              value={trainingParams.batchSize}
+              onChange={(e) => onTrainingParamsChange({ 
+                ...trainingParams, 
+                batchSize: parseInt(e.target.value) 
+              })}
             />
           </div>
-          <input
-            type="range"
-            className="slider"
-            min="8"
-            max={limits.max_batch_size}
-            step="8"
-            value={trainingParams.batchSize}
-            onChange={(e) => onTrainingParamsChange({ 
-              ...trainingParams, 
-              batchSize: parseInt(e.target.value) 
-            })}
-          />
-        </div>
 
-        <div className="control">
-          <div className="control__label">
-            <span>Epochs<InfoTooltip hint="Complete passes through the training data. More epochs = better fit but may overfit." />{isProduction && ` (max ${limits.max_epochs})`}</span>
-            <EditableValue
-              value={trainingParams.epochs}
-              onChange={(v) => onTrainingParamsChange({ ...trainingParams, epochs: Math.min(Math.round(v), limits.max_epochs) })}
-              min={1}
+          <div className="control">
+            <div className="control__label">
+              <span>Epochs<InfoTooltip hint={"Complete passes through the training data.\n\nMore epochs = better fit but may overfit."} />{isProduction && ` (max ${limits.max_epochs})`}</span>
+              <EditableValue
+                value={trainingParams.epochs}
+                onChange={(v) => onTrainingParamsChange({ ...trainingParams, epochs: Math.min(Math.round(v), limits.max_epochs) })}
+                min={1}
+                max={limits.max_epochs}
+                step={1}
+                decimals={0}
+              />
+            </div>
+            <input
+              type="range"
+              className="slider"
+              min="1"
               max={limits.max_epochs}
-              step={1}
-              decimals={0}
+              step="1"
+              value={trainingParams.epochs}
+              onChange={(e) => onTrainingParamsChange({ 
+                ...trainingParams, 
+                epochs: parseInt(e.target.value) 
+              })}
             />
           </div>
-          <input
-            type="range"
-            className="slider"
-            min="1"
-            max={limits.max_epochs}
-            step="1"
-            value={trainingParams.epochs}
-            onChange={(e) => onTrainingParamsChange({ 
-              ...trainingParams, 
-              epochs: parseInt(e.target.value) 
-            })}
-          />
-        </div>
 
-        <div className="control">
-          <div className="control__label">
-            <span>CNN Layers<InfoTooltip hint="Depth of the convolutional neural network. More layers = more capacity to learn complex patterns." />{isProduction && ` (max ${limits.max_cnn_layers})`}</span>
-            <EditableValue
-              value={trainingParams.layers}
-              onChange={(v) => onTrainingParamsChange({ ...trainingParams, layers: Math.min(Math.round(v), limits.max_cnn_layers) })}
-              min={1}
+          <div className="control">
+            <div className="control__label">
+              <span>CNN Layers<InfoTooltip hint={"Depth of the convolutional neural network.\n\nMore layers = more capacity to learn complex patterns."} />{isProduction && ` (max ${limits.max_cnn_layers})`}</span>
+              <EditableValue
+                value={trainingParams.layers}
+                onChange={(v) => onTrainingParamsChange({ ...trainingParams, layers: Math.min(Math.round(v), limits.max_cnn_layers) })}
+                min={1}
+                max={limits.max_cnn_layers}
+                step={1}
+                decimals={0}
+              />
+            </div>
+            <input
+              type="range"
+              className="slider"
+              min="1"
               max={limits.max_cnn_layers}
-              step={1}
-              decimals={0}
+              step="1"
+              value={trainingParams.layers}
+              onChange={(e) => onTrainingParamsChange({ 
+                ...trainingParams, 
+                layers: parseInt(e.target.value) 
+              })}
             />
           </div>
-          <input
-            type="range"
-            className="slider"
-            min="1"
-            max={limits.max_cnn_layers}
-            step="1"
-            value={trainingParams.layers}
-            onChange={(e) => onTrainingParamsChange({ 
-              ...trainingParams, 
-              layers: parseInt(e.target.value) 
-            })}
-          />
-        </div>
 
-        <div className="control">
-          <div className="control__label">
-            <span>Dropout<InfoTooltip hint="Regularization to prevent overfitting. Higher = more regularization, may reduce accuracy." />{isProduction && ` (max ${limits.max_dropout})`}</span>
-            <EditableValue
-              value={trainingParams.dropout}
-              onChange={(v) => onTrainingParamsChange({ ...trainingParams, dropout: Math.min(v, limits.max_dropout) })}
-              min={0}
+          <div className="control">
+            <div className="control__label">
+              <span>Dropout<InfoTooltip hint={"Regularization to prevent overfitting.\n\nHigher = more regularization, may reduce accuracy."} />{isProduction && ` (max ${limits.max_dropout})`}</span>
+              <EditableValue
+                value={trainingParams.dropout}
+                onChange={(v) => onTrainingParamsChange({ ...trainingParams, dropout: Math.min(v, limits.max_dropout) })}
+                min={0}
+                max={limits.max_dropout}
+                step={0.01}
+                decimals={2}
+              />
+            </div>
+            <input
+              type="range"
+              className="slider"
+              min="0"
               max={limits.max_dropout}
-              step={0.01}
-              decimals={2}
+              step="0.05"
+              value={trainingParams.dropout}
+              onChange={(e) => onTrainingParamsChange({ 
+                ...trainingParams, 
+                dropout: parseFloat(e.target.value) 
+              })}
             />
           </div>
-          <input
-            type="range"
-            className="slider"
-            min="0"
-            max={limits.max_dropout}
-            step="0.05"
-            value={trainingParams.dropout}
-            onChange={(e) => onTrainingParamsChange({ 
-              ...trainingParams, 
-              dropout: parseFloat(e.target.value) 
-            })}
-          />
-        </div>
 
-        <div className="control">
-          <div className="control__label">
-            <span>Latent Dimension<InfoTooltip hint="Size of the compressed representation in the autoencoder. Larger = more info retained." />{isProduction && ` (max ${limits.max_latent_dim})`}</span>
-            <EditableValue
-              value={trainingParams.latentDim}
-              onChange={(v) => onTrainingParamsChange({ ...trainingParams, latentDim: Math.min(Math.round(v), limits.max_latent_dim) })}
-              min={2}
+          <div className="control">
+            <div className="control__label">
+              <span>Latent Dimension<InfoTooltip hint={"Size of the compressed representation in the autoencoder.\n\nLarger = more info retained."} />{isProduction && ` (max ${limits.max_latent_dim})`}</span>
+              <EditableValue
+                value={trainingParams.latentDim}
+                onChange={(v) => onTrainingParamsChange({ ...trainingParams, latentDim: Math.min(Math.round(v), limits.max_latent_dim) })}
+                min={2}
+                max={limits.max_latent_dim}
+                step={4}
+                decimals={0}
+              />
+            </div>
+            <input
+              type="range"
+              className="slider"
+              min="4"
               max={limits.max_latent_dim}
-              step={4}
-              decimals={0}
+              step="4"
+              value={trainingParams.latentDim}
+              onChange={(e) => onTrainingParamsChange({ 
+                ...trainingParams, 
+                latentDim: parseInt(e.target.value) 
+              })}
             />
           </div>
-          <input
-            type="range"
-            className="slider"
-            min="4"
-            max={limits.max_latent_dim}
-            step="4"
-            value={trainingParams.latentDim}
-            onChange={(e) => onTrainingParamsChange({ 
-              ...trainingParams, 
-              latentDim: parseInt(e.target.value) 
-            })}
-          />
-        </div>
 
-        <div className="control">
-          <div className="control__label">
-            <span>AE Epochs<InfoTooltip hint="Autoencoder training epochs. The AE learns to compress NR curves into latent space." />{isProduction && ` (max ${limits.max_ae_epochs})`}</span>
-            <EditableValue
-              value={trainingParams.aeEpochs}
-              onChange={(v) => onTrainingParamsChange({ ...trainingParams, aeEpochs: Math.min(Math.round(v), limits.max_ae_epochs) })}
-              min={1}
+          <div className="control">
+            <div className="control__label">
+              <span>AE Epochs<InfoTooltip hint={"Autoencoder training epochs.\n\nThe AE learns to compress NR curves into latent space."} />{isProduction && ` (max ${limits.max_ae_epochs})`}</span>
+              <EditableValue
+                value={trainingParams.aeEpochs}
+                onChange={(v) => onTrainingParamsChange({ ...trainingParams, aeEpochs: Math.min(Math.round(v), limits.max_ae_epochs) })}
+                min={1}
+                max={limits.max_ae_epochs}
+                step={10}
+                decimals={0}
+              />
+            </div>
+            <input
+              type="range"
+              className="slider"
+              min="10"
               max={limits.max_ae_epochs}
-              step={10}
-              decimals={0}
+              step="10"
+              value={trainingParams.aeEpochs}
+              onChange={(e) => onTrainingParamsChange({ 
+                ...trainingParams, 
+                aeEpochs: parseInt(e.target.value) 
+              })}
             />
           </div>
-          <input
-            type="range"
-            className="slider"
-            min="10"
-            max={limits.max_ae_epochs}
-            step="10"
-            value={trainingParams.aeEpochs}
-            onChange={(e) => onTrainingParamsChange({ 
-              ...trainingParams, 
-              aeEpochs: parseInt(e.target.value) 
-            })}
-          />
-        </div>
 
-        <div className="control">
-          <div className="control__label">
-            <span>MLP Epochs<InfoTooltip hint="Multi-layer perceptron epochs. The MLP maps latent space to SLD profiles." />{isProduction && ` (max ${limits.max_mlp_epochs})`}</span>
-            <EditableValue
-              value={trainingParams.mlpEpochs}
-              onChange={(v) => onTrainingParamsChange({ ...trainingParams, mlpEpochs: Math.min(Math.round(v), limits.max_mlp_epochs) })}
-              min={1}
+          <div className="control">
+            <div className="control__label">
+              <span>MLP Epochs<InfoTooltip hint={"Multi-layer perceptron epochs.\n\nThe MLP maps latent space to SLD profiles."} />{isProduction && ` (max ${limits.max_mlp_epochs})`}</span>
+              <EditableValue
+                value={trainingParams.mlpEpochs}
+                onChange={(v) => onTrainingParamsChange({ ...trainingParams, mlpEpochs: Math.min(Math.round(v), limits.max_mlp_epochs) })}
+                min={1}
+                max={limits.max_mlp_epochs}
+                step={10}
+                decimals={0}
+              />
+            </div>
+            <input
+              type="range"
+              className="slider"
+              min="10"
               max={limits.max_mlp_epochs}
-              step={10}
-              decimals={0}
+              step="10"
+              value={trainingParams.mlpEpochs}
+              onChange={(e) => onTrainingParamsChange({ 
+                ...trainingParams, 
+                mlpEpochs: parseInt(e.target.value) 
+              })}
             />
           </div>
-          <input
-            type="range"
-            className="slider"
-            min="10"
-            max={limits.max_mlp_epochs}
-            step="10"
-            value={trainingParams.mlpEpochs}
-            onChange={(e) => onTrainingParamsChange({ 
-              ...trainingParams, 
-              mlpEpochs: parseInt(e.target.value) 
-            })}
-          />
         </div>
-      </div>
+      )}
 
       {/* Data Upload */}
       <div className="section">
@@ -613,70 +911,171 @@ export default function ParameterPanel({
         </div>
 
         <div className={styles.uploadArea}>
-          <div
-            className={`${styles.uploadDropzone} ${isDragActive ? styles.uploadDropzoneActive : ''}`}
-            onClick={handleDropzoneClick}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-          >
-            <span className={styles.uploadIcon}>↑</span>
-            <span className={styles.uploadText}>
-              <span className={styles.uploadTextBold}>Click</span> or drag files
-            </span>
-            <span className={styles.uploadText}>.npy, .pth, .pt</span>
-          </div>
+          {dataSource === 'real' ? (
+            <>
+              {requiredUploads.length > 0 && (
+                <div className={styles.requirements}>
+                  <div className={styles.requirementsLabel}>Required uploads</div>
+                  <div className={styles.requirementsList}>
+                    {requiredUploads.map((role) => {
+                      const hasFile = hasSettingFile(role);
+                      return (
+                        <button
+                          key={role}
+                          type="button"
+                          className={`${styles.requirementButton} ${hasFile ? styles.requirementOk : styles.requirementMissing}`}
+                          onClick={() => handleRoleUploadClick(role)}
+                          disabled={hasFile || isUploading}
+                          title={hasFile ? 'Found in settings.yml' : 'Click to upload'}
+                        >
+                          {uploadRequirementLabels[role]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {!backendStatus && (
+                    <div className={styles.requirementsHint}>Waiting for backend status...</div>
+                  )}
+                  {backendStatus && missingUploads.length > 0 && (
+                    <div className={styles.requirementsHint}>{generateBlockReason}</div>
+                  )}
+                  {backendStatus && missingUploads.length === 0 && (
+                    <div className={styles.requirementsHint}>All required files are set in settings.yml.</div>
+                  )}
+                  {(workflow === 'nr_sld' || workflow === 'nr_sld_chi') && nrSldMode === 'train' && (
+                    <div className={styles.requirementsToggle}>
+                      <label className={styles.toggleLabel}>
+                        <input
+                          type="checkbox"
+                          className={styles.toggleInput}
+                          checked={autoGenerateModelStats}
+                          onChange={(e) => onAutoGenerateModelStatsChange(e.target.checked)}
+                        />
+                        <span>Auto-generate model + stats</span>
+                        <InfoTooltip hint="If missing, NR→SLD training generates a model (.pth) and normalization stats (.npy) from nr_train/sld_train and saves them to settings.yml paths." />
+                      </label>
+                    </div>
+                  )}
+                </div>
+              )}
 
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            accept=".npy,.pth,.pt,.yml,.yaml"
-            className={styles.fileInputHidden}
-            onChange={handleFileChange}
-            disabled={isUploading}
-          />
+              <div className={styles.mapping}>
+                <div className={styles.mappingLabel}>Current file mapping</div>
+                {pipelineRoles.map((role) => {
+                  const path = getSettingPath(role);
+                  const exists = hasSettingFile(role);
+                  return (
+                    <div key={role} className={styles.mappingRow}>
+                      <span className={styles.mappingKey}>{uploadRequirementLabels[role]}</span>
+                      <span className={`${styles.mappingValue} ${exists ? styles.mappingOk : styles.mappingMissing}`}>
+                        {path || 'Not set'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
 
-          {selectedFiles.length > 0 && (
-            <div className={styles.selectedFiles}>
-              {selectedFiles.map((file, index) => (
-                <div key={index} className={styles.selectedFile}>
-                  <span className={styles.selectedFileName}>{file.name}</span>
+              <input
+                ref={uploadInputRef}
+                type="file"
+                accept={pendingUploadRole ? roleAcceptMap[pendingUploadRole] : '.npy,.pth,.pt'}
+                className={styles.fileInputHidden}
+                onChange={handleRoleFileChange}
+                disabled={isUploading}
+              />
+            </>
+          ) : (
+            <>
+              <div
+                className={`${styles.uploadDropzone} ${isDragActive ? styles.uploadDropzoneActive : ''}`}
+                onClick={handleDropzoneClick}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+              >
+                <span className={styles.uploadIcon}>↑</span>
+                <span className={styles.uploadText}>
+                  <span className={styles.uploadTextBold}>Click</span> or drag files
+                </span>
+                <span className={styles.uploadText}>.npy, .pth, .pt</span>
+              </div>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept=".npy,.pth,.pt,.yml,.yaml"
+                className={styles.fileInputHidden}
+                onChange={handleFileChange}
+                disabled={isUploading}
+              />
+
+              {selectedFiles.length > 0 && (
+                <div className={styles.selectedFiles}>
+                  {selectedFiles.map((item, index) => (
+                    <div key={index} className={styles.selectedFile}>
+                      <span className={styles.selectedFileName}>{item.file.name}</span>
+                      <div className={styles.selectedFileActions}>
+                        <select
+                          className={styles.fileRoleSelect}
+                          value={item.role}
+                          onChange={(e) => updateFileRole(index, e.target.value as UploadRole)}
+                        >
+                          {uploadRoleOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          className={styles.selectedFileRemove}
+                          onClick={() => removeSelectedFile(index)}
+                          type="button"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {selectedFiles.length > 0 && (
+                <div className={styles.uploadActions}>
                   <button
-                    className={styles.selectedFileRemove}
-                    onClick={() => removeSelectedFile(index)}
-                    type="button"
+                    className="btn btn--outline btn--full"
+                    onClick={handleUpload}
+                    disabled={isUploading}
                   >
-                    ×
+                    {isUploading ? 'UPLOADING...' : `UPLOAD ${selectedFiles.length} FILE${selectedFiles.length > 1 ? 'S' : ''}`}
                   </button>
                 </div>
-              ))}
-            </div>
+              )}
+
+              <div className={styles.uploadHint}>
+                Upload datasets & pretrained models (assign roles to update settings.yml)
+              </div>
+            </>
           )}
 
-          {selectedFiles.length > 0 && (
-            <div className={styles.uploadActions}>
-              <button
-                className="btn btn--outline btn--full"
-                onClick={handleUpload}
-                disabled={isUploading}
-              >
-                {isUploading ? 'UPLOADING...' : `UPLOAD ${selectedFiles.length} FILE${selectedFiles.length > 1 ? 'S' : ''}`}
-              </button>
-            </div>
-          )}
-
-          <div className={styles.uploadHint}>
-            Upload datasets & pretrained models
-          </div>
-
-          {backendStatus && (backendStatus.data_files.length > 0 || backendStatus.curve_files.length > 0) && (
+          {backendStatus && (
+            backendStatus.data_files.length > 0 ||
+            backendStatus.curve_files.length > 0 ||
+            backendStatus.expt_files.length > 0 ||
+            (backendStatus.model_files && backendStatus.model_files.length > 0)
+          ) && (
             <div className={styles.availableFiles}>
               <div className={styles.availableFilesLabel}>Available:</div>
               {backendStatus.data_files.map((f) => (
                 <span key={f} className={styles.availableFile}>{f}</span>
               ))}
               {backendStatus.curve_files.map((f) => (
+                <span key={f} className={styles.availableFile}>{f}</span>
+              ))}
+              {backendStatus.expt_files.map((f) => (
+                <span key={f} className={styles.availableFile}>{f}</span>
+              ))}
+              {backendStatus.model_files?.map((f) => (
                 <span key={f} className={styles.availableFile}>{f}</span>
               ))}
             </div>
@@ -696,9 +1095,10 @@ export default function ParameterPanel({
             RESET
           </button>
           <button
-            className="btn btn--full"
+            className={`btn btn--full ${!canGenerate ? styles.generateBlocked : ''}`}
             onClick={handleGenerateClick}
-            disabled={isGenerating}
+            disabled={isGenerating || isUploading || !canGenerate}
+            title={canGenerate ? undefined : generateBlockReason}
           >
             {isGenerating ? 'GENERATING...' : 'GENERATE'}
           </button>
