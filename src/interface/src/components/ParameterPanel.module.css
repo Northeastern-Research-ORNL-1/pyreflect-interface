@@ -434,7 +434,7 @@
   width: 100%;
 }
 
-.expandButton {
+.sidebarToggle {
   background: transparent;
   border: 1px solid var(--border-color);
   color: var(--text-primary);
@@ -449,7 +449,7 @@
   border-radius: var(--border-radius);
 }
 
-.expandButton:hover {
+.sidebarToggle:hover {
   background: var(--text-primary);
   color: var(--bg-primary);
 }

@@ -979,7 +979,11 @@ export default function Home() {
       }
 
       const zipData = zipSync(files, { level: 6 });
-      const blob = new Blob([zipData], { type: 'application/zip' });
+      const zipBuffer = zipData.buffer.slice(
+        zipData.byteOffset,
+        zipData.byteOffset + zipData.byteLength
+      );
+      const blob = new Blob([zipBuffer], { type: 'application/zip' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;

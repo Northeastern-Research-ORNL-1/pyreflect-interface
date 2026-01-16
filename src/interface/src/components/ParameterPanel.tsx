@@ -401,7 +401,7 @@ export default function ParameterPanel({
     return (
       <div className={styles.panelCollapsed}>
         <button 
-           className={styles.expandButton} 
+           className={styles.sidebarToggle} 
            onClick={onToggleCollapse}
            title="Expand Sidebar"
         >
@@ -420,10 +420,9 @@ export default function ParameterPanel({
           {onToggleCollapse && (
             <div className={styles.sectionActions}>
               <button
-                className="btn btn--outline"
+                className={styles.sidebarToggle}
                 onClick={onToggleCollapse}
                 type="button"
-                style={{ height: '28px', padding: '0 8px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                 title="Collapse Sidebar"
               >
                 ◀
