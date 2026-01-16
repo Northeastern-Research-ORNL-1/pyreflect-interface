@@ -3,10 +3,11 @@
 A minimal, monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyreflect) neutron reflectivity analysis package.
 
 ![Interface Preview](https://img.shields.io/badge/status-development-black)
-![Version](https://img.shields.io/badge/version-v0.0.2-black)
+![Version](https://img.shields.io/badge/version-v0.0.3-black)
 
 ## Version
 
+- **v0.0.3** — Added history explorer, automatic named saving, and deletion functionality.
 - **v0.0.2** — Added GitHub OAuth, MongoDB persistence, SSE heartbeats, and info tooltips.
 - **v0.0.1** — Initial GUI release with streaming backend, charts, and uploads.
   - **NOTE** — Curve set to 1000 default globally
@@ -14,7 +15,8 @@ A minimal, monochrome web interface for the [pyreflect](https://github.com/willi
 ## Features
 
 - **GitHub Authentication**: Sign in with GitHub to save and track your generations
-- **MongoDB Persistence**: Save generation results to MongoDB with one click
+- **History Explorer**: Browse, search, and restore past generations
+- **Automatic Persistence**: Generations are automatically saved with custom names to MongoDB
 - **Info Tooltips**: Hover over (ⓘ) icons to learn what each parameter does
 - **SSE Heartbeats**: Prevents Cloudflare proxy timeouts during long training runs
 - **Adjustable Parameters**: Film layers (SLD, thickness, roughness), generator settings, training configuration
@@ -124,6 +126,7 @@ Each saved generation contains:
 {
   "_id": "ObjectId(...)",
   "user_id": "12345678",
+  "name": "My Experiment 1",
   "created_at": "2026-01-16T04:23:14Z",
   "params": {
     "layers": [...],
@@ -151,7 +154,9 @@ Each saved generation contains:
 | `/api/status`          | GET    | Backend status and available data files |
 | `/api/limits`          | GET    | Get current parameter limits            |
 | `/api/upload`          | POST   | Upload dataset/model files              |
-| `/api/save`            | POST   | Save generation results to MongoDB      |
+| `/api/history`         | GET    | Get list of saved generations           |
+| `/api/history/{id}`    | GET    | Get full details of a save              |
+| `/api/history/{id}`    | DELETE | Delete a saved generation               |
 
 ## Production Deployment
 

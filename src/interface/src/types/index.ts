@@ -57,6 +57,9 @@ export interface GenerateResponse {
   training: TrainingData;
   chi: ChiData[];
   metrics: Metrics;
+  name?: string;
+  model_id?: string;
+  model_size_mb?: number;
 }
 
 export interface Limits {

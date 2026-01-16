@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useCallback, useState, useEffect } from 'react';
+import { useMemo, useCallback, useState, useEffect, useRef } from 'react';
 import {
   LineChart,
   Line,
@@ -13,6 +13,7 @@ import {
   Scatter,
   Legend,
 } from 'recharts';
+import { toPng } from 'html-to-image';
 import { GenerateResponse } from '@/types';
 import styles from './GraphDisplay.module.css';
 
@@ -73,36 +74,50 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
     return data.chi;
   }, [data]);
 
-  // Export handlers
-  const exportNRData = useCallback(() => {
-    if (!data?.nr) return;
-    const gt = data.nr.groundTruth ?? (data.nr as unknown as { reflectivity: number[] }).reflectivity;
-    const comp = data.nr.computed ?? gt;
-    if (!gt) return;
-    downloadCSV('nr_data.csv', ['Q', 'GroundTruth', 'ComputedNR'], 
-      data.nr.q.map((q, i) => [q, gt[i], comp[i]]));
-  }, [data]);
+  // Refs for graph cards to support image export
+  const nrCardRef = useRef<HTMLDivElement>(null);
+  const sldCardRef = useRef<HTMLDivElement>(null);
+  const trainingCardRef = useRef<HTMLDivElement>(null);
+  const chiCardRef = useRef<HTMLDivElement>(null);
 
-  const exportSLDData = useCallback(() => {
-    if (!data?.sld) return;
-    const gt = data.sld.groundTruth ?? (data.sld as unknown as { sld: number[] }).sld;
-    const pred = data.sld.predicted ?? gt;
-    if (!gt) return;
-    downloadCSV('sld_profile.csv', ['z', 'GroundTruth', 'Predicted'],
-      data.sld.z.map((z, i) => [z, gt[i], pred[i]]));
-  }, [data]);
+  const handleDownloadImage = useCallback(async (ref: React.RefObject<HTMLDivElement | null>, filename: string) => {
+    if (ref.current === null) return;
 
-  const exportTrainingData = useCallback(() => {
-    if (!data?.training) return;
-    downloadCSV('training_loss.csv', ['Epoch', 'TrainingLoss', 'ValidationLoss'],
-      data.training.epochs.map((e, i) => [e, data.training.trainingLoss[i], data.training.validationLoss[i]]));
-  }, [data]);
-
-  const exportChiData = useCallback(() => {
-    if (!data?.chi) return;
-    downloadCSV('chi_parameters.csv', ['Index', 'Predicted', 'Actual'],
-      data.chi.map(c => [c.x, c.predicted, c.actual]));
-  }, [data]);
+    try {
+      // Small delay to ensure any rendering is complete
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      const { clientWidth, clientHeight } = ref.current;
+      
+      const dataUrl = await toPng(ref.current, {
+        cacheBust: true,
+        backgroundColor: '#000000', // Ensure dark background
+        width: clientWidth,
+        height: clientHeight,
+        style: {
+          transform: 'none', // Avoid scaling issues
+          // Reset positioning that might cause offsets in the capture
+          position: 'static', 
+          top: '0',
+          left: '0',
+          right: 'auto',
+          bottom: 'auto',
+          margin: '0',
+          width: `${clientWidth}px`,
+          height: `${clientHeight}px`,
+          // Disable animation which might confuse the capture
+          animation: 'none',
+        }
+      });
+      
+      const link = document.createElement('a');
+      link.download = `${filename}.png`;
+      link.href = dataUrl;
+      link.click();
+    } catch (err) {
+      console.error('Failed to download chart image:', err);
+    }
+  }, []);
 
   // Fullscreen expansion state
   const [expandedCard, setExpandedCard] = useState<string | null>(null);
@@ -174,12 +189,16 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
       {/* Graphs Grid */}
       <div className={expandedCard ? `graph-container ${styles.expandedContainer}` : 'graph-container'}>
         {/* NR Curve */}
-        <div className={getCardClassName('nr')}>
+        <div className={getCardClassName('nr')} ref={nrCardRef}>
           <div className="graph-card__header">
             <span className="graph-card__title">Neutron Reflectivity</span>
             <div className={styles.headerActions}>
-              <button className={styles.downloadBtn} onClick={exportNRData} title="Download CSV">
-                <span>↓</span><span className={styles.btnLabel}>Download</span>
+              <button 
+                className={styles.downloadBtn} 
+                onClick={() => handleDownloadImage(nrCardRef, 'neutron_reflectivity')} 
+                title="Download PNG"
+              >
+                <span>↓</span><span className={styles.btnLabel}>PNG</span>
               </button>
               <button 
                 className={styles.expandBtn} 
@@ -246,12 +265,16 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
         </div>
 
         {/* SLD Profile */}
-        <div className={getCardClassName('sld')}>
+        <div className={getCardClassName('sld')} ref={sldCardRef}>
           <div className="graph-card__header">
             <span className="graph-card__title">SLD Profile</span>
             <div className={styles.headerActions}>
-              <button className={styles.downloadBtn} onClick={exportSLDData} title="Download CSV">
-                <span>↓</span><span className={styles.btnLabel}>Download</span>
+              <button 
+                className={styles.downloadBtn} 
+                onClick={() => handleDownloadImage(sldCardRef, 'sld_profile')} 
+                title="Download PNG"
+              >
+                <span>↓</span><span className={styles.btnLabel}>PNG</span>
               </button>
               <button 
                 className={styles.expandBtn} 
@@ -315,12 +338,16 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
         </div>
 
         {/* Training Loss */}
-        <div className={getCardClassName('training')}>
+        <div className={getCardClassName('training')} ref={trainingCardRef}>
           <div className="graph-card__header">
             <span className="graph-card__title">Training Loss</span>
             <div className={styles.headerActions}>
-              <button className={styles.downloadBtn} onClick={exportTrainingData} title="Download CSV">
-                <span>↓</span><span className={styles.btnLabel}>Download</span>
+              <button 
+                className={styles.downloadBtn} 
+                onClick={() => handleDownloadImage(trainingCardRef, 'training_loss')} 
+                title="Download PNG"
+              >
+                <span>↓</span><span className={styles.btnLabel}>PNG</span>
               </button>
               <button 
                 className={styles.expandBtn} 
@@ -382,12 +409,16 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
         </div>
 
         {/* Chi Parameters */}
-        <div className={getCardClassName('chi')}>
+        <div className={getCardClassName('chi')} ref={chiCardRef}>
           <div className="graph-card__header">
             <span className="graph-card__title">Chi Parameters</span>
             <div className={styles.headerActions}>
-              <button className={styles.downloadBtn} onClick={exportChiData} title="Download CSV">
-                <span>↓</span><span className={styles.btnLabel}>Download</span>
+              <button 
+                className={styles.downloadBtn} 
+                onClick={() => handleDownloadImage(chiCardRef, 'chi_parameters')} 
+                title="Download PNG"
+              >
+                <span>↓</span><span className={styles.btnLabel}>PNG</span>
               </button>
               <button 
                 className={styles.expandBtn} 
