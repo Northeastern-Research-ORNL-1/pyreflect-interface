@@ -7,13 +7,14 @@ A monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyr
 
 ## Highlights
 
-- GitHub OAuth via NextAuth with optional MongoDB history persistence
+- GitHub OAuth via NextAuth with MongoDB history persistence
+- Tool hints for most fields on hover
 - Two data modes: `Synthetic (film layers)` and `Real data (.npy via settings.yml)`
 - Real-data pipelines: `NR → SLD` (train/infer), `SLD → Chi`, and `NR → SLD → Chi` (chains predicted SLD into chi)
 - Role-based uploads that update `src/backend/settings.yml`, plus a UI mapping view to show what each role points to
 - Live SSE logs + per-epoch training progress (header + in-history “in progress” card)
 - Export JSON (params + result + embedded chart PNGs) and download a ZIP bundle (JSON + PNGs + model)
-- Optional model offload to a Hugging Face dataset + size lookup and download redirect when models aren’t local
+- Model Object Storage via [Hugging Face dataset](https://huggingface.co/datasets/Northeastern-Research-ORNL-1/models/tree/main) + size lookup and download redirect
 
 ## Architecture
 
