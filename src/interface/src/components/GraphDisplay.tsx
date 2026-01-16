@@ -178,13 +178,16 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
           <div className="graph-card__header">
             <span className="graph-card__title">Neutron Reflectivity</span>
             <div className={styles.headerActions}>
-              <button className={styles.downloadBtn} onClick={exportNRData} title="Download CSV">↓</button>
+              <button className={styles.downloadBtn} onClick={exportNRData} title="Download CSV">
+                <span>↓</span><span className={styles.btnLabel}>Download</span>
+              </button>
               <button 
                 className={styles.expandBtn} 
                 onClick={() => toggleExpand('nr')} 
                 title={expandedCard === 'nr' ? 'Collapse' : 'Expand'}
               >
-                {expandedCard === 'nr' ? '×' : '⛶'}
+                <span>{expandedCard === 'nr' ? '×' : '⛶'}</span>
+                <span className={styles.btnLabel}>{expandedCard === 'nr' ? 'Close' : 'Expand'}</span>
               </button>
             </div>
           </div>
@@ -247,13 +250,16 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
           <div className="graph-card__header">
             <span className="graph-card__title">SLD Profile</span>
             <div className={styles.headerActions}>
-              <button className={styles.downloadBtn} onClick={exportSLDData} title="Download CSV">↓</button>
+              <button className={styles.downloadBtn} onClick={exportSLDData} title="Download CSV">
+                <span>↓</span><span className={styles.btnLabel}>Download</span>
+              </button>
               <button 
                 className={styles.expandBtn} 
                 onClick={() => toggleExpand('sld')} 
                 title={expandedCard === 'sld' ? 'Collapse' : 'Expand'}
               >
-                {expandedCard === 'sld' ? '×' : '⛶'}
+                <span>{expandedCard === 'sld' ? '×' : '⛶'}</span>
+                <span className={styles.btnLabel}>{expandedCard === 'sld' ? 'Close' : 'Expand'}</span>
               </button>
             </div>
           </div>
@@ -313,13 +319,16 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
           <div className="graph-card__header">
             <span className="graph-card__title">Training Loss</span>
             <div className={styles.headerActions}>
-              <button className={styles.downloadBtn} onClick={exportTrainingData} title="Download CSV">↓</button>
+              <button className={styles.downloadBtn} onClick={exportTrainingData} title="Download CSV">
+                <span>↓</span><span className={styles.btnLabel}>Download</span>
+              </button>
               <button 
                 className={styles.expandBtn} 
                 onClick={() => toggleExpand('training')} 
                 title={expandedCard === 'training' ? 'Collapse' : 'Expand'}
               >
-                {expandedCard === 'training' ? '×' : '⛶'}
+                <span>{expandedCard === 'training' ? '×' : '⛶'}</span>
+                <span className={styles.btnLabel}>{expandedCard === 'training' ? 'Close' : 'Expand'}</span>
               </button>
             </div>
           </div>
@@ -377,13 +386,16 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
           <div className="graph-card__header">
             <span className="graph-card__title">Chi Parameters</span>
             <div className={styles.headerActions}>
-              <button className={styles.downloadBtn} onClick={exportChiData} title="Download CSV">↓</button>
+              <button className={styles.downloadBtn} onClick={exportChiData} title="Download CSV">
+                <span>↓</span><span className={styles.btnLabel}>Download</span>
+              </button>
               <button 
                 className={styles.expandBtn} 
                 onClick={() => toggleExpand('chi')} 
                 title={expandedCard === 'chi' ? 'Collapse' : 'Expand'}
               >
-                {expandedCard === 'chi' ? '×' : '⛶'}
+                <span>{expandedCard === 'chi' ? '×' : '⛶'}</span>
+                <span className={styles.btnLabel}>{expandedCard === 'chi' ? 'Close' : 'Expand'}</span>
               </button>
             </div>
           </div>
