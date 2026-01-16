@@ -1,0 +1,31 @@
+.container {
+  display: inline-flex;
+  margin-left: 6px;
+  cursor: help;
+}
+
+.icon {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  transition: color 0.15s ease;
+}
+
+.icon:hover {
+  color: var(--text-primary);
+}
+
+.tooltip {
+  position: fixed;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  padding: var(--space-sm) var(--space-md);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  width: 240px;
+  text-align: left;
+  line-height: 1.5;
+  z-index: 99999;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
