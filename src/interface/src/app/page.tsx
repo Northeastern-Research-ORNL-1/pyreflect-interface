@@ -7,9 +7,11 @@ import GraphDisplay from '../components/GraphDisplay';
 import ConsoleOutput from '../components/ConsoleOutput';
 import ExploreSidebar from '../components/ExploreSidebar';
 import { FilmLayer, GeneratorParams, TrainingParams, GenerateResponse, Limits, LimitsResponse, DEFAULT_LIMITS } from '@/types';
+import packageJson from '../../package.json';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const STORAGE_KEY = 'pyreflect_state';
+const APP_VERSION = `v${packageJson.version}`;
 
 interface BackendStatus {
   pyreflect_available: boolean;
@@ -528,7 +530,7 @@ export default function Home() {
         <div className="header__logo">
           <span>◇</span>
           <span>PYREFLECT</span>
-          <span className="header__version">v0.0.1</span>
+          <span className="header__version">{APP_VERSION}</span>
           {isProduction && <span className="header__version" style={{ color: '#f59e0b', marginLeft: '8px' }}>PROD</span>}
           <span className={`status ${isGenerating ? 'status--training' : 'status--active'}`} style={{ marginLeft: '12px' }}>
             <span className="status__dot"></span>
