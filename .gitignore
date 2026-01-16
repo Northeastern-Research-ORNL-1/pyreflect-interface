@@ -208,3 +208,7 @@ __marimo__/
 
 # Pyreflect
 /pyreflect
+.pyreflect
+
+# Plan
+/plan.md

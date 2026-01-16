@@ -709,10 +709,7 @@ def generate_with_pyreflect_streaming(
         if heartbeat:
             yield heartbeat
         
-        if (epoch + 1) % 5 == 0 or epoch == 0:
-            yield emit("log", f"   Epoch {epoch + 1}/{train_params.epochs} - Train: {train_loss:.6f}, Val: {val_loss:.6f}")
-    
-            yield emit("log", f"   Epoch {epoch + 1}/{train_params.epochs} - Train: {train_loss:.6f}, Val: {val_loss:.6f}")
+        yield emit("log", f"   Epoch {epoch + 1}/{train_params.epochs} - Train: {train_loss:.6f}, Val: {val_loss:.6f}")
     
     training_time = time.perf_counter() - training_start
     
@@ -990,8 +987,7 @@ def _real_nr_sld_train_core(
             "valLoss": val_loss,
         })
 
-        if (epoch + 1) % 5 == 0 or epoch == 0:
-            yield emit("log", f"   Epoch {epoch + 1}/{request.training.epochs} - Train: {train_loss:.6f}, Val: {val_loss:.6f}")
+        yield emit("log", f"   Epoch {epoch + 1}/{request.training.epochs} - Train: {train_loss:.6f}, Val: {val_loss:.6f}")
 
     model_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), model_path)

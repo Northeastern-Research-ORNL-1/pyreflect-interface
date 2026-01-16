@@ -401,7 +401,7 @@ export default function ParameterPanel({
     return (
       <div className={styles.panelCollapsed}>
         <button 
-           className={styles.expandButton} 
+           className={styles.sidebarToggle} 
            onClick={onToggleCollapse}
            title="Expand Sidebar"
         >
@@ -420,10 +420,9 @@ export default function ParameterPanel({
           {onToggleCollapse && (
             <div className={styles.sectionActions}>
               <button
-                className="btn btn--outline"
+                className={styles.sidebarToggle}
                 onClick={onToggleCollapse}
                 type="button"
-                style={{ height: '28px', padding: '0 8px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                 title="Collapse Sidebar"
               >
                 ◀
@@ -511,7 +510,10 @@ export default function ParameterPanel({
           {/* Film Layers Section */}
           <div className="section">
             <div className="section__header">
-              <h3 className="section__title">Film Layers</h3>
+              <h3 className="section__title">
+                Film Layers
+                <InfoTooltip hint={"Film layers define a synthetic stack (materials + thickness) that the app uses to generate training data.\n\nReal data (.npy) skips this and uses your uploaded arrays instead."} />
+              </h3>
               <div className={styles.layerActions}>
                 <button
                   className="btn btn--outline"
@@ -922,191 +924,117 @@ export default function ParameterPanel({
       )}
 
       {/* Data Upload */}
-      <div className="section">
-        <div className="section__header">
-          <h3 className="section__title">Data & Models</h3>
-        </div>
+      {dataSource === 'real' && (
+        <div className="section">
+          <div className="section__header">
+            <h3 className="section__title">Data & Models</h3>
+          </div>
 
-        <div className={styles.uploadArea}>
-          {dataSource === 'real' ? (
-            <>
-              {requiredUploads.length > 0 && (
-                <div className={styles.requirements}>
-                  <div className={styles.requirementsLabel}>
-                    Required uploads
-                    <InfoTooltip hint="Click any missing item to upload the specific file used by this pipeline and mode." />
+          <div className={styles.uploadArea}>
+            {requiredUploads.length > 0 && (
+              <div className={styles.requirements}>
+                <div className={styles.requirementsLabel}>
+                  Required uploads
+                  <InfoTooltip hint="Click any missing item to upload the specific file used by this pipeline and mode." />
+                </div>
+                <div className={styles.requirementsList}>
+                  {requiredUploads.map((role) => {
+                    const hasFile = hasSettingFile(role);
+                    return (
+                      <button
+                        key={role}
+                        type="button"
+                        className={`${styles.requirementButton} ${hasFile ? styles.requirementOk : styles.requirementMissing}`}
+                        onClick={() => handleRoleUploadClick(role)}
+                        disabled={hasFile || isUploading}
+                        title={hasFile ? 'Found in settings.yml' : 'Click to upload'}
+                      >
+                        {uploadRequirementLabels[role]}
+                      </button>
+                    );
+                  })}
+                </div>
+                {!backendStatus && (
+                  <div className={styles.requirementsHint}>Waiting for backend status...</div>
+                )}
+                {backendStatus && missingUploads.length > 0 && (
+                  <div className={styles.requirementsHint}>{generateBlockReason}</div>
+                )}
+                {backendStatus && missingUploads.length === 0 && (
+                  <div className={styles.requirementsHint}>All required files are set in settings.yml.</div>
+                )}
+                {(workflow === 'nr_sld' || workflow === 'nr_sld_chi') && nrSldMode === 'train' && (
+                  <div className={styles.requirementsToggle}>
+                    <label className={styles.toggleLabel}>
+                      <input
+                        type="checkbox"
+                        className={styles.toggleInput}
+                        checked={autoGenerateModelStats}
+                        onChange={(e) => onAutoGenerateModelStatsChange(e.target.checked)}
+                      />
+                      <span>Auto-generate model + stats</span>
+                      <InfoTooltip hint="If missing, NR→SLD training generates a model (.pth) and normalization stats (.npy) from nr_train/sld_train and saves them to settings.yml paths." />
+                    </label>
                   </div>
-                  <div className={styles.requirementsList}>
-                    {requiredUploads.map((role) => {
-                      const hasFile = hasSettingFile(role);
-                      return (
-                        <button
-                          key={role}
-                          type="button"
-                          className={`${styles.requirementButton} ${hasFile ? styles.requirementOk : styles.requirementMissing}`}
-                          onClick={() => handleRoleUploadClick(role)}
-                          disabled={hasFile || isUploading}
-                          title={hasFile ? 'Found in settings.yml' : 'Click to upload'}
-                        >
-                          {uploadRequirementLabels[role]}
-                        </button>
-                      );
-                    })}
+                )}
+              </div>
+            )}
+
+            <div className={styles.mapping}>
+              <div className={styles.mappingLabel}>
+                Current file mapping
+                <InfoTooltip hint="Shows the settings.yml path for each role and whether the file exists on disk." />
+              </div>
+              {pipelineRoles.map((role) => {
+                const path = getSettingPath(role);
+                const exists = hasSettingFile(role);
+                return (
+                  <div key={role} className={styles.mappingRow}>
+                    <span className={styles.mappingKey}>
+                      {stripLabelSuffix(uploadRequirementLabels[role])}
+                    </span>
+                    <span className={`${styles.mappingValue} ${exists ? styles.mappingOk : styles.mappingMissing}`}>
+                      {path ? stripKnownExtension(path) : 'Not set'}
+                    </span>
                   </div>
-                  {!backendStatus && (
-                    <div className={styles.requirementsHint}>Waiting for backend status...</div>
-                  )}
-                  {backendStatus && missingUploads.length > 0 && (
-                    <div className={styles.requirementsHint}>{generateBlockReason}</div>
-                  )}
-                  {backendStatus && missingUploads.length === 0 && (
-                    <div className={styles.requirementsHint}>All required files are set in settings.yml.</div>
-                  )}
-                  {(workflow === 'nr_sld' || workflow === 'nr_sld_chi') && nrSldMode === 'train' && (
-                    <div className={styles.requirementsToggle}>
-                      <label className={styles.toggleLabel}>
-                        <input
-                          type="checkbox"
-                          className={styles.toggleInput}
-                          checked={autoGenerateModelStats}
-                          onChange={(e) => onAutoGenerateModelStatsChange(e.target.checked)}
-                        />
-                        <span>Auto-generate model + stats</span>
-                        <InfoTooltip hint="If missing, NR→SLD training generates a model (.pth) and normalization stats (.npy) from nr_train/sld_train and saves them to settings.yml paths." />
-                      </label>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className={styles.mapping}>
-                <div className={styles.mappingLabel}>
-                  Current file mapping
-                  <InfoTooltip hint="Shows the settings.yml path for each role and whether the file exists on disk." />
-                </div>
-                {pipelineRoles.map((role) => {
-                  const path = getSettingPath(role);
-                  const exists = hasSettingFile(role);
-                  return (
-                    <div key={role} className={styles.mappingRow}>
-                      <span className={styles.mappingKey}>
-                        {stripLabelSuffix(uploadRequirementLabels[role])}
-                      </span>
-                      <span className={`${styles.mappingValue} ${exists ? styles.mappingOk : styles.mappingMissing}`}>
-                        {path ? stripKnownExtension(path) : 'Not set'}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <input
-                ref={uploadInputRef}
-                type="file"
-                accept={pendingUploadRole ? roleAcceptMap[pendingUploadRole] : '.npy,.pth,.pt'}
-                className={styles.fileInputHidden}
-                onChange={handleRoleFileChange}
-                disabled={isUploading}
-              />
-            </>
-          ) : (
-            <>
-              <div
-                className={`${styles.uploadDropzone} ${isDragActive ? styles.uploadDropzoneActive : ''}`}
-                onClick={handleDropzoneClick}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
-              >
-                <span className={styles.uploadIcon}>↑</span>
-                <span className={styles.uploadText}>
-                  <span className={styles.uploadTextBold}>Click</span> or drag files
-                </span>
-                <span className={styles.uploadText}>.npy, .pth, .pt</span>
-              </div>
-
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept=".npy,.pth,.pt,.yml,.yaml"
-                className={styles.fileInputHidden}
-                onChange={handleFileChange}
-                disabled={isUploading}
-              />
-
-              {selectedFiles.length > 0 && (
-                <div className={styles.selectedFiles}>
-                  {selectedFiles.map((item, index) => (
-                    <div key={index} className={styles.selectedFile}>
-                      <span className={styles.selectedFileName}>{item.file.name}</span>
-                      <div className={styles.selectedFileActions}>
-                        <select
-                          className={styles.fileRoleSelect}
-                          value={item.role}
-                          onChange={(e) => updateFileRole(index, e.target.value as UploadRole)}
-                        >
-                          {uploadRoleOptions.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          className={styles.selectedFileRemove}
-                          onClick={() => removeSelectedFile(index)}
-                          type="button"
-                        >
-                          ×
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {selectedFiles.length > 0 && (
-                <div className={styles.uploadActions}>
-                  <button
-                    className="btn btn--outline btn--full"
-                    onClick={handleUpload}
-                    disabled={isUploading}
-                  >
-                    {isUploading ? 'UPLOADING...' : `UPLOAD ${selectedFiles.length} FILE${selectedFiles.length > 1 ? 'S' : ''}`}
-                  </button>
-                </div>
-              )}
-
-              <div className={styles.uploadHint}>
-                Upload datasets & pretrained models (assign roles to update settings.yml)
-              </div>
-            </>
-          )}
-
-          {backendStatus && (
-            backendStatus.data_files.length > 0 ||
-            backendStatus.curve_files.length > 0 ||
-            backendStatus.expt_files.length > 0 ||
-            (backendStatus.model_files && backendStatus.model_files.length > 0)
-          ) && (
-            <div className={styles.availableFiles}>
-              <div className={styles.availableFilesLabel}>Available:</div>
-              {backendStatus.data_files.map((f) => (
-                <span key={f} className={styles.availableFile}>{f}</span>
-              ))}
-              {backendStatus.curve_files.map((f) => (
-                <span key={f} className={styles.availableFile}>{f}</span>
-              ))}
-              {backendStatus.expt_files.map((f) => (
-                <span key={f} className={styles.availableFile}>{f}</span>
-              ))}
-              {backendStatus.model_files?.map((f) => (
-                <span key={f} className={styles.availableFile}>{f}</span>
-              ))}
+                );
+              })}
             </div>
-          )}
+
+            <input
+              ref={uploadInputRef}
+              type="file"
+              accept={pendingUploadRole ? roleAcceptMap[pendingUploadRole] : '.npy,.pth,.pt'}
+              className={styles.fileInputHidden}
+              onChange={handleRoleFileChange}
+              disabled={isUploading}
+            />
+
+            {backendStatus && (
+              backendStatus.data_files.length > 0 ||
+              backendStatus.curve_files.length > 0 ||
+              backendStatus.expt_files.length > 0 ||
+              (backendStatus.model_files && backendStatus.model_files.length > 0)
+            ) && (
+              <div className={styles.availableFiles}>
+                <div className={styles.availableFilesLabel}>Available:</div>
+                {backendStatus.data_files.map((f) => (
+                  <span key={f} className={styles.availableFile}>{f}</span>
+                ))}
+                {backendStatus.curve_files.map((f) => (
+                  <span key={f} className={styles.availableFile}>{f}</span>
+                ))}
+                {backendStatus.expt_files.map((f) => (
+                  <span key={f} className={styles.availableFile}>{f}</span>
+                ))}
+                {backendStatus.model_files?.map((f) => (
+                  <span key={f} className={styles.availableFile}>{f}</span>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Actions */}
       <div className="section">
