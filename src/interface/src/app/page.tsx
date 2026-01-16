@@ -27,6 +27,13 @@ type BundlePayload = {
   result: GenerateResponse;
 };
 
+type BundleSelection = {
+  includeJson: boolean;
+  includePngNormal: boolean;
+  includePngExpanded: boolean;
+  includeModel: boolean;
+};
+
 interface BackendStatus {
   pyreflect_available: boolean;
   has_settings: boolean;
@@ -108,11 +115,19 @@ export default function Home() {
   const [showJsonMenuMobile, setShowJsonMenuMobile] = useState(false);
   const [showBundleConfirm, setShowBundleConfirm] = useState(false);
   const [bundlePayload, setBundlePayload] = useState<BundlePayload | null>(null);
+  const [bundleSelection, setBundleSelection] = useState<BundleSelection>({
+    includeJson: true,
+    includePngNormal: true,
+    includePngExpanded: true,
+    includeModel: true,
+  });
   const [exportPngs, setExportPngs] = useState<ExportPngs | null>(null);
   const [shouldCapturePngs, setShouldCapturePngs] = useState(false);
   const [bundleEstimate, setBundleEstimate] = useState<{
     jsonBytes: number;
     pngBytes: number;
+    pngNormalBytes: number;
+    pngExpandedBytes: number;
     modelBytes: number | null;
     modelSource?: string | null;
     totalBytes: number | null;
@@ -120,6 +135,8 @@ export default function Home() {
   }>({
     jsonBytes: 0,
     pngBytes: 0,
+    pngNormalBytes: 0,
+    pngExpandedBytes: 0,
     modelBytes: null,
     modelSource: null,
     totalBytes: null,
@@ -691,6 +708,12 @@ export default function Home() {
   const openBundleConfirm = useCallback((payload: BundlePayload) => {
     setBundlePayload(payload);
     setShowBundleConfirm(true);
+    setBundleSelection({
+      includeJson: true,
+      includePngNormal: true,
+      includePngExpanded: true,
+      includeModel: Boolean(payload.result.model_id),
+    });
     bundlePngCacheRef.current = null;
   }, []);
 
@@ -728,6 +751,8 @@ export default function Home() {
       setBundleEstimate({
         jsonBytes: 0,
         pngBytes: 0,
+        pngNormalBytes: 0,
+        pngExpandedBytes: 0,
         modelBytes: null,
         modelSource: null,
         totalBytes: null,
@@ -735,35 +760,61 @@ export default function Home() {
       });
 
       let pngBytes = 0;
+      let pngNormalBytes = 0;
+      let pngExpandedBytes = 0;
       let jsonBytes = 0;
+      const needsPngs =
+        bundleSelection.includeJson ||
+        bundleSelection.includePngNormal ||
+        bundleSelection.includePngExpanded;
+
       try {
-        const pngPayload = exportPngs ?? await captureChartPngs();
-        const exportData = {
-          params: {
-            layers: bundlePayload.params.layers,
-            generator: bundlePayload.params.generator,
-            training: bundlePayload.params.training,
-          },
-          result: {
-            ...bundlePayload.result,
-            export_pngs: pngPayload,
-          },
-        };
-        const jsonStr = JSON.stringify(exportData, null, 2);
-        jsonBytes = new TextEncoder().encode(jsonStr).length;
-        const allPngs = [
-          ...Object.values(pngPayload.normal),
-          ...Object.values(pngPayload.expanded),
-        ];
-        pngBytes = allPngs.reduce((sum, base64) => sum + estimateBase64Bytes(base64), 0);
-        bundlePngCacheRef.current = { payload: bundlePayload, pngs: pngPayload };
+        if (needsPngs) {
+          const cached = bundlePngCacheRef.current;
+          const pngPayload =
+            cached && cached.payload === bundlePayload
+              ? cached.pngs
+              : exportPngs ?? await captureChartPngs();
+          if (bundleSelection.includeJson) {
+            const exportData = {
+              params: {
+                layers: bundlePayload.params.layers,
+                generator: bundlePayload.params.generator,
+                training: bundlePayload.params.training,
+              },
+              result: {
+                ...bundlePayload.result,
+                export_pngs: pngPayload,
+              },
+            };
+            const jsonStr = JSON.stringify(exportData, null, 2);
+            jsonBytes = new TextEncoder().encode(jsonStr).length;
+          }
+
+          const normalValues = bundleSelection.includePngNormal
+            ? Object.values(pngPayload.normal)
+            : [];
+          const expandedValues = bundleSelection.includePngExpanded
+            ? Object.values(pngPayload.expanded)
+            : [];
+          pngNormalBytes = normalValues.reduce(
+            (sum, base64) => sum + estimateBase64Bytes(base64),
+            0
+          );
+          pngExpandedBytes = expandedValues.reduce(
+            (sum, base64) => sum + estimateBase64Bytes(base64),
+            0
+          );
+          pngBytes = pngNormalBytes + pngExpandedBytes;
+          bundlePngCacheRef.current = { payload: bundlePayload, pngs: pngPayload };
+        }
       } catch (err) {
         setBundleEstimateError('Could not estimate PNG size.');
       }
 
       let modelBytes: number | null = null;
       let modelSource: string | null = null;
-      if (bundlePayload.result.model_id) {
+      if (bundleSelection.includeModel && bundlePayload.result.model_id) {
         try {
           const res = await fetch(`${API_URL}/api/models/${bundlePayload.result.model_id}/info`);
           if (res.ok) {
@@ -784,6 +835,8 @@ export default function Home() {
       setBundleEstimate({
         jsonBytes,
         pngBytes,
+        pngNormalBytes,
+        pngExpandedBytes,
         modelBytes,
         modelSource,
         totalBytes,
@@ -796,7 +849,14 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [showBundleConfirm, bundlePayload, captureChartPngs, exportPngs, estimateBase64Bytes]);
+  }, [
+    showBundleConfirm,
+    bundlePayload,
+    captureChartPngs,
+    exportPngs,
+    estimateBase64Bytes,
+    bundleSelection,
+  ]);
 
   const handleExportAll = useCallback(async () => {
     if (!graphData) return;
@@ -844,42 +904,69 @@ export default function Home() {
     const baseName = resolvedResult.name
       ? resolvedResult.name.replace(/[^a-z0-9_-]+/gi, '_').slice(0, 32)
       : `pyreflect_bundle_${timestamp}`;
+    const hasSelection =
+      bundleSelection.includeJson ||
+      bundleSelection.includePngNormal ||
+      bundleSelection.includePngExpanded ||
+      (bundleSelection.includeModel && Boolean(resolvedResult.model_id));
+
+    if (!hasSelection) {
+      addLog('No download items selected.');
+      return;
+    }
+
     const files: Record<string, Uint8Array> = {};
 
     try {
       addLog('Preparing download bundle...');
-      const cached = bundlePngCacheRef.current;
-      const pngPayload =
-        cached && cached.payload === payload
-          ? cached.pngs
-          : exportPngs ?? await captureChartPngs();
+      const needsPngs =
+        bundleSelection.includeJson ||
+        bundleSelection.includePngNormal ||
+        bundleSelection.includePngExpanded;
 
-      const exportData = {
-        params: {
-          layers: resolvedParams.layers,
-          generator: resolvedParams.generator,
-          training: resolvedParams.training,
-        },
-        result: {
-          ...resolvedResult,
-          export_pngs: pngPayload,
-        },
-      };
-      files['output.json'] = strToU8(JSON.stringify(exportData, null, 2));
+      let pngPayload: ExportPngs | null = null;
+      if (needsPngs) {
+        const cached = bundlePngCacheRef.current;
+        pngPayload =
+          cached && cached.payload === payload
+            ? cached.pngs
+            : exportPngs ?? await captureChartPngs();
+      }
 
-      for (const chart of EXPORT_CHARTS) {
-        const normalBase64 = pngPayload.normal[chart.id];
-        if (normalBase64) {
-          files[chart.filename] = base64ToUint8(normalBase64);
-        }
-        const expandedBase64 = pngPayload.expanded[chart.id];
-        if (expandedBase64) {
-          const expandedName = chart.filename.replace(/\.png$/i, '_expanded.png');
-          files[expandedName] = base64ToUint8(expandedBase64);
+      if (bundleSelection.includeJson && pngPayload) {
+        const exportData = {
+          params: {
+            layers: resolvedParams.layers,
+            generator: resolvedParams.generator,
+            training: resolvedParams.training,
+          },
+          result: {
+            ...resolvedResult,
+            export_pngs: pngPayload,
+          },
+        };
+        files['output.json'] = strToU8(JSON.stringify(exportData, null, 2));
+      }
+
+      if (pngPayload) {
+        for (const chart of EXPORT_CHARTS) {
+          if (bundleSelection.includePngNormal) {
+            const normalBase64 = pngPayload.normal[chart.id];
+            if (normalBase64) {
+              files[chart.filename] = base64ToUint8(normalBase64);
+            }
+          }
+          if (bundleSelection.includePngExpanded) {
+            const expandedBase64 = pngPayload.expanded[chart.id];
+            if (expandedBase64) {
+              const expandedName = chart.filename.replace(/\.png$/i, '_expanded.png');
+              files[expandedName] = base64ToUint8(expandedBase64);
+            }
+          }
         }
       }
 
-      if (resolvedResult.model_id) {
+      if (bundleSelection.includeModel && resolvedResult.model_id) {
         const modelRes = await fetch(`${API_URL}/api/models/${resolvedResult.model_id}`);
         if (modelRes.ok) {
           const modelBuffer = await modelRes.arrayBuffer();
@@ -887,7 +974,7 @@ export default function Home() {
         } else {
           addLog('Model file not found for this run.');
         }
-      } else {
+      } else if (bundleSelection.includeModel && !resolvedResult.model_id) {
         addLog('No model file associated with this run.');
       }
 
@@ -906,7 +993,17 @@ export default function Home() {
       const errorMsg = err instanceof Error ? err.message : 'Failed to build download bundle';
       addLog(`Download error: ${errorMsg}`);
     }
-  }, [graphData, filmLayers, generatorParams, trainingParams, captureChartPngs, exportPngs, base64ToUint8, addLog]);
+  }, [
+    graphData,
+    filmLayers,
+    generatorParams,
+    trainingParams,
+    captureChartPngs,
+    exportPngs,
+    base64ToUint8,
+    bundleSelection,
+    addLog,
+  ]);
 
   const handleDownloadBundleClick = useCallback(() => {
     if (!graphData) {
@@ -1215,26 +1312,98 @@ export default function Home() {
               <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginBottom: '10px' }}>
                 Includes model (.pth), normal + expanded chart PNGs, and output.json. Model is pulled from Hugging Face if not local.
               </div>
-              <div style={{ display: 'grid', gap: '6px', fontSize: '12px' }}>
-                <div>Model: <span style={{ color: 'var(--text-secondary)' }}>
-                  {bundlePayload.result.model_id
-                    ? bundleEstimate.modelBytes !== null
-                      ? `${formatBytes(bundleEstimate.modelBytes)}${bundleEstimate.modelSource ? ` (${bundleEstimate.modelSource})` : ''}`
-                      : bundleEstimate.estimating
+              <div className="download-options">
+                <label className="download-option">
+                  <span className="download-option__label">
+                    <input
+                      type="checkbox"
+                      className="download-checkbox"
+                      checked={bundleSelection.includeJson}
+                      onChange={(e) =>
+                        setBundleSelection((prev) => ({ ...prev, includeJson: e.target.checked }))
+                      }
+                    />
+                    <span>JSON (snapshot)</span>
+                  </span>
+                  <span className="download-option__size">
+                    {bundleSelection.includeJson
+                      ? bundleEstimate.estimating
                         ? 'Estimating...'
-                        : 'Unknown'
-                    : 'Not available'}
-                </span></div>
-                <div>PNGs: <span style={{ color: 'var(--text-secondary)' }}>
-                  {bundleEstimate.estimating ? 'Estimating...' : formatBytes(bundleEstimate.pngBytes)}
-                </span></div>
-                <div>JSON: <span style={{ color: 'var(--text-secondary)' }}>
-                  {bundleEstimate.estimating ? 'Estimating...' : formatBytes(bundleEstimate.jsonBytes)}
-                </span></div>
-                <div>Total: <span style={{ color: 'var(--text-secondary)' }}>
+                        : formatBytes(bundleEstimate.jsonBytes)
+                      : 'Not selected'}
+                  </span>
+                </label>
+                <label className="download-option">
+                  <span className="download-option__label">
+                    <input
+                      type="checkbox"
+                      className="download-checkbox"
+                      checked={bundleSelection.includePngNormal}
+                      onChange={(e) =>
+                        setBundleSelection((prev) => ({ ...prev, includePngNormal: e.target.checked }))
+                      }
+                    />
+                    <span>PNGs (normal)</span>
+                  </span>
+                  <span className="download-option__size">
+                    {bundleSelection.includePngNormal
+                      ? bundleEstimate.estimating
+                        ? 'Estimating...'
+                        : formatBytes(bundleEstimate.pngNormalBytes)
+                      : 'Not selected'}
+                  </span>
+                </label>
+                <label className="download-option">
+                  <span className="download-option__label">
+                    <input
+                      type="checkbox"
+                      className="download-checkbox"
+                      checked={bundleSelection.includePngExpanded}
+                      onChange={(e) =>
+                        setBundleSelection((prev) => ({ ...prev, includePngExpanded: e.target.checked }))
+                      }
+                    />
+                    <span>PNGs (expanded)</span>
+                  </span>
+                  <span className="download-option__size">
+                    {bundleSelection.includePngExpanded
+                      ? bundleEstimate.estimating
+                        ? 'Estimating...'
+                        : formatBytes(bundleEstimate.pngExpandedBytes)
+                      : 'Not selected'}
+                  </span>
+                </label>
+                <label className="download-option">
+                  <span className="download-option__label">
+                    <input
+                      type="checkbox"
+                      className="download-checkbox"
+                      checked={bundleSelection.includeModel}
+                      disabled={!bundlePayload.result.model_id}
+                      onChange={(e) =>
+                        setBundleSelection((prev) => ({ ...prev, includeModel: e.target.checked }))
+                      }
+                    />
+                    <span>Model (Hugging Face)</span>
+                  </span>
+                  <span className="download-option__size">
+                    {bundlePayload.result.model_id
+                      ? bundleSelection.includeModel
+                        ? bundleEstimate.modelBytes !== null
+                          ? `${formatBytes(bundleEstimate.modelBytes)}`
+                          : bundleEstimate.estimating
+                            ? 'Estimating...'
+                            : 'Unknown'
+                        : 'Not selected'
+                      : 'Not available'}
+                  </span>
+                </label>
+              </div>
+              <div style={{ fontSize: '12px' }}>
+                Total: <span style={{ color: 'var(--text-secondary)' }}>
                   {bundleEstimate.estimating ? 'Estimating...' : formatBytes(bundleEstimate.totalBytes)}
-                  {bundlePayload.result.model_id && bundleEstimate.modelBytes === null ? ' + model' : ''}
-                </span></div>
+                  {bundleSelection.includeModel && bundlePayload.result.model_id && bundleEstimate.modelBytes === null ? ' + model' : ''}
+                </span>
               </div>
               {bundleEstimateError && (
                 <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: '8px' }}>
@@ -1257,6 +1426,12 @@ export default function Home() {
                 className="btn" 
                 onClick={handleConfirmBundleDownload}
                 style={{ padding: '6px 12px', fontSize: '11px' }}
+                disabled={!(
+                  bundleSelection.includeJson ||
+                  bundleSelection.includePngNormal ||
+                  bundleSelection.includePngExpanded ||
+                  (bundleSelection.includeModel && Boolean(bundlePayload.result.model_id))
+                )}
               >
                 DOWNLOAD
               </button>
