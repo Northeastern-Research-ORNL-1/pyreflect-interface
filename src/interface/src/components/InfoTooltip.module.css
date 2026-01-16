@@ -1,13 +1,17 @@
 .container {
   display: inline-flex;
+  align-items: center;
   margin-left: 6px;
   cursor: help;
+  vertical-align: middle;
 }
 
 .icon {
   font-size: var(--font-size-xs);
   color: var(--text-muted);
   transition: color 0.15s ease;
+  line-height: 1;
+  transform: translateY(.25px);
 }
 
 .icon:hover {
