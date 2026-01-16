@@ -21,7 +21,7 @@ export interface ParameterPanelProps {
   onFilmLayersChange: (layers: FilmLayer[]) => void;
   onGeneratorParamsChange: (params: GeneratorParams) => void;
   onTrainingParamsChange: (params: TrainingParams) => void;
-  onGenerate: () => void;
+  onGenerate: (name?: string) => void;
   onReset: () => void;
   onUploadFiles: (files: File[]) => void;
   isGenerating: boolean;
@@ -29,6 +29,8 @@ export interface ParameterPanelProps {
   backendStatus: BackendStatus | null;
   limits?: Limits;
   isProduction?: boolean;
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 export default function ParameterPanel({
@@ -46,6 +48,8 @@ export default function ParameterPanel({
   backendStatus,
   limits = DEFAULT_LIMITS,
   isProduction = false,
+  isCollapsed = false,
+  onToggleCollapse,
 }: ParameterPanelProps) {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isDragActive, setIsDragActive] = useState(false);
@@ -53,6 +57,24 @@ export default function ParameterPanel({
   const [expandedLayers, setExpandedLayers] = useState(() =>
     new Set<number>(filmLayers.map((_, index) => index))
   );
+
+  const [showNamePopup, setShowNamePopup] = useState(false);
+  const [generationName, setGenerationName] = useState('');
+
+  const handleGenerateClick = () => {
+    setShowNamePopup(true);
+  };
+
+  const handleStartGeneration = () => {
+    setShowNamePopup(false);
+    onGenerate(generationName || undefined);
+    setGenerationName('');
+  };
+
+  const handleCancelGeneration = () => {
+    setShowNamePopup(false);
+    setGenerationName('');
+  };
 
   const toggleLayer = (index: number) => {
     setExpandedLayers((prev) => {
@@ -150,6 +172,22 @@ export default function ParameterPanel({
     setSelectedFiles([]);
   };
 
+
+
+  if (isCollapsed) {
+    return (
+      <div className={styles.panelCollapsed}>
+        <button 
+           className={styles.expandButton} 
+           onClick={onToggleCollapse}
+           title="Expand Sidebar"
+        >
+          ▶
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className={styles.panel}>
       {/* Film Layers Section */}
@@ -171,7 +209,17 @@ export default function ParameterPanel({
               type="button"
               style={{ height: '28px', padding: '0 12px', fontSize: '11px' }}
             >
+
               + ADD
+            </button>
+            <button
+               className="btn btn--outline"
+               onClick={onToggleCollapse}
+               type="button"
+               style={{ height: '28px', padding: '0 8px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+               title="Collapse Sidebar"
+            >
+               ◀
             </button>
           </div>
         </div>
@@ -649,13 +697,40 @@ export default function ParameterPanel({
           </button>
           <button
             className="btn btn--full"
-            onClick={onGenerate}
+            onClick={handleGenerateClick}
             disabled={isGenerating}
           >
             {isGenerating ? 'GENERATING...' : 'GENERATE'}
           </button>
         </div>
       </div>
+
+
+      {showNamePopup && (
+        <div className={styles.popupOverlay}>
+          <div className={styles.popupContent}>
+            <div className={styles.popupTitle}>Generation Name</div>
+            <input
+              type="text"
+              className={styles.popupInput}
+              placeholder="e.g. Test Run 1 (max 20 chars)"
+              value={generationName}
+              maxLength={20}
+              onChange={(e) => setGenerationName(e.target.value)}
+              autoFocus
+              onKeyDown={(e) => e.key === 'Enter' && handleStartGeneration()}
+            />
+            <div className={styles.popupActions}>
+              <button className="btn btn--outline" onClick={handleCancelGeneration}>
+                CANCEL
+              </button>
+              <button className="btn" onClick={handleStartGeneration}>
+                START
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

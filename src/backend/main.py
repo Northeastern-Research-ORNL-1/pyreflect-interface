@@ -65,6 +65,7 @@ from pydantic import BaseModel, Field
 BACKEND_ROOT = Path(__file__).parent
 DATA_DIR = BACKEND_ROOT / "data"
 CURVES_DIR = DATA_DIR / "curves"
+MODELS_DIR = DATA_DIR / "models"
 EXPT_DIR = CURVES_DIR / "expt"
 SETTINGS_PATH = BACKEND_ROOT / "settings.yml"
 
@@ -88,6 +89,48 @@ if MONGODB_URI:
         print("MongoDB connected: PyReflect")
     except Exception as e:
         print(f"Warning: MongoDB connection failed: {e}")
+
+# Hugging Face Configuration
+HF_TOKEN = os.getenv("HF_TOKEN")
+HF_REPO_ID = os.getenv("HF_REPO_ID")
+
+hf_api = None
+if HF_TOKEN and HF_REPO_ID:
+    try:
+        from huggingface_hub import HfApi
+        hf_api = HfApi(token=HF_TOKEN)
+        print(f"Hugging Face API initialized (Repo: {HF_REPO_ID})")
+    except Exception as e:
+        print(f"Warning: Failed to initialize Hugging Face API: {e}")
+
+
+def upload_to_hf(file_path: Path, model_id: str) -> bool:
+    """Upload model file to Hugging Face Hub."""
+    if not hf_api or not HF_REPO_ID:
+        return False
+    
+    try:
+        file_size_mb = file_path.stat().st_size / (1024 * 1024)
+        print(f"Uploading {model_id}.pth ({file_size_mb:.2f} MB) to HF Hub...")
+        
+        # Ensure repo exists (public dataset)
+        try:
+            hf_api.create_repo(repo_id=HF_REPO_ID, repo_type="dataset", exist_ok=True, private=False)
+        except Exception:
+            # Ignore creation error (might already exist or permission issue, let upload handle it)
+            pass
+
+        hf_api.upload_file(
+            path_or_fileobj=file_path,
+            path_in_repo=f"{model_id}.pth",
+            repo_id=HF_REPO_ID,
+            repo_type="dataset"
+        )
+        return True
+    except Exception as e:
+        print(f"Error uploading to Hugging Face: {e}")
+        return False
+
 
 # Import pyreflect components
 PYREFLECT_AVAILABLE = False
@@ -151,6 +194,7 @@ nr_predict_sld:
 def ensure_backend_layout() -> None:
     """Ensure data directories and settings.yml exist."""
     CURVES_DIR.mkdir(parents=True, exist_ok=True)
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
     EXPT_DIR.mkdir(parents=True, exist_ok=True)
     if not SETTINGS_PATH.exists():
         SETTINGS_PATH.write_text(DEFAULT_SETTINGS_YAML, encoding="utf-8")
@@ -217,6 +261,7 @@ class GenerateRequest(BaseModel):
     layers: List[FilmLayer]
     generator: GeneratorParams
     training: TrainingParams
+    name: str | None = None
 
 
 class NRData(BaseModel):
@@ -261,6 +306,8 @@ class GenerateResponse(BaseModel):
     training: TrainingData
     chi: List[ChiDataPoint]
     metrics: Metrics
+    model_id: str | None = None
+    model_size_mb: float | None = None
 
 
 # =====================
@@ -345,9 +392,11 @@ def compute_norm_stats(curves: np.ndarray) -> dict:
     }
 
 
+# S3 Logic removed in favor of Hugging Face
+
 def generate_with_pyreflect_streaming(
     layers: List[FilmLayer], gen_params: GeneratorParams, train_params: TrainingParams,
-    user_id: str | None = None
+    user_id: str | None = None, name: str | None = None
 ) -> Generator[str, None, None]:
     """Generate data with streaming log output via SSE.
     
@@ -406,6 +455,18 @@ def generate_with_pyreflect_streaming(
             self._buffer = ""
     
     yield emit("log", f"Generating {gen_params.numCurves} synthetic curves with {gen_params.numFilmLayers} film layers...")
+    
+    # Check local storage limit (Max 2 models)
+    # This prevents disk usage buildup if HF upload is not enabled or failing
+    try:
+        local_models = list(MODELS_DIR.glob("*.pth"))
+        if len(local_models) >= 2:
+            yield emit("log", f"Error: Local storage limit reached ({len(local_models)}/2 models).")
+            yield emit("log", "Please delete old local models or configure Hugging Face to offload them.")
+            yield emit("error", "Local model limit reached (max 2). Delete models to continue.")
+            return
+    except Exception as e:
+        yield emit("log", f"Warning: Could not check local model count: {e}")
     
     data_generator = ReflectivityDataGenerator(
         num_layers=gen_params.numFilmLayers,
@@ -524,7 +585,40 @@ def generate_with_pyreflect_streaming(
         if (epoch + 1) % 5 == 0 or epoch == 0:
             yield emit("log", f"   Epoch {epoch + 1}/{train_params.epochs} - Train: {train_loss:.6f}, Val: {val_loss:.6f}")
     
+            yield emit("log", f"   Epoch {epoch + 1}/{train_params.epochs} - Train: {train_loss:.6f}, Val: {val_loss:.6f}")
+    
     training_time = time.perf_counter() - training_start
+    
+    # Save the trained model
+    import uuid
+    model_id = str(uuid.uuid4())
+    model_path = MODELS_DIR / f"{model_id}.pth"
+    torch.save(model.state_dict(), model_path)
+    model_size_mb = model_path.stat().st_size / (1024 * 1024)
+    yield emit("log", f"Model saved locally: {model_id}.pth ({model_size_mb:.2f} MB)")
+    
+    
+    # HF Upload
+    if hf_api:
+        yield emit("log", "Uploading to Hugging Face...")
+        if upload_to_hf(model_path, model_id):
+            yield emit("log", "Model uploaded to Hugging Face Hub")
+            # Verify availability before deleting
+            yield emit("log", "Verifying upload...")
+            try:
+                # Use HF API to check existence (robust for private repos)
+                if hf_api.file_exists(repo_id=HF_REPO_ID, filename=f"{model_id}.pth", repo_type="dataset"):
+                    model_path.unlink()
+                    yield emit("log", "Verified on HF. Local model file deleted (cleanup)")
+                else:
+                    yield emit("log", "Warning: file_exists returned False after upload. keeping local file.")
+            except Exception as e:
+                yield emit("log", f"Warning: Failed to verify/delete: {e}")
+        else:
+            yield emit("log", "Warning: Model NOT uploaded to HF (Error occurred)")
+    else:
+        yield emit("log", "Hugging Face not configured")
+
     yield emit("log", "Training complete!")
     yield emit("log", f"Training took {training_time:.2f}s")
     yield emit("log", "Running inference on test sample...")
@@ -612,6 +706,8 @@ def generate_with_pyreflect_streaming(
         "training": {"epochs": epoch_list, "trainingLoss": train_losses, "validationLoss": val_losses},
         "chi": chi,
         "metrics": {"mse": float(final_mse), "r2": float(np.clip(r2, 0, 1)), "mae": mae},
+        "name": name,
+        "model_id": model_id,
     }
     yield emit("result", result)
     
@@ -621,6 +717,7 @@ def generate_with_pyreflect_streaming(
         try:
             doc = {
                 "user_id": user_id,
+                "name": name,
                 "created_at": datetime.now(timezone.utc),
                 "params": {
                     "layers": [layer.model_dump() for layer in layers],
@@ -702,6 +799,13 @@ def generate_with_pyreflect(layers: List[FilmLayer], gen_params: GeneratorParams
         if (epoch + 1) % 5 == 0 or epoch == 0:
             print(f"   Epoch {epoch + 1}/{train_params.epochs} - Train: {train_loss:.6f}, Val: {val_loss:.6f}")
     
+    # Save model
+    import uuid
+    model_id = str(uuid.uuid4())
+    model_path = MODELS_DIR / f"{model_id}.pth"
+    torch.save(model.state_dict(), model_path)
+    print(f"Model saved: {model_id}.pth")
+    
     print("Training complete!")
     print("Running inference on test sample...")
     
@@ -772,6 +876,7 @@ def generate_with_pyreflect(layers: List[FilmLayer], gen_params: GeneratorParams
         training=TrainingData(epochs=epoch_list, trainingLoss=train_losses, validationLoss=val_losses),
         chi=chi,
         metrics=Metrics(mse=float(final_mse), r2=float(np.clip(r2, 0, 1)), mae=mae),
+        model_id=model_id,
     )
 
 
@@ -839,7 +944,7 @@ async def generate_stream(
     return StreamingResponse(
         generate_with_pyreflect_streaming(
             request.layers, request.generator, request.training,
-            user_id=x_user_id
+            user_id=x_user_id, name=request.name
         ),
         media_type="text/event-stream",
     )
@@ -861,31 +966,36 @@ async def get_defaults():
     }
 
 
+
+
+
 class SaveResultRequest(BaseModel):
-    """Request body for manually saving generation results."""
+    """Request body for saving generation results."""
     layers: List[FilmLayer]
     generator: GeneratorParams
     training: TrainingParams
     result: dict
+    name: str | None = None
 
 
-@app.post("/api/save")
-async def save_result(
+@app.post("/api/history")
+async def save_history(
     request: SaveResultRequest,
     x_user_id: str | None = Header(default=None),
 ):
-    """Manually save generation results to MongoDB."""
+    """Save generation results to history manually (e.g. from import)."""
     if not MONGODB_AVAILABLE or generations_collection is None:
         raise HTTPException(status_code=503, detail="MongoDB not available")
     
     if not x_user_id:
-        raise HTTPException(status_code=401, detail="Authentication required to save results")
+        raise HTTPException(status_code=401, detail="Authentication required")
     
     from datetime import datetime, timezone
     try:
         doc = {
             "user_id": x_user_id,
             "created_at": datetime.now(timezone.utc),
+            "name": request.name,
             "params": {
                 "layers": [layer.model_dump() for layer in request.layers],
                 "generator": request.generator.model_dump(),
@@ -896,7 +1006,112 @@ async def save_result(
         result = generations_collection.insert_one(doc)
         return {"success": True, "id": str(result.inserted_id)}
     except Exception as e:
+        print(f"Error saving history: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to save: {e}")
+
+
+@app.get("/api/history")
+async def get_history(x_user_id: str | None = Header(default=None)):
+    """Get list of saved generations for the authenticated user."""
+    if not MONGODB_AVAILABLE or generations_collection is None:
+         raise HTTPException(status_code=503, detail="MongoDB not available")
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+        
+    # Fetch recent saves, limit to 50 for now
+    cursor = generations_collection.find(
+        {"user_id": x_user_id},
+        {
+            "result.nr": 0, 
+            "result.sld": 0, 
+            "result.training": 0, 
+            "result.chi": 0
+        }
+    ).sort("created_at", -1).limit(50)
+    
+    # Post-process to check for local model file existence
+    local_model_ids = {p.stem for p in MODELS_DIR.glob("*.pth")}
+    
+    history = []
+    for doc in cursor:
+        doc["_id"] = str(doc["_id"])
+        # Check if model exists locally
+        model_id = doc.get("result", {}).get("model_id")
+        doc["is_local"] = model_id in local_model_ids
+        
+        # Add HF URL if configured
+        if model_id and HF_REPO_ID:
+            doc["hf_url"] = f"https://huggingface.co/datasets/{HF_REPO_ID}/blob/main/{model_id}.pth"
+            
+        history.append(doc)
+        
+    return history
+
+
+@app.get("/api/history/{save_id}")
+async def get_save(save_id: str, x_user_id: str | None = Header(default=None)):
+    """Get full data for a specific saved generation."""
+    if not MONGODB_AVAILABLE or generations_collection is None:
+         raise HTTPException(status_code=503, detail="MongoDB not available")
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+      
+    from bson import ObjectId  
+    try:
+        oid = ObjectId(save_id)
+    except:
+        raise HTTPException(status_code=400, detail="Invalid ID format")
+        
+    doc = generations_collection.find_one({"_id": oid, "user_id": x_user_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Save not found")
+        
+    doc["_id"] = str(doc["_id"])
+    return doc
+
+
+@app.delete("/api/history/{save_id}")
+async def delete_save(save_id: str, x_user_id: str | None = Header(default=None)):
+    """Delete a saved generation."""
+    if not MONGODB_AVAILABLE or generations_collection is None:
+        raise HTTPException(status_code=503, detail="MongoDB not available")
+    
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="User ID required")
+        
+    try:
+        from bson import ObjectId
+        if not ObjectId.is_valid(save_id):
+            raise HTTPException(status_code=400, detail="Invalid ID format")
+
+        # Find document first to get model_id for cleanup
+        doc = generations_collection.find_one({"_id": ObjectId(save_id), "user_id": x_user_id})
+        
+        if doc and "result" in doc and "model_id" in doc["result"]:
+            model_id = doc["result"]["model_id"]
+            if model_id:
+                try:
+                    local_path = MODELS_DIR / f"{model_id}.pth"
+                    if local_path.exists():
+                        local_path.unlink()
+                        print(f"Deleted orphan model file: {model_id}.pth")
+                except Exception as e:
+                    print(f"Warning: Failed to delete model file: {e}")
+
+        result = generations_collection.delete_one({
+            "_id": ObjectId(save_id),
+            "user_id": x_user_id
+        })
+        
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Save not found or access denied")
+            
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error deleting save: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete save")
 
 
 @app.post("/api/upload")
@@ -954,6 +1169,83 @@ async def get_status():
         "curve_files": curve_files,
         "expt_files": expt_files,
     }
+
+
+    return {
+        "pyreflect_available": PYREFLECT_AVAILABLE,
+        "has_settings": has_settings,
+        "data_files": data_files,
+        "curve_files": curve_files,
+        "expt_files": expt_files,
+    }
+
+
+@app.get("/api/models/{model_id}")
+async def download_model(model_id: str):
+    """Download a saved model .pth file."""
+    # Sanitize inputs
+    if not model_id or "/" in model_id or "\\" in model_id:
+        raise HTTPException(status_code=400, detail="Invalid model ID")
+        
+    file_path = MODELS_DIR / f"{model_id}.pth"
+    
+    # 1. Try local file first (fastest)
+    if file_path.exists():
+        from fastapi.responses import FileResponse
+        return FileResponse(
+            path=file_path, 
+            filename=f"pyreflect_model_{model_id[:8]}.pth",
+            media_type="application/octet-stream"
+        )
+    
+    # 2. Fallback to Hugging Face (Public Repo)
+    if HF_REPO_ID:
+        from fastapi.responses import RedirectResponse
+        # Construct raw download URL for public repo (Dataset)
+        hf_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/{model_id}.pth"
+        return RedirectResponse(url=hf_url)
+        
+    raise HTTPException(status_code=404, detail="Model not found locally or on Hugging Face")
+
+
+@app.delete("/api/models/{model_id}")
+async def delete_model(model_id: str):
+    """Delete a local model .pth file."""
+    if not model_id or "/" in model_id or "\\" in model_id:
+        raise HTTPException(status_code=400, detail="Invalid model ID")
+        
+    file_path = MODELS_DIR / f"{model_id}.pth"
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Model file not found locally")
+        
+    try:
+        file_path.unlink()
+        return {"status": "deleted", "model_id": model_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete model: {e}")
+
+
+@app.get("/api/models/{model_id}/info")
+async def get_model_info(model_id: str):
+    """Get model size and status."""
+    # 1. Check local
+    local_path = MODELS_DIR / f"{model_id}.pth"
+    if local_path.exists():
+         size = local_path.stat().st_size / (1024*1024)
+         return {"size_mb": size, "source": "local"}
+    
+    # 2. Check HF
+    if HF_REPO_ID and hf_api:
+        try:
+             # Use get_paths_info for specific file metadata in dataset repo
+             paths = hf_api.get_paths_info(repo_id=HF_REPO_ID, paths=[f"{model_id}.pth"], repo_type="dataset")
+             if paths and len(paths) > 0:
+                 size = paths[0].size / (1024*1024)
+                 return {"size_mb": size, "source": "huggingface"}
+        except Exception as e:
+             print(f"HF Check failed: {e}")
+             
+    return {"size_mb": None, "source": "unknown"}
 
 
 if __name__ == "__main__":
