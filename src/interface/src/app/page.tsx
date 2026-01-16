@@ -979,10 +979,8 @@ export default function Home() {
       }
 
       const zipData = zipSync(files, { level: 6 });
-      const zipBuffer = zipData.buffer.slice(
-        zipData.byteOffset,
-        zipData.byteOffset + zipData.byteLength
-      );
+      const zipBuffer = new ArrayBuffer(zipData.byteLength);
+      new Uint8Array(zipBuffer).set(zipData);
       const blob = new Blob([zipBuffer], { type: 'application/zip' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
