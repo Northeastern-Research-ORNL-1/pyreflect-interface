@@ -40,13 +40,15 @@ _DEFAULT_LIMITS = {
     "max_mlp_epochs": (500, 100),
 }
 
-# Build limits with optional env var overrides
+# Build limits with optional env var overrides (only in production)
 def _get_limit(key: str, local_val: int | float, prod_val: int | float) -> int | float:
+    if not IS_PRODUCTION:
+        return local_val  # Always use unlimited defaults in dev mode
     env_key = key.upper()  # e.g., max_curves -> MAX_CURVES
     env_val = os.getenv(env_key)
     if env_val is not None:
         return float(env_val) if isinstance(prod_val, float) else int(env_val)
-    return prod_val if IS_PRODUCTION else local_val
+    return prod_val
 
 LIMITS = {
     key: _get_limit(key, local, prod)
@@ -54,7 +56,7 @@ LIMITS = {
 }
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -65,6 +67,27 @@ DATA_DIR = BACKEND_ROOT / "data"
 CURVES_DIR = DATA_DIR / "curves"
 EXPT_DIR = CURVES_DIR / "expt"
 SETTINGS_PATH = BACKEND_ROOT / "settings.yml"
+
+# MongoDB connection (optional - for result persistence)
+MONGODB_URI = os.getenv("MONGODB_URI")
+MONGODB_AVAILABLE = False
+mongo_client = None
+mongo_db = None
+generations_collection = None
+
+if MONGODB_URI:
+    try:
+        from pymongo.mongo_client import MongoClient
+        from pymongo.server_api import ServerApi
+        mongo_client = MongoClient(MONGODB_URI, server_api=ServerApi('1'))
+        # Ping to verify connection
+        mongo_client.admin.command('ping')
+        mongo_db = mongo_client["PyReflect"]
+        generations_collection = mongo_db["generations"]
+        MONGODB_AVAILABLE = True
+        print("MongoDB connected: PyReflect")
+    except Exception as e:
+        print(f"Warning: MongoDB connection failed: {e}")
 
 # Import pyreflect components
 PYREFLECT_AVAILABLE = False
@@ -247,10 +270,38 @@ class GenerateResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events"""
+    import asyncio
+    
     print("PyReflect Interface Backend starting...")
     print(f"   pyreflect available: {PYREFLECT_AVAILABLE}")
+    print(f"   MongoDB available: {MONGODB_AVAILABLE}")
     ensure_backend_layout()
+    
+    # MongoDB cluster keepalive task
+    keepalive_task = None
+    if MONGODB_AVAILABLE and mongo_client is not None:
+        async def mongo_keepalive():
+            """Ping MongoDB every 5 minutes to keep cluster alive."""
+            while True:
+                try:
+                    await asyncio.sleep(300)  # 5 minutes
+                    mongo_client.admin.command("ping")
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    print(f"MongoDB keepalive ping failed: {e}")
+        
+        keepalive_task = asyncio.create_task(mongo_keepalive())
+    
     yield
+    
+    # Cleanup
+    if keepalive_task:
+        keepalive_task.cancel()
+        try:
+            await keepalive_task
+        except asyncio.CancelledError:
+            pass
     print("PyReflect Interface Backend shutting down...")
 
 
@@ -295,9 +346,17 @@ def compute_norm_stats(curves: np.ndarray) -> dict:
 
 
 def generate_with_pyreflect_streaming(
-    layers: List[FilmLayer], gen_params: GeneratorParams, train_params: TrainingParams
+    layers: List[FilmLayer], gen_params: GeneratorParams, train_params: TrainingParams,
+    user_id: str | None = None
 ) -> Generator[str, None, None]:
-    """Generate data with streaming log output via SSE."""
+    """Generate data with streaming log output via SSE.
+    
+    Args:
+        layers: Film layer definitions
+        gen_params: Generator parameters
+        train_params: Training parameters
+        user_id: Optional GitHub user ID for MongoDB persistence
+    """
     
     def emit(event: str, data: Any) -> str:
         return f"event: {event}\ndata: {json.dumps(data)}\n\n"
@@ -312,6 +371,18 @@ def generate_with_pyreflect_streaming(
             yield emit("log", f"Warning ({context}): {w.message}")
         if len(warning_list) > max_warnings:
             yield emit("log", f"Warning ({context}): {len(warning_list) - max_warnings} more warnings...")
+
+    # Heartbeat mechanism to prevent Cloudflare proxy timeout
+    HEARTBEAT_INTERVAL = 15.0  # seconds
+    last_heartbeat = [time.perf_counter()]  # mutable container for closure
+    
+    def maybe_heartbeat() -> str | None:
+        """Return a keepalive comment if enough time has passed, else None."""
+        now = time.perf_counter()
+        if now - last_heartbeat[0] >= HEARTBEAT_INTERVAL:
+            last_heartbeat[0] = now
+            return ":keepalive\n\n"
+        return None
 
     class QueueWriter(io.TextIOBase):
         def __init__(self, q: "queue.Queue[str]") -> None:
@@ -445,6 +516,11 @@ def generate_with_pyreflect_streaming(
             "valLoss": val_loss,
         })
         
+        # Emit heartbeat if needed to prevent proxy timeout
+        heartbeat = maybe_heartbeat()
+        if heartbeat:
+            yield heartbeat
+        
         if (epoch + 1) % 5 == 0 or epoch == 0:
             yield emit("log", f"   Epoch {epoch + 1}/{train_params.epochs} - Train: {train_loss:.6f}, Val: {val_loss:.6f}")
     
@@ -538,6 +614,25 @@ def generate_with_pyreflect_streaming(
         "metrics": {"mse": float(final_mse), "r2": float(np.clip(r2, 0, 1)), "mae": mae},
     }
     yield emit("result", result)
+    
+    # Save to MongoDB if available and user is authenticated
+    if MONGODB_AVAILABLE and generations_collection is not None and user_id:
+        from datetime import datetime, timezone
+        try:
+            doc = {
+                "user_id": user_id,
+                "created_at": datetime.now(timezone.utc),
+                "params": {
+                    "layers": [layer.model_dump() for layer in layers],
+                    "generator": gen_params.model_dump(),
+                    "training": train_params.model_dump(),
+                },
+                "result": result,
+            }
+            generations_collection.insert_one(doc)
+            yield emit("log", "Results saved to database.")
+        except Exception as e:
+            yield emit("log", f"Warning: Could not save to database: {e}")
 
 
 def generate_with_pyreflect(layers: List[FilmLayer], gen_params: GeneratorParams, train_params: TrainingParams) -> GenerateResponse:
@@ -725,10 +820,15 @@ async def generate(request: GenerateRequest):
 
 
 @app.post("/api/generate/stream")
-async def generate_stream(request: GenerateRequest):
+async def generate_stream(
+    request: GenerateRequest,
+    x_user_id: str | None = Header(default=None),
+):
     """
     Stream generation progress via Server-Sent Events.
     Events: log (text message), progress (epoch info), result (final data)
+    
+    Pass X-User-ID header to persist results to MongoDB for the authenticated user.
     """
     validate_limits(request.generator, request.training)
     if not PYREFLECT_AVAILABLE:
@@ -737,7 +837,10 @@ async def generate_stream(request: GenerateRequest):
         return StreamingResponse(error_stream(), media_type="text/event-stream")
     
     return StreamingResponse(
-        generate_with_pyreflect_streaming(request.layers, request.generator, request.training),
+        generate_with_pyreflect_streaming(
+            request.layers, request.generator, request.training,
+            user_id=x_user_id
+        ),
         media_type="text/event-stream",
     )
 
@@ -756,6 +859,44 @@ async def get_defaults():
         "generator": GeneratorParams(),
         "training": TrainingParams(),
     }
+
+
+class SaveResultRequest(BaseModel):
+    """Request body for manually saving generation results."""
+    layers: List[FilmLayer]
+    generator: GeneratorParams
+    training: TrainingParams
+    result: dict
+
+
+@app.post("/api/save")
+async def save_result(
+    request: SaveResultRequest,
+    x_user_id: str | None = Header(default=None),
+):
+    """Manually save generation results to MongoDB."""
+    if not MONGODB_AVAILABLE or generations_collection is None:
+        raise HTTPException(status_code=503, detail="MongoDB not available")
+    
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required to save results")
+    
+    from datetime import datetime, timezone
+    try:
+        doc = {
+            "user_id": x_user_id,
+            "created_at": datetime.now(timezone.utc),
+            "params": {
+                "layers": [layer.model_dump() for layer in request.layers],
+                "generator": request.generator.model_dump(),
+                "training": request.training.model_dump(),
+            },
+            "result": request.result,
+        }
+        result = generations_collection.insert_one(doc)
+        return {"success": True, "id": str(result.inserted_id)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save: {e}")
 
 
 @app.post("/api/upload")
