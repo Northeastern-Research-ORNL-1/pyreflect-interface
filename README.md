@@ -3,6 +3,7 @@
 A monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyreflect) neutron reflectivity analysis package.
 
 ![Status](https://img.shields.io/badge/status-development-black)
+![Version](https://img.shields.io/badge/version-v0.1.0-black)
 
 ## Highlights
 
@@ -217,7 +218,7 @@ Each saved generation contains:
 | `/api/history`              | GET    | List saved generations                  |
 | `/api/history`              | POST   | Save a generation manually              |
 | `/api/history/{id}`         | GET    | Get full details of a save              |
-| `/api/history/{id}`         | DELETE | Delete a saved generation               |
+| `/api/history/{id}`         | DELETE | Delete a saved generation and its model |
 | `/api/models/{model_id}`    | GET    | Download a saved model                  |
 | `/api/models/{model_id}`    | DELETE | Delete a local model file               |
 | `/api/models/{model_id}/info` | GET  | Get model size and source               |
@@ -242,6 +243,7 @@ Set `PRODUCTION=true` in `src/backend/.env` to enable limits.
 
 - Local storage keeps up to 2 models; runs will fail if the limit is reached.
 - Set `HF_TOKEN` and `HF_REPO_ID` to offload models to Hugging Face and auto-clean local files.
+- Deleting a history item also deletes its model file locally and from Hugging Face (if configured).
 
 ## Troubleshooting
 

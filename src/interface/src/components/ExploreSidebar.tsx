@@ -136,6 +136,9 @@ export default function ExploreSidebar({ isOpen, onClose, userId, onLoadSave, on
                     const item = history.find(i => i._id === deleteId);
                     return item?.name ? <><strong>"{item.name}"</strong></> : null;
                 })()}
+                <span style={{ display: 'block', marginTop: '6px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                  The associated model file will be deleted as well.
+                </span>
               </p>
               <div className={styles.popupActions}>
                 <button className={`${styles.popupBtn} ${styles.popupBtnCancel}`} onClick={() => setDeleteId(null)}>CANCEL</button>
