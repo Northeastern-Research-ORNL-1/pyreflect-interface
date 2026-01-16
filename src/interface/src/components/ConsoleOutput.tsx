@@ -47,7 +47,7 @@ export default function ConsoleOutput({ logs, isGenerating, startTimeMs }: Conso
       >
         <span className={styles.title}>
           <span className={styles.icon}>{isExpanded ? '▼' : '▶'}</span>
-          Console
+          Console Logs
         </span>
         <span className={styles.meta}>
           <span className={styles.elapsed}>
