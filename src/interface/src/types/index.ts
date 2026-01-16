@@ -91,3 +91,16 @@ export const DEFAULT_LIMITS: Limits = {
   max_ae_epochs: 500,
   max_mlp_epochs: 500,
 };
+export type DataSource = 'synthetic' | 'real';
+export type Workflow = 'nr_sld' | 'sld_chi' | 'nr_sld_chi';
+export type NrSldMode = 'train' | 'infer';
+export type UploadRole =
+  | 'auto'
+  | 'nr_train'
+  | 'sld_train'
+  | 'experimental_nr'
+  | 'normalization_stats'
+  | 'nr_sld_model'
+  | 'sld_chi_experimental_profile'
+  | 'sld_chi_model_sld_file'
+  | 'sld_chi_model_chi_params_file';
