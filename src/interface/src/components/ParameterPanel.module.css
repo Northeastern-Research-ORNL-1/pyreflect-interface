@@ -73,7 +73,7 @@
 .uploadArea {
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
+  gap: 0;
 }
 
 .uploadDropzone {

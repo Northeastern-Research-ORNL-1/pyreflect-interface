@@ -25,8 +25,8 @@ export default function EditableValue({
   const [isEditing, setIsEditing] = useState(false);
   const [inputValue, setInputValue] = useState(value.toFixed(decimals));
   const inputRef = useRef<HTMLInputElement>(null);
-  const effectiveMin = 0;
-  const effectiveMax = 999999;
+  const effectiveMin = min ?? 0;
+  const effectiveMax = max ?? 999999;
 
   useEffect(() => {
     if (isEditing && inputRef.current) {
@@ -35,14 +35,9 @@ export default function EditableValue({
     }
   }, [isEditing]);
 
-  useEffect(() => {
-    if (!isEditing) {
-      setInputValue(value.toFixed(decimals));
-    }
-  }, [value, decimals, isEditing]);
-
   const handleClick = () => {
     if (!disabled) {
+      setInputValue(value.toFixed(decimals));
       setIsEditing(true);
     }
   };

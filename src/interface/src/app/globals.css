@@ -202,6 +202,16 @@ a:hover {
   gap: var(--space-md);
 }
 
+.header__avatar {
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  line-height: 0;
+}
+
 .header__btn-label {
   display: inline;
 }
@@ -755,7 +765,8 @@ select.control__input {
   border: 1px solid var(--border-color);
   padding: 24px;
   z-index: 2000;
-  width: 300px;
+  width: 360px;
+  max-width: calc(100vw - 32px);
   box-shadow: 0 4px 20px rgba(0,0,0,0.5);
 }
 
@@ -769,15 +780,15 @@ select.control__input {
 
 .download-options {
   display: grid;
-  gap: 6px;
+  gap: 10px;
   margin-bottom: 12px;
 }
 
 .download-option {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   width: 100%;
   font-size: 12px;
   color: var(--text-secondary);
@@ -787,28 +798,53 @@ select.control__input {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+}
+
+.download-option__text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .download-option__size {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 10px;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .download-checkbox {
-  appearance: none;
-  width: 14px;
-  height: 14px;
-  border: 1px solid var(--color-gray-900);
-  background: var(--color-gray-900);
-  border-radius: 0;
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  appearance: none !important;
+  width: 12px !important;
+  height: 12px !important;
+  min-width: 12px !important;
+  min-height: 12px !important;
+  border: 2px solid #ffffff !important;
+  background: #ffffff !important;
+  border-radius: 0 !important;
   cursor: pointer;
-  margin-right: 4px;
+  margin-right: 10px;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.model-download-popup .download-checkbox {
+  border: 2px solid #ffffff !important;
+  background: #ffffff !important;
 }
 
 .download-checkbox:checked {
-  background: var(--color-gray-700);
-  border-color: var(--color-gray-900);
-  box-shadow: inset 0 0 0 3px var(--color-gray-900);
+  background: transparent !important;
+  border-color: #ffffff !important;
+}
+
+.model-download-popup .download-checkbox:checked {
+  background: transparent !important;
+  border-color: #ffffff !important;
 }
 
 .download-checkbox:disabled {

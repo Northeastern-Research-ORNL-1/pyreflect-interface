@@ -163,6 +163,16 @@
   padding: var(--space-lg);
 }
 
+.exportingCard {
+  animation: none !important;
+}
+
+.exportingCard,
+.exportingCard * {
+  transition: none !important;
+  animation: none !important;
+}
+
 .expandedCard .graph-card__content {
   flex: 1;
   min-height: 0;

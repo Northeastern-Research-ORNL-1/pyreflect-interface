@@ -85,31 +85,34 @@ export default function ExploreSidebar({
   };
 
   useEffect(() => {
-    if (isOpen && userId) {
-      fetchHistory();
-    }
-  }, [isOpen, userId]);
+    if (!isOpen || !userId) return;
 
-  const fetchHistory = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/history`, {
-        headers: {
-          'X-User-ID': userId!,
-        },
-      });
-      
-      if (!res.ok) throw new Error('Failed to fetch history');
-      
-      const data = await res.json();
-      setHistory(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
-      setLoading(false);
-    }
-  };
+    const fetchHistory = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/history`,
+          {
+            headers: {
+              'X-User-ID': userId,
+            },
+          }
+        );
+
+        if (!res.ok) throw new Error('Failed to fetch history');
+
+        const data = await res.json();
+        setHistory(data);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Unknown error');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchHistory();
+  }, [isOpen, userId]);
 
   const handleLoad = async (id: string) => {
     try {
@@ -130,16 +133,6 @@ export default function ExploreSidebar({
     }
   };
 
-  const handleDownloadModel = (e: React.MouseEvent, modelId: string) => {
-    e.stopPropagation();
-    const link = document.createElement('a');
-    link.href = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/models/${modelId}`;
-    link.download = `model_${modelId}.pth`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
   return (
     <>
       <div className={`${styles.backdrop} ${isOpen ? styles.open : ''}`} onClick={onClose} />
@@ -151,7 +144,7 @@ export default function ExploreSidebar({
                 Are you sure you want to delete this history item?
                 {(() => {
                     const item = history.find(i => i._id === deleteId);
-                    return item?.name ? <><strong>"{item.name}"</strong></> : null;
+                    return item?.name ? <> <strong>&quot;{item.name}&quot;</strong></> : null;
                 })()}
                 <span style={{ display: 'block', marginTop: '6px', fontSize: '12px', color: 'var(--text-muted)' }}>
                   The associated model file will be deleted as well.

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, type ChangeEvent, type DragEvent } from 'react';
+import { useState, useRef, type ChangeEvent } from 'react';
 import { FilmLayer, GeneratorParams, TrainingParams, Limits, DEFAULT_LIMITS, DataSource, Workflow, NrSldMode, UploadRole } from '@/types';
 import EditableValue from './EditableValue';
 import InfoTooltip from './InfoTooltip';
@@ -89,9 +89,6 @@ export default function ParameterPanel({
   isCollapsed = false,
   onToggleCollapse,
 }: ParameterPanelProps) {
-  const [selectedFiles, setSelectedFiles] = useState<{ file: File; role: UploadRole }[]>([]);
-  const [isDragActive, setIsDragActive] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [expandedLayers, setExpandedLayers] = useState(() =>
     new Set<number>(filmLayers.map((_, index) => index))
   );
@@ -266,18 +263,6 @@ export default function ParameterPanel({
     event.target.value = '';
   };
 
-  const uploadRoleOptions: { value: UploadRole; label: string }[] = [
-    { value: 'auto', label: 'Auto (filename)' },
-    { value: 'nr_train', label: 'NR Train (.npy)' },
-    { value: 'sld_train', label: 'SLD Train (.npy)' },
-    { value: 'experimental_nr', label: 'Experimental NR (.npy)' },
-    { value: 'normalization_stats', label: 'Normalization Stats (.npy)' },
-    { value: 'nr_sld_model', label: 'NR→SLD Model (.pth/.pt)' },
-    { value: 'sld_chi_experimental_profile', label: 'SLD→Chi Experimental (.npy)' },
-    { value: 'sld_chi_model_sld_file', label: 'SLD→Chi SLD Train (.npy)' },
-    { value: 'sld_chi_model_chi_params_file', label: 'SLD→Chi Chi Params (.npy)' },
-  ];
-
   const handleGenerateClick = () => {
     setShowNamePopup(true);
   };
@@ -352,50 +337,6 @@ export default function ParameterPanel({
       return next;
     });
   };
-
-  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files ?? []).map((file) => ({ file, role: 'auto' as UploadRole }));
-    setSelectedFiles((prev) => [...prev, ...files]);
-  };
-
-  const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    setIsDragActive(true);
-  };
-
-  const handleDragLeave = (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    setIsDragActive(false);
-  };
-
-  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    setIsDragActive(false);
-    const files = Array.from(event.dataTransfer.files).map((file) => ({ file, role: 'auto' as UploadRole }));
-    setSelectedFiles((prev) => [...prev, ...files]);
-  };
-
-  const handleDropzoneClick = () => {
-    fileInputRef.current?.click();
-  };
-
-  const removeSelectedFile = (index: number) => {
-    setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const updateFileRole = (index: number, role: UploadRole) => {
-    setSelectedFiles((prev) =>
-      prev.map((item, i) => (i === index ? { ...item, role } : item))
-    );
-  };
-
-  const handleUpload = () => {
-    if (selectedFiles.length === 0) return;
-    onUploadFiles(selectedFiles);
-    setSelectedFiles([]);
-  };
-
-
 
   if (isCollapsed) {
     return (

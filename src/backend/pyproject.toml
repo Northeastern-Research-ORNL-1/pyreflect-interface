@@ -1,5 +1,5 @@
 [project]
-name = "pyreflect-backend"
+name = "service"
 version = "0.1.0"
 description = "FastAPI backend for PyReflect interface"
 requires-python = ">=3.10,<3.13"
