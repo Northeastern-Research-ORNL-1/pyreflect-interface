@@ -1,17 +1,38 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useSession, signIn, signOut } from 'next-auth/react';
 import ParameterPanel from '../components/ParameterPanel';
 import GraphDisplay from '../components/GraphDisplay';
 import ConsoleOutput from '../components/ConsoleOutput';
 import ExploreSidebar from '../components/ExploreSidebar';
-import { FilmLayer, GeneratorParams, TrainingParams, GenerateResponse, Limits, LimitsResponse, DEFAULT_LIMITS, DataSource, Workflow, NrSldMode, UploadRole } from '@/types';
+import { FilmLayer, GeneratorParams, TrainingParams, GenerateResponse, Limits, LimitsResponse, DEFAULT_LIMITS, DataSource, Workflow, NrSldMode, UploadRole, ExportPngs } from '@/types';
 import packageJson from '../../package.json';
+import { toPng } from 'html-to-image';
+import { zipSync, strToU8 } from 'fflate';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const STORAGE_KEY = 'pyreflect_state';
 const APP_VERSION = `v${packageJson.version}`;
+
+const EXPORT_CHARTS = [
+  { id: 'nr', filename: 'neutron_reflectivity.png' },
+  { id: 'sld', filename: 'sld_profile.png' },
+  { id: 'training', filename: 'training_loss.png' },
+  { id: 'chi', filename: 'chi_parameters.png' },
+];
+
+type BundlePayload = {
+  params: { layers: FilmLayer[]; generator: GeneratorParams; training: TrainingParams };
+  result: GenerateResponse;
+};
+
+type BundleSelection = {
+  includeJson: boolean;
+  includePngNormal: boolean;
+  includePngExpanded: boolean;
+  includeModel: boolean;
+};
 
 interface BackendStatus {
   pyreflect_available: boolean;
@@ -78,6 +99,8 @@ export default function Home() {
   const [_error, setError] = useState<string | null>(null);
   const [consoleLogs, setConsoleLogs] = useState<string[]>([]);
   const [generationStart, setGenerationStart] = useState<number | null>(null);
+  const [epochProgress, setEpochProgress] = useState<{ current: number; total: number } | null>(null);
+  const [activeGenerationName, setActiveGenerationName] = useState<string | null>(null);
   const [backendStatus, setBackendStatus] = useState<BackendStatus | null>(null);
   const [limits, setLimits] = useState<Limits>(DEFAULT_LIMITS);
   const [isProduction, setIsProduction] = useState(false);
@@ -88,14 +111,45 @@ export default function Home() {
   const [autoGenerateModelStats, setAutoGenerateModelStats] = useState(true);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showActionsMenu, setShowActionsMenu] = useState(false);
+  const [showJsonMenu, setShowJsonMenu] = useState(false);
+  const [showJsonMenuMobile, setShowJsonMenuMobile] = useState(false);
+  const [showBundleConfirm, setShowBundleConfirm] = useState(false);
+  const [bundlePayload, setBundlePayload] = useState<BundlePayload | null>(null);
+  const [bundleSelection, setBundleSelection] = useState<BundleSelection>({
+    includeJson: true,
+    includePngNormal: true,
+    includePngExpanded: true,
+    includeModel: true,
+  });
+  const [exportPngs, setExportPngs] = useState<ExportPngs | null>(null);
+  const [shouldCapturePngs, setShouldCapturePngs] = useState(false);
+  const [bundleEstimate, setBundleEstimate] = useState<{
+    jsonBytes: number;
+    pngBytes: number;
+    pngNormalBytes: number;
+    pngExpandedBytes: number;
+    modelBytes: number | null;
+    modelSource?: string | null;
+    totalBytes: number | null;
+    estimating: boolean;
+  }>({
+    jsonBytes: 0,
+    pngBytes: 0,
+    pngNormalBytes: 0,
+    pngExpandedBytes: 0,
+    modelBytes: null,
+    modelSource: null,
+    totalBytes: null,
+    estimating: false,
+  });
+  const [bundleEstimateError, setBundleEstimateError] = useState<string | null>(null);
   const [showExplore, setShowExplore] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [importNamePopup, setImportNamePopup] = useState(false);
   const [pendingImportData, setPendingImportData] = useState<GenerateResponse | null>(null);
   const [importName, setImportName] = useState('');
-  const [showDownloadConfirm, setShowDownloadConfirm] = useState(false);
-  const [downloadTarget, setDownloadTarget] = useState<{model_id: string, model_size_mb?: number} | null>(null);
-  const [fetchedSize, setFetchedSize] = useState<number | null>(null);
+  const jsonMenuRef = useRef<HTMLDivElement>(null);
+  const bundlePngCacheRef = useRef<{ payload: BundlePayload | null; pngs: ExportPngs } | null>(null);
 
   const addLog = useCallback((message: string) => {
     const timestamp = new Date().toLocaleTimeString();
@@ -107,11 +161,12 @@ export default function Home() {
     if (!session?.user || !('id' in session.user)) return;
     
     try {
+      const { export_pngs, ...resultRest } = data.result;
       const payload = {
         layers: data.params.layers,
         generator: data.params.generator,
         training: data.params.training,
-        result: { ...data.result, name: data.name },
+        result: { ...resultRest, name: data.name },
         name: data.name
       };
 
@@ -168,12 +223,15 @@ export default function Home() {
     setGeneratorParams(DEFAULT_GENERATOR);
     setTrainingParams(DEFAULT_TRAINING);
     setGraphData(null);
+    setExportPngs(null);
+    setShouldCapturePngs(false);
     setConsoleLogs([]);
     setError(null);
     setDataSource('synthetic');
     setWorkflow('nr_sld');
     setNrSldMode('train');
     setAutoGenerateModelStats(true);
+    bundlePngCacheRef.current = null;
     if (typeof window !== 'undefined') {
       localStorage.removeItem(`${STORAGE_KEY}_layers`);
       localStorage.removeItem(`${STORAGE_KEY}_generator`);
@@ -241,7 +299,12 @@ export default function Home() {
 
   useEffect(() => {
     if (!isHydrated) return;
-    localStorage.setItem(`${STORAGE_KEY}_graphData`, JSON.stringify(graphData));
+    if (!graphData) {
+      localStorage.setItem(`${STORAGE_KEY}_graphData`, JSON.stringify(graphData));
+      return;
+    }
+    const { export_pngs, ...rest } = graphData;
+    localStorage.setItem(`${STORAGE_KEY}_graphData`, JSON.stringify(rest));
   }, [graphData, isHydrated]);
 
   useEffect(() => {
@@ -268,6 +331,16 @@ export default function Home() {
     if (!isHydrated) return;
     localStorage.setItem(`${STORAGE_KEY}_autoGenerate`, String(autoGenerateModelStats));
   }, [autoGenerateModelStats, isHydrated]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (jsonMenuRef.current && !jsonMenuRef.current.contains(event.target as Node)) {
+        setShowJsonMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Fetch backend status and limits on mount
   useEffect(() => {
@@ -304,6 +377,10 @@ export default function Home() {
   const handleGenerate = useCallback(async (name?: string) => {
     setIsGenerating(true);
     setGenerationStart(Date.now());
+    setExportPngs(null);
+    setShouldCapturePngs(false);
+    setEpochProgress(null);
+    setActiveGenerationName(name ?? null);
     setError(null);
     addLog('Starting generation...');
     if (dataSource === 'real') {
@@ -364,9 +441,13 @@ export default function Home() {
             if (currentEvent === 'log') {
               addLog(data);
             } else if (currentEvent === 'progress') {
-              // Could update a progress bar here
+              if (typeof data.epoch === 'number' && typeof data.total === 'number') {
+                setEpochProgress({ current: data.epoch, total: data.total });
+              }
             } else if (currentEvent === 'result') {
               setGraphData(data as GenerateResponse);
+              setExportPngs(null);
+              setShouldCapturePngs(true);
               addLog(`Generation complete. MSE: ${data.metrics.mse.toFixed(4)}`);
             } else if (currentEvent === 'error') {
               throw new Error(data);
@@ -381,6 +462,8 @@ export default function Home() {
     } finally {
       setIsGenerating(false);
       setGenerationStart(null);
+      setEpochProgress(null);
+      setActiveGenerationName(null);
     }
   }, [filmLayers, generatorParams, trainingParams, addLog, session, dataSource, workflow, nrSldMode, autoGenerateModelStats]);
 
@@ -457,15 +540,23 @@ export default function Home() {
             }
         }
 
+        const { export_pngs, ...resultRest } = resultData;
+        if (export_pngs) {
+          setExportPngs(export_pngs);
+        } else {
+          setExportPngs(null);
+        }
+        const cleanedResult = resultRest as GenerateResponse;
+
         // Handle Name & Save
-        const finalName = resultData.name;
+        const finalName = cleanedResult.name;
         
         if (finalName) {
-            setGraphData(resultData);
+            setGraphData(cleanedResult);
             addLog(`Imported data from ${file.name} (Name: ${finalName})`);
             saveToHistory({
                 params: paramsData,
-                result: resultData,
+                result: cleanedResult,
                 name: finalName
             });
         } else {
@@ -478,7 +569,7 @@ export default function Home() {
             // and confirmImportName will use DEFAULTs (which is wrong if I just set them!).
             
             // Let's update pending logic.
-            setPendingImportData(resultData);
+            setPendingImportData(cleanedResult);
             setImportName('');
             setImportNamePopup(true);
             
@@ -502,102 +593,469 @@ export default function Home() {
     setGeneratorParams(params.generator);
     setTrainingParams(params.training);
     setGraphData(result);
+    setExportPngs(null);
     addLog('Loaded saved session from history');
   }, [addLog]);
 
-  const handleExportAll = useCallback(() => {
-    if (!graphData) return;
-    
-    // Create export object containing params and result
-    const exportData = {
-        params: {
-            layers: filmLayers,
-            generator: generatorParams,
-            training: trainingParams
-        },
-        result: graphData
-    };
-
-    const fileName = `pyreflect_export_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-    const jsonStr = JSON.stringify(exportData, null, 2);
+  const downloadJsonPayload = useCallback((payload: object, fileName?: string) => {
+    const name = fileName ?? `pyreflect_export_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    const jsonStr = JSON.stringify(payload, null, 2);
     const blob = new Blob([jsonStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    
     const link = document.createElement('a');
     link.href = url;
-    link.download = fileName;
+    link.download = name;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    addLog('Exported full session data (params + results)');
-  }, [graphData, filmLayers, generatorParams, trainingParams, addLog]);
+  }, []);
 
-  const handleDownloadModelClick = useCallback(() => {
-     if (!graphData?.model_id) return;
-     setDownloadTarget(null); // Clear specific target to use current graphData
-     setShowDownloadConfirm(true);
-  }, [graphData]);
-  
-  const handleSidebarDownloadRequest = useCallback((model_id: string, model_size_mb?: number) => {
-      setDownloadTarget({ model_id, model_size_mb });
-      setShowDownloadConfirm(true);
+  const formatBytes = useCallback((bytes: number | null) => {
+    if (bytes === null) return '—';
+    if (bytes < 1024) return `${bytes} B`;
+    const kb = bytes / 1024;
+    if (kb < 1024) return `${kb.toFixed(1)} KB`;
+    const mb = kb / 1024;
+    return `${mb.toFixed(2)} MB`;
+  }, []);
+
+  const waitForCharts = useCallback(async () => {
+    for (let i = 0; i < 8; i += 1) {
+      const nodes = document.querySelectorAll('[data-export-id]');
+      if (nodes.length > 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }
+  }, []);
+
+  const dataUrlToBase64 = useCallback((dataUrl: string) => {
+    const commaIndex = dataUrl.indexOf(',');
+    return commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl;
+  }, []);
+
+  const estimateBase64Bytes = useCallback((base64: string) => {
+    const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+    return Math.max(0, (base64.length * 3) / 4 - padding);
+  }, []);
+
+  const base64ToUint8 = useCallback((base64: string) => {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  }, []);
+
+  const captureChartPngs = useCallback(async () => {
+    await waitForCharts();
+    const normal: Record<string, string> = {};
+    const expanded: Record<string, string> = {};
+
+    for (const chart of EXPORT_CHARTS) {
+      const node = document.querySelector(`[data-export-id="${chart.id}"]`) as HTMLElement | null;
+      if (!node) continue;
+      const { clientWidth, clientHeight } = node;
+      if (clientWidth === 0 || clientHeight === 0) continue;
+
+      const normalUrl = await toPng(node, {
+        cacheBust: true,
+        backgroundColor: '#000000',
+        width: clientWidth,
+        height: clientHeight,
+        pixelRatio: 1,
+        style: {
+          transform: 'none',
+          position: 'static',
+          top: '0',
+          left: '0',
+          right: 'auto',
+          bottom: 'auto',
+          margin: '0',
+          width: `${clientWidth}px`,
+          height: `${clientHeight}px`,
+          animation: 'none',
+        },
+      });
+
+      const expandedUrl = await toPng(node, {
+        cacheBust: true,
+        backgroundColor: '#000000',
+        width: clientWidth,
+        height: clientHeight,
+        pixelRatio: 2,
+        style: {
+          transform: 'none',
+          position: 'static',
+          top: '0',
+          left: '0',
+          right: 'auto',
+          bottom: 'auto',
+          margin: '0',
+          width: `${clientWidth}px`,
+          height: `${clientHeight}px`,
+          animation: 'none',
+        },
+      });
+
+      normal[chart.id] = dataUrlToBase64(normalUrl);
+      expanded[chart.id] = dataUrlToBase64(expandedUrl);
+    }
+
+    return { encoding: 'base64', normal, expanded } as ExportPngs;
+  }, [waitForCharts, dataUrlToBase64]);
+
+  const openBundleConfirm = useCallback((payload: BundlePayload) => {
+    setBundlePayload(payload);
+    setShowBundleConfirm(true);
+    setBundleSelection({
+      includeJson: true,
+      includePngNormal: true,
+      includePngExpanded: true,
+      includeModel: Boolean(payload.result.model_id),
+    });
+    bundlePngCacheRef.current = null;
   }, []);
 
   useEffect(() => {
-    if (!showDownloadConfirm) {
-        setFetchedSize(null);
-        return;
-    }
-    const target = downloadTarget || graphData;
-    if (!target?.model_id) return;
+    if (!shouldCapturePngs || !graphData) return;
+    let cancelled = false;
 
-    if (target.model_size_mb) {
-        setFetchedSize(target.model_size_mb);
-    } else {
-        fetch(`${API_URL}/api/models/${target.model_id}/info`)
-          .then(res => res.json())
-          .then(data => {
-             if (data.size_mb) setFetchedSize(data.size_mb);
-          })
-          .catch(err => console.error("Size fetch failed", err));
-    }
-  }, [showDownloadConfirm, downloadTarget, graphData]);
-
-  const confirmDownloadModel = useCallback(() => {
-    const target = downloadTarget || graphData;
-    if (!target?.model_id) return;
-    
-    const link = document.createElement('a');
-    link.href = `${API_URL}/api/models/${target.model_id}`;
-    link.download = `model_${target.model_id}.pth`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    addLog('Downloading model file...');
-    setShowDownloadConfirm(false);
-    setDownloadTarget(null);
-  }, [graphData, downloadTarget, addLog]);
-
-  const handleDeleteModel = useCallback(async () => {
-    if (!graphData?.model_id) return;
-    if (!confirm('Are you sure you want to delete the local model file? This cannot be undone if not uploaded.')) return;
-    
-    try {
-        const res = await fetch(`${API_URL}/api/models/${graphData.model_id}`, { method: 'DELETE' });
-        if (res.ok) {
-            addLog('Local model file deleted.');
-            setShowDownloadConfirm(false);
-        } else {
-            throw new Error('Failed to delete');
+    const runCapture = async () => {
+      try {
+        const pngPayload = await captureChartPngs();
+        if (!cancelled) {
+          setExportPngs(pngPayload);
         }
-    } catch (e) {
-        addLog(`Error deleting model: ${e}`);
-        alert('Could not delete local model (maybe it is already gone or permission denied).');
+      } catch (err) {
+        addLog('Warning: Failed to auto-capture PNGs.');
+      } finally {
+        if (!cancelled) {
+          setShouldCapturePngs(false);
+        }
+      }
+    };
+
+    runCapture();
+    return () => {
+      cancelled = true;
+    };
+  }, [shouldCapturePngs, graphData, captureChartPngs, addLog]);
+
+  useEffect(() => {
+    if (!showBundleConfirm || !bundlePayload) return;
+    let cancelled = false;
+
+    const estimate = async () => {
+      setBundleEstimateError(null);
+      setBundleEstimate({
+        jsonBytes: 0,
+        pngBytes: 0,
+        pngNormalBytes: 0,
+        pngExpandedBytes: 0,
+        modelBytes: null,
+        modelSource: null,
+        totalBytes: null,
+        estimating: true,
+      });
+
+      let pngBytes = 0;
+      let pngNormalBytes = 0;
+      let pngExpandedBytes = 0;
+      let jsonBytes = 0;
+      const needsPngs =
+        bundleSelection.includeJson ||
+        bundleSelection.includePngNormal ||
+        bundleSelection.includePngExpanded;
+
+      try {
+        if (needsPngs) {
+          const cached = bundlePngCacheRef.current;
+          const pngPayload =
+            cached && cached.payload === bundlePayload
+              ? cached.pngs
+              : exportPngs ?? await captureChartPngs();
+          if (bundleSelection.includeJson) {
+            const exportData = {
+              params: {
+                layers: bundlePayload.params.layers,
+                generator: bundlePayload.params.generator,
+                training: bundlePayload.params.training,
+              },
+              result: {
+                ...bundlePayload.result,
+                export_pngs: pngPayload,
+              },
+            };
+            const jsonStr = JSON.stringify(exportData, null, 2);
+            jsonBytes = new TextEncoder().encode(jsonStr).length;
+          }
+
+          const normalValues = bundleSelection.includePngNormal
+            ? Object.values(pngPayload.normal)
+            : [];
+          const expandedValues = bundleSelection.includePngExpanded
+            ? Object.values(pngPayload.expanded)
+            : [];
+          pngNormalBytes = normalValues.reduce(
+            (sum, base64) => sum + estimateBase64Bytes(base64),
+            0
+          );
+          pngExpandedBytes = expandedValues.reduce(
+            (sum, base64) => sum + estimateBase64Bytes(base64),
+            0
+          );
+          pngBytes = pngNormalBytes + pngExpandedBytes;
+          bundlePngCacheRef.current = { payload: bundlePayload, pngs: pngPayload };
+        }
+      } catch (err) {
+        setBundleEstimateError('Could not estimate PNG size.');
+      }
+
+      let modelBytes: number | null = null;
+      let modelSource: string | null = null;
+      if (bundleSelection.includeModel && bundlePayload.result.model_id) {
+        try {
+          const res = await fetch(`${API_URL}/api/models/${bundlePayload.result.model_id}/info`);
+          if (res.ok) {
+            const data = await res.json();
+            if (typeof data.size_mb === 'number') {
+              modelBytes = data.size_mb * 1024 * 1024;
+            }
+            modelSource = data.source || null;
+          }
+        } catch {
+          modelSource = null;
+        }
+      }
+
+      const totalBytes = jsonBytes + pngBytes + (modelBytes ?? 0);
+
+      if (cancelled) return;
+      setBundleEstimate({
+        jsonBytes,
+        pngBytes,
+        pngNormalBytes,
+        pngExpandedBytes,
+        modelBytes,
+        modelSource,
+        totalBytes,
+        estimating: false,
+      });
+    };
+
+    estimate();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    showBundleConfirm,
+    bundlePayload,
+    captureChartPngs,
+    exportPngs,
+    estimateBase64Bytes,
+    bundleSelection,
+  ]);
+
+  const handleExportAll = useCallback(async () => {
+    if (!graphData) return;
+
+    let pngPayload = exportPngs;
+    if (!pngPayload) {
+      try {
+        pngPayload = await captureChartPngs();
+        setExportPngs(pngPayload);
+      } catch {
+        addLog('Warning: PNG export capture failed.');
+      }
     }
-  }, [graphData, addLog]);
 
+    const exportData = {
+      params: {
+        layers: filmLayers,
+        generator: generatorParams,
+        training: trainingParams,
+      },
+      result: {
+        ...graphData,
+        export_pngs: pngPayload ?? graphData.export_pngs,
+      },
+    };
 
+    downloadJsonPayload(exportData);
+    addLog('Exported full session data (params + results)');
+  }, [graphData, filmLayers, generatorParams, trainingParams, exportPngs, captureChartPngs, addLog, downloadJsonPayload]);
+
+  const handleDownloadBundle = useCallback(async (payload?: BundlePayload) => {
+    const resolvedResult = payload?.result ?? graphData;
+    if (!resolvedResult) {
+      addLog('Nothing to download yet.');
+      return;
+    }
+
+    const resolvedParams = payload?.params ?? {
+      layers: filmLayers,
+      generator: generatorParams,
+      training: trainingParams,
+    };
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const baseName = resolvedResult.name
+      ? resolvedResult.name.replace(/[^a-z0-9_-]+/gi, '_').slice(0, 32)
+      : `pyreflect_bundle_${timestamp}`;
+    const hasSelection =
+      bundleSelection.includeJson ||
+      bundleSelection.includePngNormal ||
+      bundleSelection.includePngExpanded ||
+      (bundleSelection.includeModel && Boolean(resolvedResult.model_id));
+
+    if (!hasSelection) {
+      addLog('No download items selected.');
+      return;
+    }
+
+    const files: Record<string, Uint8Array> = {};
+
+    try {
+      addLog('Preparing download bundle...');
+      const needsPngs =
+        bundleSelection.includeJson ||
+        bundleSelection.includePngNormal ||
+        bundleSelection.includePngExpanded;
+
+      let pngPayload: ExportPngs | null = null;
+      if (needsPngs) {
+        const cached = bundlePngCacheRef.current;
+        pngPayload =
+          cached && cached.payload === payload
+            ? cached.pngs
+            : exportPngs ?? await captureChartPngs();
+      }
+
+      if (bundleSelection.includeJson && pngPayload) {
+        const exportData = {
+          params: {
+            layers: resolvedParams.layers,
+            generator: resolvedParams.generator,
+            training: resolvedParams.training,
+          },
+          result: {
+            ...resolvedResult,
+            export_pngs: pngPayload,
+          },
+        };
+        files['output.json'] = strToU8(JSON.stringify(exportData, null, 2));
+      }
+
+      if (pngPayload) {
+        for (const chart of EXPORT_CHARTS) {
+          if (bundleSelection.includePngNormal) {
+            const normalBase64 = pngPayload.normal[chart.id];
+            if (normalBase64) {
+              files[chart.filename] = base64ToUint8(normalBase64);
+            }
+          }
+          if (bundleSelection.includePngExpanded) {
+            const expandedBase64 = pngPayload.expanded[chart.id];
+            if (expandedBase64) {
+              const expandedName = chart.filename.replace(/\.png$/i, '_expanded.png');
+              files[expandedName] = base64ToUint8(expandedBase64);
+            }
+          }
+        }
+      }
+
+      if (bundleSelection.includeModel && resolvedResult.model_id) {
+        const modelRes = await fetch(`${API_URL}/api/models/${resolvedResult.model_id}`);
+        if (modelRes.ok) {
+          const modelBuffer = await modelRes.arrayBuffer();
+          files[`model_${resolvedResult.model_id}.pth`] = new Uint8Array(modelBuffer);
+        } else {
+          addLog('Model file not found for this run.');
+        }
+      } else if (bundleSelection.includeModel && !resolvedResult.model_id) {
+        addLog('No model file associated with this run.');
+      }
+
+      const zipData = zipSync(files, { level: 6 });
+      const zipBuffer = new ArrayBuffer(zipData.byteLength);
+      new Uint8Array(zipBuffer).set(zipData);
+      const blob = new Blob([zipBuffer], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${baseName}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      addLog('Download bundle ready.');
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to build download bundle';
+      addLog(`Download error: ${errorMsg}`);
+    }
+  }, [
+    graphData,
+    filmLayers,
+    generatorParams,
+    trainingParams,
+    captureChartPngs,
+    exportPngs,
+    base64ToUint8,
+    bundleSelection,
+    addLog,
+  ]);
+
+  const handleDownloadBundleClick = useCallback(() => {
+    if (!graphData) {
+      addLog('No results to download yet.');
+      return;
+    }
+    openBundleConfirm({
+      params: { layers: filmLayers, generator: generatorParams, training: trainingParams },
+      result: graphData,
+    });
+  }, [graphData, filmLayers, generatorParams, trainingParams, openBundleConfirm, addLog]);
+
+  const handleSidebarDownloadRequest = useCallback(async (saveId: string) => {
+    if (!session?.user || !('id' in session.user)) {
+      alert('Please sign in to download history items.');
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_URL}/api/history/${saveId}`, {
+        headers: {
+          'X-User-ID': session.user.id as string,
+        },
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to load history item for download.');
+      }
+
+      const data = await res.json();
+      if (!data?.params || !data?.result) {
+        throw new Error('History item is missing data.');
+      }
+
+      handleLoadSave(data.params, data.result);
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      openBundleConfirm({ params: data.params, result: data.result });
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Download failed';
+      addLog(`Download error: ${errorMsg}`);
+    }
+  }, [session, handleLoadSave, openBundleConfirm, addLog]);
+
+  const handleConfirmBundleDownload = useCallback(async () => {
+    if (!bundlePayload) return;
+    await handleDownloadBundle(bundlePayload);
+    setShowBundleConfirm(false);
+    setBundlePayload(null);
+  }, [bundlePayload, handleDownloadBundle]);
 
   return (
     <div className="container">
@@ -609,34 +1067,80 @@ export default function Home() {
           {isProduction && <span className="header__version" style={{ color: '#f59e0b', marginLeft: '8px' }}>PROD</span>}
           <span className={`status ${isGenerating ? 'status--training' : 'status--active'}`} style={{ marginLeft: '12px' }}>
             <span className="status__dot"></span>
-            <span className="header__status-text">{isGenerating ? 'Training...' : 'Ready'}</span>
+            <span className="header__status-text">
+              {isGenerating
+                ? epochProgress
+                  ? `Training... (${epochProgress.current}/${epochProgress.total})`
+                  : 'Training...'
+                : 'Ready'}
+            </span>
           </span>
         </div>
         <nav className="header__nav">
           {/* Desktop: show buttons inline */}
           <div className="header__actions-desktop">
+            <a
+              className="header__export-btn"
+              href="https://github.com/Northeastern-Research-ORNL-1/pyreflect-interface"
+              target="_blank"
+              rel="noopener noreferrer"
+              title="View on GitHub"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M12 .5C5.65.5.5 5.82.5 12.38c0 5.25 3.44 9.7 8.21 11.27.6.11.82-.27.82-.6 0-.3-.01-1.1-.02-2.16-3.34.75-4.04-1.66-4.04-1.66-.55-1.44-1.34-1.82-1.34-1.82-1.09-.77.08-.76.08-.76 1.2.09 1.83 1.27 1.83 1.27 1.07 1.88 2.8 1.34 3.49 1.03.11-.8.42-1.34.76-1.65-2.66-.31-5.47-1.36-5.47-6.06 0-1.34.46-2.44 1.23-3.31-.12-.31-.53-1.57.12-3.27 0 0 1.01-.33 3.3 1.26a11.2 11.2 0 0 1 3-.41c1.02 0 2.04.14 3 .41 2.29-1.59 3.3-1.26 3.3-1.26.65 1.7.24 2.96.12 3.27.77.87 1.23 1.97 1.23 3.31 0 4.71-2.81 5.75-5.49 6.05.43.38.81 1.13.81 2.28 0 1.65-.01 2.98-.01 3.39 0 .33.22.72.83.6 4.76-1.57 8.2-6.02 8.2-11.27C23.5 5.82 18.35.5 12 .5z" />
+              </svg>
+              <span className="header__btn-label">GitHub</span>
+            </a>
             <button className="header__export-btn" onClick={() => setShowExplore(true)}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
               </svg>
               <span className="header__btn-label">History</span>
             </button>
-            <button className="header__export-btn" onClick={handleImportJSON}>
-              <span>↑</span><span className="header__btn-label">Import</span>
-            </button>
-            {graphData && (
-              <button className="header__export-btn" onClick={handleExportAll}>
-                <span>↓</span><span className="header__btn-label">Export</span>
+            <div className="header__menu" ref={jsonMenuRef}>
+              <button
+                className="header__export-btn"
+                onClick={() => setShowJsonMenu((prev) => !prev)}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M1.5 12s3.6-7 10.5-7 10.5 7 10.5 7-3.6 7-10.5 7-10.5-7-10.5-7z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+                <span className="header__btn-label">View</span>
               </button>
-            )}
-            {graphData?.model_id && (
-              <button className="header__export-btn" onClick={handleDownloadModelClick}>
+              {showJsonMenu && (
+                <div className="header__dropdown">
+                  <button
+                    className="header__dropdown-item"
+                    onClick={() => {
+                      handleImportJSON();
+                      setShowJsonMenu(false);
+                    }}
+                  >
+                    <span>↑</span> Import JSON
+                  </button>
+                  {graphData && (
+                    <button
+                      className="header__dropdown-item"
+                      onClick={() => {
+                        handleExportAll();
+                        setShowJsonMenu(false);
+                      }}
+                    >
+                      <span>↓</span> Export JSON
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+            {graphData && (
+              <button className="header__export-btn" onClick={handleDownloadBundleClick}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                   <polyline points="7 10 12 15 17 10"></polyline>
                   <line x1="12" y1="15" x2="12" y2="3"></line>
                 </svg>
-                <span className="header__btn-label">Model</span>
+                <span className="header__btn-label">Download</span>
               </button>
             )}
           </div>
@@ -645,29 +1149,74 @@ export default function Home() {
           <div className="header__actions-mobile">
             <button 
               className="header__export-btn" 
-              onClick={() => setShowActionsMenu(!showActionsMenu)}
+              onClick={() => {
+                setShowActionsMenu(!showActionsMenu);
+                if (showActionsMenu) {
+                  setShowJsonMenuMobile(false);
+                }
+              }}
             >
               <span>≡</span>
             </button>
             {showActionsMenu && (
               <div className="header__dropdown">
+                <a
+                  className="header__dropdown-item"
+                  href="https://github.com/Northeastern-Research-ORNL-1/pyreflect-interface"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setShowActionsMenu(false)}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M12 .5C5.65.5.5 5.82.5 12.38c0 5.25 3.44 9.7 8.21 11.27.6.11.82-.27.82-.6 0-.3-.01-1.1-.02-2.16-3.34.75-4.04-1.66-4.04-1.66-.55-1.44-1.34-1.82-1.34-1.82-1.09-.77.08-.76.08-.76 1.2.09 1.83 1.27 1.83 1.27 1.07 1.88 2.8 1.34 3.49 1.03.11-.8.42-1.34.76-1.65-2.66-.31-5.47-1.36-5.47-6.06 0-1.34.46-2.44 1.23-3.31-.12-.31-.53-1.57.12-3.27 0 0 1.01-.33 3.3 1.26a11.2 11.2 0 0 1 3-.41c1.02 0 2.04.14 3 .41 2.29-1.59 3.3-1.26 3.3-1.26.65 1.7.24 2.96.12 3.27.77.87 1.23 1.97 1.23 3.31 0 4.71-2.81 5.75-5.49 6.05.43.38.81 1.13.81 2.28 0 1.65-.01 2.98-.01 3.39 0 .33.22.72.83.6 4.76-1.57 8.2-6.02 8.2-11.27C23.5 5.82 18.35.5 12 .5z" />
+                  </svg>
+                  GitHub
+                </a>
                 <button className="header__dropdown-item" onClick={() => { setShowExplore(true); setShowActionsMenu(false); }}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
                   </svg> 
                   History
                 </button>
-                <button className="header__dropdown-item" onClick={() => { handleImportJSON(); setShowActionsMenu(false); }}>
-                  <span>↑</span> Import
+                <button
+                  className="header__dropdown-item"
+                  onClick={() => setShowJsonMenuMobile((prev) => !prev)}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M1.5 12s3.6-7 10.5-7 10.5 7 10.5 7-3.6 7-10.5 7-10.5-7-10.5-7z" />
+                    <circle cx="12" cy="12" r="3" />
+                  </svg>
+                  <span>{showJsonMenuMobile ? '▾' : '▸'}</span> JSON
                 </button>
-                {graphData && (
-                  <button className="header__dropdown-item" onClick={() => { handleExportAll(); setShowActionsMenu(false); }}>
-                    <span>↓</span> Export
-                  </button>
+                {showJsonMenuMobile && (
+                  <div className="header__dropdown-sub">
+                    <button
+                      className="header__dropdown-item header__dropdown-item--sub"
+                      onClick={() => {
+                        handleImportJSON();
+                        setShowJsonMenuMobile(false);
+                        setShowActionsMenu(false);
+                      }}
+                    >
+                      <span>↑</span> Import
+                    </button>
+                    {graphData && (
+                      <button
+                        className="header__dropdown-item header__dropdown-item--sub"
+                        onClick={() => {
+                          handleExportAll();
+                          setShowJsonMenuMobile(false);
+                          setShowActionsMenu(false);
+                        }}
+                      >
+                        <span>↓</span> Export
+                      </button>
+                    )}
+                  </div>
                 )}
-                {graphData?.model_id && (
-                  <button className="header__dropdown-item" onClick={() => { handleDownloadModelClick(); setShowActionsMenu(false); }}>
-                    <span>↓</span> Model
+                {graphData && (
+                  <button className="header__dropdown-item" onClick={() => { handleDownloadBundleClick(); setShowActionsMenu(false); setShowJsonMenuMobile(false); }}>
+                    <span>↓</span> Download
                   </button>
                 )}
               </div>
@@ -747,7 +1296,151 @@ export default function Home() {
         userId={session?.user ? (session.user as any).id : undefined}
         onLoadSave={handleLoadSave}
         onRequestDownload={handleSidebarDownloadRequest}
+        inProgress={isGenerating ? { name: activeGenerationName, epochProgress } : null}
       />
+
+      {showBundleConfirm && bundlePayload && (
+        <>
+          <div
+            className="model-download-overlay"
+            onClick={() => {
+              setShowBundleConfirm(false);
+              setBundlePayload(null);
+            }}
+          />
+          <div className="model-download-popup">
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '13px', marginBottom: '16px', lineHeight: '1.4' }}>
+              <div style={{ fontWeight: 600, marginBottom: '8px' }}>Download Bundle?</div>
+              <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginBottom: '10px' }}>
+                Includes model (.pth), normal + expanded chart PNGs, and output.json. Model is pulled from Hugging Face if not local.
+              </div>
+              <div className="download-options">
+                <label className="download-option">
+                  <span className="download-option__label">
+                    <input
+                      type="checkbox"
+                      className="download-checkbox"
+                      checked={bundleSelection.includeJson}
+                      onChange={(e) =>
+                        setBundleSelection((prev) => ({ ...prev, includeJson: e.target.checked }))
+                      }
+                    />
+                    <span>JSON (snapshot)</span>
+                  </span>
+                  <span className="download-option__size">
+                    {bundleSelection.includeJson
+                      ? bundleEstimate.estimating
+                        ? 'Estimating...'
+                        : formatBytes(bundleEstimate.jsonBytes)
+                      : 'Not selected'}
+                  </span>
+                </label>
+                <label className="download-option">
+                  <span className="download-option__label">
+                    <input
+                      type="checkbox"
+                      className="download-checkbox"
+                      checked={bundleSelection.includePngNormal}
+                      onChange={(e) =>
+                        setBundleSelection((prev) => ({ ...prev, includePngNormal: e.target.checked }))
+                      }
+                    />
+                    <span>PNGs (normal)</span>
+                  </span>
+                  <span className="download-option__size">
+                    {bundleSelection.includePngNormal
+                      ? bundleEstimate.estimating
+                        ? 'Estimating...'
+                        : formatBytes(bundleEstimate.pngNormalBytes)
+                      : 'Not selected'}
+                  </span>
+                </label>
+                <label className="download-option">
+                  <span className="download-option__label">
+                    <input
+                      type="checkbox"
+                      className="download-checkbox"
+                      checked={bundleSelection.includePngExpanded}
+                      onChange={(e) =>
+                        setBundleSelection((prev) => ({ ...prev, includePngExpanded: e.target.checked }))
+                      }
+                    />
+                    <span>PNGs (expanded)</span>
+                  </span>
+                  <span className="download-option__size">
+                    {bundleSelection.includePngExpanded
+                      ? bundleEstimate.estimating
+                        ? 'Estimating...'
+                        : formatBytes(bundleEstimate.pngExpandedBytes)
+                      : 'Not selected'}
+                  </span>
+                </label>
+                <label className="download-option">
+                  <span className="download-option__label">
+                    <input
+                      type="checkbox"
+                      className="download-checkbox"
+                      checked={bundleSelection.includeModel}
+                      disabled={!bundlePayload.result.model_id}
+                      onChange={(e) =>
+                        setBundleSelection((prev) => ({ ...prev, includeModel: e.target.checked }))
+                      }
+                    />
+                    <span>Model (Hugging Face)</span>
+                  </span>
+                  <span className="download-option__size">
+                    {bundlePayload.result.model_id
+                      ? bundleSelection.includeModel
+                        ? bundleEstimate.modelBytes !== null
+                          ? `${formatBytes(bundleEstimate.modelBytes)}`
+                          : bundleEstimate.estimating
+                            ? 'Estimating...'
+                            : 'Unknown'
+                        : 'Not selected'
+                      : 'Not available'}
+                  </span>
+                </label>
+              </div>
+              <div style={{ fontSize: '12px' }}>
+                Total: <span style={{ color: 'var(--text-secondary)' }}>
+                  {bundleEstimate.estimating ? 'Estimating...' : formatBytes(bundleEstimate.totalBytes)}
+                  {bundleSelection.includeModel && bundlePayload.result.model_id && bundleEstimate.modelBytes === null ? ' + model' : ''}
+                </span>
+              </div>
+              {bundleEstimateError && (
+                <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: '8px' }}>
+                  {bundleEstimateError}
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button 
+                className="btn btn--outline" 
+                onClick={() => {
+                  setShowBundleConfirm(false);
+                  setBundlePayload(null);
+                }}
+                style={{ padding: '6px 12px', fontSize: '11px' }}
+              >
+                CANCEL
+              </button>
+              <button 
+                className="btn" 
+                onClick={handleConfirmBundleDownload}
+                style={{ padding: '6px 12px', fontSize: '11px' }}
+                disabled={!(
+                  bundleSelection.includeJson ||
+                  bundleSelection.includePngNormal ||
+                  bundleSelection.includePngExpanded ||
+                  (bundleSelection.includeModel && Boolean(bundlePayload.result.model_id))
+                )}
+              >
+                DOWNLOAD
+              </button>
+            </div>
+          </div>
+        </>
+      )}
       
       {importNamePopup && (
         <div className="modal-overlay">
@@ -774,38 +1467,6 @@ export default function Home() {
             </div>
           </div>
         </div>
-      )}
-      {showDownloadConfirm && (
-        <>
-          <div className="model-download-overlay" onClick={() => setShowDownloadConfirm(false)} />
-          <div className="model-download-popup">
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '13px', marginBottom: '16px', lineHeight: '1.4' }}>
-              <div style={{ fontWeight: 600, marginBottom: '8px' }}>Download Trained Model?</div>
-              <div>Size: <span style={{ color: 'var(--text-secondary)' }}>
-                {fetchedSize ? `~${fetchedSize.toFixed(2)} MB` : 'Checking...'}
-              </span></div>
-              <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: '4px' }}>
-                This is the raw PyTorch state dictionary (.pth)
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-              <button 
-                className="btn btn--outline" 
-                onClick={() => { setShowDownloadConfirm(false); setDownloadTarget(null); }}
-                style={{ padding: '6px 12px', fontSize: '11px' }}
-              >
-                CANCEL
-              </button>
-              <button 
-                className="btn" 
-                onClick={confirmDownloadModel}
-                style={{ padding: '6px 12px', fontSize: '11px' }}
-              >
-                DOWNLOAD
-              </button>
-            </div>
-          </div>
-        </>
       )}
     </div>
   );

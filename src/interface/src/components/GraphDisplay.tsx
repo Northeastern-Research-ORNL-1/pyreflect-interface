@@ -189,7 +189,7 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
       {/* Graphs Grid */}
       <div className={expandedCard ? `graph-container ${styles.expandedContainer}` : 'graph-container'}>
         {/* NR Curve */}
-        <div className={getCardClassName('nr')} ref={nrCardRef}>
+        <div className={getCardClassName('nr')} ref={nrCardRef} data-export-id="nr">
           <div className="graph-card__header">
             <span className="graph-card__title">Neutron Reflectivity</span>
             <div className={styles.headerActions}>
@@ -265,7 +265,7 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
         </div>
 
         {/* SLD Profile */}
-        <div className={getCardClassName('sld')} ref={sldCardRef}>
+        <div className={getCardClassName('sld')} ref={sldCardRef} data-export-id="sld">
           <div className="graph-card__header">
             <span className="graph-card__title">SLD Profile</span>
             <div className={styles.headerActions}>
@@ -338,7 +338,7 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
         </div>
 
         {/* Training Loss */}
-        <div className={getCardClassName('training')} ref={trainingCardRef}>
+        <div className={getCardClassName('training')} ref={trainingCardRef} data-export-id="training">
           <div className="graph-card__header">
             <span className="graph-card__title">Training Loss</span>
             <div className={styles.headerActions}>
@@ -409,7 +409,7 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
         </div>
 
         {/* Chi Parameters */}
-        <div className={getCardClassName('chi')} ref={chiCardRef}>
+        <div className={getCardClassName('chi')} ref={chiCardRef} data-export-id="chi">
           <div className="graph-card__header">
             <span className="graph-card__title">Chi Parameters</span>
             <div className={styles.headerActions}>

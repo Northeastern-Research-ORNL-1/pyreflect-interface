@@ -27,20 +27,37 @@ interface SavedGeneration {
   hf_url?: string;
 }
 
+interface InProgressStatus {
+  name?: string | null;
+  epochProgress?: { current: number; total: number } | null;
+}
+
 interface ExploreSidebarProps {
   isOpen: boolean;
   onClose: () => void;
   userId?: string;
   onLoadSave: (params: { layers: FilmLayer[]; generator: GeneratorParams; training: TrainingParams }, result: GenerateResponse) => void;
-  onRequestDownload: (model_id: string, model_size_mb?: number) => void;
+  onRequestDownload: (saveId: string) => void;
+  inProgress?: InProgressStatus | null;
 }
 
-export default function ExploreSidebar({ isOpen, onClose, userId, onLoadSave, onRequestDownload }: ExploreSidebarProps) {
+export default function ExploreSidebar({
+  isOpen,
+  onClose,
+  userId,
+  onLoadSave,
+  onRequestDownload,
+  inProgress,
+}: ExploreSidebarProps) {
   const [history, setHistory] = useState<SavedGeneration[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const progressPercent =
+    inProgress?.epochProgress && inProgress.epochProgress.total > 0
+      ? Math.min(100, Math.max(0, (inProgress.epochProgress.current / inProgress.epochProgress.total) * 100))
+      : null;
 
   const requestDelete = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
@@ -163,6 +180,28 @@ export default function ExploreSidebar({ isOpen, onClose, userId, onLoadSave, on
         </div>
         
         <div className={styles.content}>
+          {inProgress && (
+            <div className={`${styles.historyItem} ${styles.historyItemInProgress}`}>
+              <div className={styles.itemHeader}>
+                <span className={styles.itemName}>In progress</span>
+                <span className={styles.progressStatus}>Generating</span>
+              </div>
+              {inProgress.name && (
+                <div className={styles.itemSubDate}>{inProgress.name}</div>
+              )}
+              <div className={styles.paramsInfo}>
+                {inProgress.epochProgress
+                  ? `Epoch ${inProgress.epochProgress.current}/${inProgress.epochProgress.total}`
+                  : 'Working...'}
+              </div>
+              <div className={styles.progressBar}>
+                <div
+                  className={`${styles.progressFill} ${progressPercent === null ? styles.progressIndeterminate : ''}`}
+                  style={progressPercent === null ? undefined : { width: `${progressPercent}%` }}
+                />
+              </div>
+            </div>
+          )}
           {!userId ? (
             <div className={styles.emptyState}>Please sign in to view history</div>
           ) : loading ? (
@@ -210,14 +249,14 @@ export default function ExploreSidebar({ isOpen, onClose, userId, onLoadSave, on
                           </svg>
                         </a>
                     )}
-                    {item.result?.model_id && (
+                    {item.result && (
                       <button 
                         className={styles.deleteBtn} 
                         onClick={(e) => {
                             e.stopPropagation();
-                            onRequestDownload(item.result!.model_id!, item.result?.model_size_mb);
+                            onRequestDownload(item._id);
                         }}
-                        title="Download Model"
+                        title="Download Bundle"
                         style={{ opacity: 1, fontSize: '14px', marginLeft: 0 }}
                       >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
