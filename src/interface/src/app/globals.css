@@ -152,7 +152,7 @@ a:hover {
 .header__nav {
   display: flex;
   align-items: center;
-  gap: var(--space-lg);
+  gap: var(--space-md);
 }
 
 .header__export-btn {
@@ -166,11 +166,125 @@ a:hover {
   letter-spacing: 0.05em;
   cursor: pointer;
   transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 32px;
+  height: 32px;
 }
 
 .header__export-btn:hover {
   background: var(--text-primary);
   color: var(--bg-primary);
+}
+
+.header__export-btn--danger:hover {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #fff;
+}
+
+.header__export-btn--success:hover {
+  background: #16a34a;
+  border-color: #16a34a;
+  color: #fff;
+}
+
+.header__user {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.header__btn-label {
+  display: inline;
+}
+
+/* Desktop actions - visible by default */
+.header__actions-desktop {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+/* Mobile actions - hidden by default */
+.header__actions-mobile {
+  display: none;
+  position: relative;
+}
+
+/* Dropdown menu */
+.header__dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: var(--space-sm);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  min-width: 140px;
+  z-index: 100;
+}
+
+.header__dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-primary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  text-align: left;
+}
+
+.header__dropdown-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.header__dropdown-item--success:hover {
+  background: #16a34a;
+  color: #fff;
+}
+
+/* Responsive header on smaller screens */
+@media (max-width: 1024px) {
+  .header__nav {
+    gap: var(--space-sm);
+  }
+  
+  .header__btn-label {
+    display: none;
+  }
+  
+  .header__export-btn {
+    padding: 0;
+    width: 32px;
+    min-width: 32px;
+  }
+  
+  .header__status-text {
+    display: none;
+  }
+  
+  /* Hide desktop actions, show mobile */
+  .header__actions-desktop {
+    display: none;
+  }
+  
+  .header__actions-mobile {
+    display: block;
+  }
+
+  .header__user {
+    gap: var(--space-sm);
+  }
 }
 
 .main {

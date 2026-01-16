@@ -58,6 +58,7 @@ export default function Home() {
   const [isProduction, setIsProduction] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showActionsMenu, setShowActionsMenu] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   const addLog = useCallback((message: string) => {
@@ -350,45 +351,79 @@ export default function Home() {
           {isProduction && <span className="header__version" style={{ color: '#f59e0b', marginLeft: '8px' }}>PROD</span>}
           <span className={`status ${isGenerating ? 'status--training' : 'status--active'}`} style={{ marginLeft: '12px' }}>
             <span className="status__dot"></span>
-            {isGenerating ? 'Training...' : 'Ready'}
+            <span className="header__status-text">{isGenerating ? 'Training...' : 'Ready'}</span>
           </span>
         </div>
         <nav className="header__nav">
-          <button className="header__export-btn" onClick={handleImportJSON}>
-            ↑ Import JSON
-          </button>
-          {graphData && (
-            <button className="header__export-btn" onClick={handleExportAll}>
-              ↓ Export All
+          {/* Desktop: show buttons inline */}
+          <div className="header__actions-desktop">
+            <button className="header__export-btn" onClick={handleImportJSON}>
+              <span>↑</span><span className="header__btn-label">Import</span>
             </button>
-          )}
-          {graphData && session && (
+            {graphData && (
+              <button className="header__export-btn" onClick={handleExportAll}>
+                <span>↓</span><span className="header__btn-label">Export</span>
+              </button>
+            )}
+            {graphData && session && (
+              <button 
+                className="header__export-btn header__export-btn--success" 
+                onClick={handleSave}
+                disabled={isSaving}
+              >
+                <span>{isSaving ? '...' : '◇'}</span><span className="header__btn-label">{isSaving ? 'Saving' : 'Save'}</span>
+              </button>
+            )}
+          </div>
+
+          {/* Mobile: dropdown menu */}
+          <div className="header__actions-mobile">
             <button 
               className="header__export-btn" 
-              onClick={handleSave}
-              disabled={isSaving}
+              onClick={() => setShowActionsMenu(!showActionsMenu)}
             >
-              {isSaving ? 'Saving...' : 'Save'}
+              <span>≡</span>
             </button>
-          )}
+            {showActionsMenu && (
+              <div className="header__dropdown">
+                <button className="header__dropdown-item" onClick={() => { handleImportJSON(); setShowActionsMenu(false); }}>
+                  <span>↑</span> Import
+                </button>
+                {graphData && (
+                  <button className="header__dropdown-item" onClick={() => { handleExportAll(); setShowActionsMenu(false); }}>
+                    <span>↓</span> Export
+                  </button>
+                )}
+                {graphData && session && (
+                  <button 
+                    className="header__dropdown-item header__dropdown-item--success" 
+                    onClick={() => { handleSave(); setShowActionsMenu(false); }}
+                    disabled={isSaving}
+                  >
+                    <span>{isSaving ? '...' : '◇'}</span> {isSaving ? 'Saving' : 'Save'}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* GitHub Auth */}
           {session ? (
-            <div style={{ position: 'relative', marginLeft: '16px', marginRight: '16px', display: 'flex', alignItems: 'left' }}>
+            <div className="header__user">
               {session.user?.image && (
                 <img 
                   src={session.user.image} 
                   alt="" 
                   onClick={() => setShowUserMenu(!showUserMenu)}
-                  style={{ width: 28, height: 28, borderRadius: '50%', cursor: 'pointer' }}
+                  style={{ width: 32, height: 32, borderRadius: '50%', cursor: 'pointer', border: '1px solid var(--text-primary)' }}
                 />
               )}
               {showUserMenu && (
                 <button 
-                  className="header__export-btn"
+                  className="header__export-btn header__export-btn--danger"
                   onClick={() => { setShowUserMenu(false); signOut(); }}
-                  style={{ marginLeft: '16px' }}
                 >
-                  →
+                  <span>→</span><span className="header__btn-label">Sign out</span>
                 </button>
               )}
             </div>
@@ -397,7 +432,7 @@ export default function Home() {
               className="header__export-btn" 
               onClick={() => signIn('github')}
             >
-              Sign in
+              <span>←</span><span className="header__btn-label">Sign in</span>
             </button>
           )}
         </nav>
