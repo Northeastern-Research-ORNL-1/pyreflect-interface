@@ -7,20 +7,13 @@ A monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyr
 
 ## Highlights
 
-- GitHub OAuth via NextAuth with optional MongoDB persistence for saved generations
-- History explorer with search, restore, delete, and local/HF model availability
-  - Object Storage via [Hugging Face](https://huggingface.co/Northeastern-Research-ORNL-1)
-- Named runs, auto-save on generation, plus import/export of full sessions (params + results)
-- Film layer editor (add/remove, collapse) with inline numeric edits beyond slider limits
-- Real-time SSE logs, progress, and elapsed time during generation
-- Interactive charts (NR, SLD, training loss, chi scatter) with PNG export and fullscreen expand
-- Dataset/model upload for `.npy`, `.pth`, `.pt`, and `settings*.yml/.yaml`
-- Real-data mode via `settings.yml` with NR → SLD (train/infer), SLD → Chi, and NR → SLD → Chi workflows
-- Model download with size lookup; optional Hugging Face dataset offload
-- Local state persistence across refreshes (params, results, logs)
-- Monochrome UI with JetBrains Mono and responsive layout
-- Mobile-friendly design with touch-friendly controls and responsive layout
-- MOST IMPORTANTLY: Dark mode natively supported
+- GitHub OAuth via NextAuth with optional MongoDB history persistence
+- Two data modes: `Synthetic (film layers)` and `Real data (.npy via settings.yml)`
+- Real-data pipelines: `NR → SLD` (train/infer), `SLD → Chi`, and `NR → SLD → Chi` (chains predicted SLD into chi)
+- Role-based uploads that update `src/backend/settings.yml`, plus a UI mapping view to show what each role points to
+- Live SSE logs + per-epoch training progress (header + in-history “in progress” card)
+- Export JSON (params + result + embedded chart PNGs) and download a ZIP bundle (JSON + PNGs + model)
+- Optional model offload to a Hugging Face dataset + size lookup and download redirect when models aren’t local
 
 ## Architecture
 
@@ -37,12 +30,13 @@ flowchart LR
   end
 
   subgraph Backend
-    API[FastAPI API]
+    API["FastAPI (service)"]
     PY[pyreflect + torch]
-    FS[(Local data/)]
-    FS_MODELS[data/models]
-    FS_CURVES[data/curves]
-    FS_EXPT[data/curves/expt]
+    CFG[settings.yml]
+    FS[(data/)]
+    FS_MODELS[data/models/*.pth]
+    FS_CURVES[data/curves/*.npy]
+    FS_EXPT[data/curves/expt/*.npy]
   end
 
   subgraph External
@@ -55,6 +49,7 @@ flowchart LR
   UI <-->|"Auth session"| Auth
   Auth --> GH
   API --> PY
+  API --> CFG
   API --> FS
   FS --> FS_MODELS
   FS --> FS_CURVES
@@ -63,54 +58,78 @@ flowchart LR
   API -. "optional" .-> HF
 ```
 
-### Synthetic Workflow (Current)
+### Synthetic Workflow (Film Layers)
 
 ```mermaid
 flowchart TD
   UI[UI: film layers + params] --> API[POST /api/generate/stream]
-  API --> GEN[ReflectivityDataGenerator]
-  GEN --> SYN[synthetic NR/SLD curves]
+  API --> GEN[pyreflect: ReflectivityDataGenerator]
+  GEN --> SYN["Synthetic NR/SLD arrays (in-memory)"]
   SYN --> TRAIN[Train CNN NR → SLD]
-  TRAIN --> RESULT[metrics + curves + model_id]
+  TRAIN --> SAVE[Save model_id.pth]
+  SAVE --> FS_MODELS[data/models/]
+  SAVE -. "optional" .-> HF[(Hugging Face Dataset)]
+  TRAIN --> RESULT[result JSON + model_id]
   RESULT --> UI
-  TRAIN --> FS_MODELS[data/models/*.pth]
-  API -. "optional" .-> DB[(MongoDB)]
-  API -. "optional" .-> HF[(Hugging Face Dataset)]
-  API -- "SSE logs" --> UI
+  RESULT -. "optional" .-> DB["(MongoDB history)"]
+  API -- "SSE log/progress/result" --> UI
 ```
 
 ### Real-Data Workflow
 
 ```mermaid
 flowchart TD
-  UI[UI: real-data mode] --> API[POST /api/generate/stream]
-  API --> CFG[read settings.yml]
-  CFG --> ROUTE{workflow}
-  ROUTE -->|"NR → SLD (train)"| LOAD["load nr_train + sld_train"]
-  LOAD --> TRAIN["train CNN NR → SLD<br/>(optional: auto-generate model + stats)"]
-  TRAIN --> RESULT["metrics + curves + model_id"]
-  ROUTE -->|"NR → SLD (infer)"| INFER["load model + stats + experimental_nr"]
-  INFER --> RESULT
-  ROUTE -->|"SLD → Chi"| CHI["train AE + MLP on SLD/chi<br/>predict chi for experimental SLD"]
-  CHI --> RESULT
-  ROUTE -->|"NR → SLD → Chi"| CHAIN["predict SLD from NR<br/>then predict chi from SLD"]
-  CHAIN --> RESULT
+  UI[UI: real-data mode] -->|Upload roles| UP[POST /api/upload]
+  UP -->|Write files| FS[(data/...)]
+  UP -->|Update| CFG[settings.yml]
+
+  UI --> API[POST /api/generate/stream]
+  API --> CFG
+  CFG --> ROUTE{pipeline}
+
+  ROUTE -->|"NR → SLD"| NRSLD{mode}
+  NRSLD -->|"Train"| NRTRAIN["train CNN on nr_train + sld_train<br/>auto-generate model + stats if missing"]
+  NRTRAIN --> SLDOUT[predicted SLD]
+  NRSLD -->|"Infer"| NRINFER["predict SLD from experimental_nr<br/>using model + normalization stats"]
+  NRINFER --> SLDOUT
+
+  ROUTE -->|"SLD → Chi"| SLDCHI["train AE+MLP on model_sld_file + model_chi_params_file<br/>predict chi for model_experimental_sld_profile"]
+  SLDCHI --> CHIOUT[chi params]
+
+  ROUTE -->|"NR → SLD → Chi"| CHAIN["use predicted SLD as chi input<br/>train AE+MLP on model_sld_file + model_chi_params_file"]
+  SLDOUT --> CHAIN
+  CHAIN --> CHIOUT
+
+  SLDOUT --> RESULT[result JSON]
+  CHIOUT --> RESULT
   RESULT --> UI
 ```
 
-> Real-data mode uses the paths in `settings.yml` and ignores film-layer controls.
+> Real-data mode uses the paths in `src/backend/settings.yml`. Film layers and generator settings are ignored.
+
+### Required Uploads By Pipeline (Real Data)
+
+- `NR → SLD (train)`: `nr_train`, `sld_train` (+ `nr_sld_model`, `normalization_stats` if auto-generate is disabled)
+- `NR → SLD (infer)`: `experimental_nr`, `nr_sld_model`, `normalization_stats`
+- `SLD → Chi`: `sld_chi_experimental_profile`, `sld_chi_model_sld_file`, `sld_chi_model_chi_params_file`
+- `NR → SLD → Chi (train)`: `nr_train`, `sld_train`, `sld_chi_model_sld_file`, `sld_chi_model_chi_params_file`  
+  (chains predicted SLD into chi, so `sld_chi_experimental_profile` is not required)
+- `NR → SLD → Chi (infer)`: `experimental_nr`, `nr_sld_model`, `normalization_stats`, `sld_chi_model_sld_file`, `sld_chi_model_chi_params_file`
 
 ### Upload Flow
 
 ```mermaid
 flowchart LR
-  UI[Upload dropzone] --> API[POST /api/upload]
-  API -->|".pth/.pt model weights"| MODELS[data/models]
-  API -->|"normalization stats + chi datasets"| DATA[data/]
-  API -->|".npy curves"| CURVES[data/curves]
-  API -->|"settings*.yml/.yaml"| ROOT[src/backend]
-  CURVES --> EXPT[data/curves/expt]
+  UI[UI: choose role + file] --> API[POST /api/upload]
+  API -->|"validate shapes (.npy)"| VALID[server-side validation]
+  API -->|"write TEMP file to disk"| FS[(data/...)]
+  API -->|"update role path"| CFG[settings.yml]
 ```
+
+Notes:
+
+- `/api/upload` expects an explicit `roles[]` entry for each uploaded file. The backend does not guess roles from filenames, because filename-based inference is ambiguous and can write the wrong `settings.yml` mapping.
+- Uploading `settings.yml` directly is supported (filename must start with `settings`), but normal `.npy/.pth` uploads should always include a role.
 
 ### Upload Roles (Real Data)
 
@@ -125,6 +144,114 @@ When uploading datasets, assign a role so `settings.yml` is updated correctly:
 - `sld_chi_model_sld_file` → `sld_predict_chi.file.model_sld_file`
 - `sld_chi_model_chi_params_file` → `sld_predict_chi.file.model_chi_params_file`
 
+### Expected `.npy` Shapes (Real Data)
+
+Uploads are validated on the backend. Current expectations:
+
+- `nr_train`, `sld_train`, `experimental_nr`: `shape (N, 2, L)` where axis 1 is `[x, y]`
+- `sld_chi_experimental_profile`, `sld_chi_model_sld_file`: `shape (2, L)` or `shape (N, 2, L)`
+- `sld_chi_model_chi_params_file`: `shape (N, num_params)`
+- `normalization_stats`: a pickled dict with keys `x` and `y` (min/max), used for normalization
+
+## Exports & Downloads
+
+- **Export JSON**: includes `params` + `result` and embeds normal + expanded chart PNGs in `result.export_pngs` (base64) when available.
+- **Download bundle**: builds a `.zip` in the browser with your selected items (`output.json`, PNGs, and the `.pth` model). If the model isn’t local, `/api/models/{model_id}` redirects to Hugging Face (when configured).
+
+> The app currently exports the plotted curves/metrics for a run, not the full synthetic training dataset arrays.
+
+## UI Button Flows
+
+This section documents what each major UI button does and which code path it triggers.
+
+### Header (Top Bar)
+
+```mermaid
+flowchart LR
+  H[Header buttons] -->|History| HS[Open History sidebar]
+  HS -->|fetch| APIH[GET /api/history]
+  H -->|JSON ▾ → Import| IMP[Import JSON]
+  IMP --> FP[Choose .json file]
+  FP --> PARSE[Parse + load params/result]
+  PARSE --> NAME[Optional: name modal]
+  NAME --> APPLY[Apply to UI state]
+  H -->|JSON ▾ → Export| EXP[Export JSON]
+  EXP --> CAP["captureChartPngs (card view)"]
+  CAP --> DLJSON[Download .json]
+  H -->|Download| DB[Open bundle confirm modal]
+  DB -->|DOWNLOAD| BUILD[Build ZIP in browser]
+  BUILD --> CAP2["captureChartPngs (includes fullscreen-expanded when selected)"]
+  CAP2 --> MODEL["Optional: fetch /api/models/{model_id}"]
+  MODEL --> DLZIP[Download .zip]
+```
+
+**Buttons**
+
+- `History` → opens the history sidebar (`src/interface/src/components/ExploreSidebar.tsx`).
+- `JSON` VIEW menu → `Import` / `Export`.
+- `Download` → opens the download confirmation modal (`src/interface/src/components/DownloadBundleModal.tsx`).
+- `Profile` → `Sign in` / `Sign out` → GitHub OAuth via NextAuth.
+
+### Left Panel (Parameters)
+
+```mermaid
+flowchart TD
+  P[Parameter panel buttons] -->|RESET| RST[Reset params + clear current run]
+  P -->|GENERATE| GEN[Start generation]
+  GEN -->|needs name| POP[Name popup]
+  POP -->|START| RUN["POST /api/generate/stream (SSE)"]
+  POP -->|CANCEL| STOP[Close popup]
+  RUN --> LOGS[Stream logs + progress]
+  RUN --> RES[Render charts + metrics]
+  P -->|+ ADD| ADDL[Add film layer]
+  P -->|×| RML[Remove film layer]
+  P -->|EXPAND/COLLAPSE| LAY[Expand/collapse all layers]
+  P -->|▶/▼ per-layer| LAY1[Expand/collapse single layer]
+  P -->|◀/▶| SIDE[Collapse/expand sidebar]
+```
+
+### Charts (Right Panel)
+
+```mermaid
+flowchart LR
+  C[Chart card] -->|PNG| PNG[Capture card to PNG]
+  PNG --> DL[Download *.png]
+  C -->|Expand| X[Fullscreen expand]
+  X -->|Close / backdrop| XC[Return to grid]
+```
+
+### Console Logs
+
+```mermaid
+flowchart LR
+  CL[Console Logs header] -->|▶/▼| TOG[Toggle log panel]
+  TOG -->|expanded| SCROLL[Auto-scroll to newest]
+```
+
+### History Sidebar
+
+```mermaid
+flowchart TD
+  HS[History item] -->|click row| LOAD["GET /api/history/{id}"]
+  LOAD --> APPLY[Apply to UI state]
+  HS -->|Download icon| DLREQ[Load + open download confirm]
+  DLREQ --> BUILD[Build ZIP in browser]
+  HS -->|Delete| CONF[Delete confirm popup]
+  CONF -->|DELETE| DEL["DELETE /api/history/{id}"]
+  DEL --> REFRESH[Refresh list]
+```
+
+### Download Confirmation Modal
+
+```mermaid
+flowchart TD
+  M[Download modal] -->|CANCEL| CLOSE[Close modal]
+  M -->|DOWNLOAD| START[Close modal + show downloading overlay]
+  START --> CAP[Capture selected PNGs]
+  CAP --> ZIP[Create ZIP]
+  ZIP --> SAVE[Trigger browser download]
+```
+
 ## Project Structure
 
 ```
@@ -132,11 +259,14 @@ pyreflect-interface/
 ├── src/
 │   ├── interface/             # Next.js frontend
 │   │   ├── src/app/            # App router + UI
+│   │   │   └── home/           # HomePage + hooks (downloads, etc)
 │   │   ├── src/components/     # Panels, charts, history sidebar
+│   │   ├── src/lib/            # Small shared helpers (PNG capture, base64, bytes)
 │   │   ├── public/             # Static assets
 │   │   └── .env.local          # Frontend secrets
 │   └── backend/                # FastAPI backend
-│       ├── main.py             # API server
+│       ├── main.py             # Uvicorn entrypoint
+│       ├── service/            # App factory + routers + services
 │       ├── settings.yml        # Config (auto-generated)
 │       ├── data/               # Uploaded datasets & models
 │       │   ├── models/          # Saved .pth models
@@ -152,7 +282,7 @@ pyreflect-interface/
 
 ### Prerequisites
 
-- Node or Bun (frontend)
+- Bun (frontend)
 - [uv](https://docs.astral.sh/uv/) (backend)
 - Python 3.10-3.12 (torch requires <=3.12)
 
@@ -163,6 +293,7 @@ cd src/backend
 uv python pin 3.12
 uv sync
 cp .env.example .env
+nano/nvim .env
 uv run uvicorn main:app --reload --port 8000
 ```
 
@@ -174,6 +305,7 @@ Backend runs at `http://localhost:8000`.
 cd src/interface
 bun install
 cp .env.example .env.local
+nano/nvim .env.local
 bun run dev
 ```
 

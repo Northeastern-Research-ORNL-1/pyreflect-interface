@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import styles from './InfoTooltip.module.css';
 
@@ -11,12 +11,7 @@ interface InfoTooltipProps {
 export default function InfoTooltip({ hint }: InfoTooltipProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0 });
-  const [mounted, setMounted] = useState(false);
   const iconRef = useRef<HTMLSpanElement>(null);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
 
   const handleMouseEnter = () => {
     if (iconRef.current) {
@@ -29,15 +24,14 @@ export default function InfoTooltip({ hint }: InfoTooltipProps) {
     setIsVisible(true);
   };
 
-  const tooltip = isVisible && mounted ? createPortal(
-    <div 
-      className={styles.tooltip}
-      style={{ top: position.top, left: position.left }}
-    >
-      {hint}
-    </div>,
-    document.body
-  ) : null;
+  const tooltip = isVisible
+    ? createPortal(
+        <div className={styles.tooltip} style={{ top: position.top, left: position.left }}>
+          {hint}
+        </div>,
+        document.body
+      )
+    : null;
 
   return (
     <>

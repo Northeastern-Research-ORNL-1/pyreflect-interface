@@ -21,17 +21,10 @@ interface GraphDisplayProps {
   data: GenerateResponse | null;
 }
 
-// Export utilities
-function downloadCSV(filename: string, headers: string[], rows: (number | string)[][]) {
-  const csv = [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
+type SetExpandedCardEventDetail = {
+  cardId: string | null;
+  exporting?: boolean;
+};
 
 export default function GraphDisplay({ data }: GraphDisplayProps) {
   const nrChartData = useMemo(() => {
@@ -121,6 +114,44 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
 
   // Fullscreen expansion state
   const [expandedCard, setExpandedCard] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const expandedCardRef = useRef<string | null>(null);
+  const isExportingRef = useRef(false);
+  const prevExpandedCardRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    expandedCardRef.current = expandedCard;
+  }, [expandedCard]);
+
+  useEffect(() => {
+    isExportingRef.current = isExporting;
+  }, [isExporting]);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const custom = event as CustomEvent<SetExpandedCardEventDetail>;
+      const detail = custom.detail;
+      if (!detail || typeof detail !== 'object' || !('cardId' in detail)) return;
+
+      const nextExporting = Boolean(detail.exporting);
+      if (nextExporting) {
+        if (!isExportingRef.current) {
+          prevExpandedCardRef.current = expandedCardRef.current;
+        }
+        setIsExporting(true);
+        setExpandedCard(detail.cardId);
+        return;
+      }
+
+      setIsExporting(false);
+      const restoreCard = prevExpandedCardRef.current;
+      prevExpandedCardRef.current = null;
+      setExpandedCard(restoreCard ?? detail.cardId);
+    };
+
+    window.addEventListener('pyreflect:set-expanded-card', handler);
+    return () => window.removeEventListener('pyreflect:set-expanded-card', handler);
+  }, []);
 
   const toggleExpand = useCallback((cardId: string) => {
     setExpandedCard(prev => prev === cardId ? null : cardId);
@@ -128,10 +159,10 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
 
   const getCardClassName = useCallback((cardId: string) => {
     if (expandedCard === cardId) {
-      return `graph-card ${styles.expandedCard}`;
+      return `graph-card ${styles.expandedCard} ${isExporting ? styles.exportingCard : ''}`;
     }
     return 'graph-card';
-  }, [expandedCard]);
+  }, [expandedCard, isExporting]);
 
   // Handle Escape key to close expanded card
   useEffect(() => {
@@ -179,7 +210,7 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
       </div>
 
       {/* Fullscreen Backdrop */}
-      {expandedCard && (
+      {expandedCard && !isExporting && (
         <div 
           className={styles.backdrop} 
           onClick={() => setExpandedCard(null)}
@@ -242,23 +273,25 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
                   height={24}
                   wrapperStyle={{ fontSize: 10, fontFamily: 'var(--font-mono)' }}
                 />
-                <Line 
-                  type="monotone" 
-                  dataKey="groundTruth"
-                  name="Ground Truth"
-                  stroke="var(--text-primary)" 
-                  strokeWidth={1.5}
-                  dot={false}
-                />
-                <Line 
-                  type="monotone" 
-                  dataKey="computed"
-                  name="Computed NR"
-                  stroke="var(--color-gray-500, #888)" 
-                  strokeWidth={1.5}
-                  strokeDasharray="5 5"
-                  dot={false}
-                />
+	              <Line 
+	                  type="monotone" 
+	                  dataKey="groundTruth"
+	                  name="Ground Truth"
+	                  stroke="var(--text-primary)" 
+	                  strokeWidth={1.5}
+	                  dot={false}
+	                  isAnimationActive={!isExporting}
+	                />
+	                <Line 
+	                  type="monotone" 
+	                  dataKey="computed"
+	                  name="Computed NR"
+	                  stroke="var(--color-gray-500, #888)" 
+	                  strokeWidth={1.5}
+	                  strokeDasharray="5 5"
+	                  dot={false}
+	                  isAnimationActive={!isExporting}
+	                />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -315,23 +348,25 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
                   height={24}
                   wrapperStyle={{ fontSize: 10, fontFamily: 'var(--font-mono)' }}
                 />
-                <Line 
-                  type="monotone" 
-                  dataKey="groundTruth"
-                  name="GroundTruth"
-                  stroke="var(--text-primary)" 
-                  strokeWidth={1.5}
-                  dot={false}
-                />
-                <Line 
-                  type="monotone" 
-                  dataKey="predicted"
-                  name="Predicted"
-                  stroke="#cc4444"
-                  strokeWidth={1.5}
-                  strokeDasharray="5 5"
-                  dot={false}
-                />
+	                <Line 
+	                  type="monotone" 
+	                  dataKey="groundTruth"
+	                  name="GroundTruth"
+	                  stroke="var(--text-primary)" 
+	                  strokeWidth={1.5}
+	                  dot={false}
+	                  isAnimationActive={!isExporting}
+	                />
+	                <Line 
+	                  type="monotone" 
+	                  dataKey="predicted"
+	                  name="Predicted"
+	                  stroke="#cc4444"
+	                  strokeWidth={1.5}
+	                  strokeDasharray="5 5"
+	                  dot={false}
+	                  isAnimationActive={!isExporting}
+	                />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -386,23 +421,25 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
                   height={24}
                   wrapperStyle={{ fontSize: 10, fontFamily: 'var(--font-mono)' }}
                 />
-                <Line 
-                  type="monotone" 
-                  dataKey="training" 
-                  name="Training"
-                  stroke="var(--text-primary)" 
-                  strokeWidth={1.5}
-                  dot={false}
-                />
-                <Line 
-                  type="monotone" 
-                  dataKey="validation" 
-                  name="Validation"
-                  stroke="var(--color-gray-400)" 
-                  strokeWidth={1.5}
-                  strokeDasharray="4 4"
-                  dot={false}
-                />
+	                <Line 
+	                  type="monotone" 
+	                  dataKey="training" 
+	                  name="Training"
+	                  stroke="var(--text-primary)" 
+	                  strokeWidth={1.5}
+	                  dot={false}
+	                  isAnimationActive={!isExporting}
+	                />
+	                <Line 
+	                  type="monotone" 
+	                  dataKey="validation" 
+	                  name="Validation"
+	                  stroke="var(--color-gray-400)" 
+	                  strokeWidth={1.5}
+	                  strokeDasharray="4 4"
+	                  dot={false}
+	                  isAnimationActive={!isExporting}
+	                />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -463,10 +500,11 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
                   labelStyle={{ color: '#fff' }}
                   formatter={(value, name) => [value != null ? Number(value).toFixed(4) : '', name === 'actual' ? 'Actual χ' : 'Predicted χ']}
                 />
-                <Scatter 
-                  data={chiChartData} 
-                  fill="var(--text-primary)"
-                />
+	                <Scatter
+	                  data={chiChartData}
+	                  fill="var(--text-primary)"
+	                  isAnimationActive={!isExporting}
+	                />
               </ScatterChart>
             </ResponsiveContainer>
           </div>
