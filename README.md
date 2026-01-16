@@ -49,16 +49,16 @@ flowchart LR
     HF[(Hugging Face Dataset)]
   end
 
-  UI <-->|REST + SSE| API
-  UI <-->|Auth session| Auth
+  UI <-->|"REST + SSE"| API
+  UI <-->|"Auth session"| Auth
   Auth --> GH
   API --> PY
   API --> FS
   FS --> FS_MODELS
   FS --> FS_CURVES
   FS_CURVES --> FS_EXPT
-  API -. optional .-> DB
-  API -. optional .-> HF
+  API -. "optional" .-> DB
+  API -. "optional" .-> HF
 ```
 
 ### Synthetic Workflow (Current)
@@ -72,9 +72,9 @@ flowchart TD
   TRAIN --> RESULT[metrics + curves + model_id]
   RESULT --> UI
   TRAIN --> FS_MODELS[data/models/*.pth]
-  API -. optional .-> DB[(MongoDB)]
-  API -. optional .-> HF[(Hugging Face Dataset)]
-  API -- SSE logs --> UI
+  API -. "optional" .-> DB[(MongoDB)]
+  API -. "optional" .-> HF[(Hugging Face Dataset)]
+  API -- "SSE logs" --> UI
 ```
 
 ### Real-Data Workflow
@@ -84,14 +84,14 @@ flowchart TD
   UI[UI: real-data mode] --> API[POST /api/generate/stream]
   API --> CFG[read settings.yml]
   CFG --> ROUTE{workflow}
-  ROUTE -->|NR → SLD (train)| LOAD[load nr_train + sld_train]
-  LOAD --> TRAIN[train CNN NR → SLD\n(optional: auto-generate model + stats)]
-  TRAIN --> RESULT[metrics + curves + model_id]
-  ROUTE -->|NR → SLD (infer)| INFER[load model + stats + experimental_nr]
+  ROUTE -->|"NR → SLD (train)"| LOAD["load nr_train + sld_train"]
+  LOAD --> TRAIN["train CNN NR → SLD<br/>(optional: auto-generate model + stats)"]
+  TRAIN --> RESULT["metrics + curves + model_id"]
+  ROUTE -->|"NR → SLD (infer)"| INFER["load model + stats + experimental_nr"]
   INFER --> RESULT
-  ROUTE -->|SLD → Chi| CHI[train AE + MLP on SLD/chi\npredict chi for experimental SLD]
+  ROUTE -->|"SLD → Chi"| CHI["train AE + MLP on SLD/chi<br/>predict chi for experimental SLD"]
   CHI --> RESULT
-  ROUTE -->|NR → SLD → Chi| CHAIN[predict SLD from NR\nthen predict chi from SLD]
+  ROUTE -->|"NR → SLD → Chi"| CHAIN["predict SLD from NR<br/>then predict chi from SLD"]
   CHAIN --> RESULT
   RESULT --> UI
 ```
@@ -103,10 +103,10 @@ flowchart TD
 ```mermaid
 flowchart LR
   UI[Upload dropzone] --> API[POST /api/upload]
-  API -->|.pth/.pt model weights| MODELS[data/models]
-  API -->|normalization stats + chi datasets| DATA[data/]
-  API -->|.npy curves| CURVES[data/curves]
-  API -->|settings*.yml/.yaml| ROOT[src/backend]
+  API -->|".pth/.pt model weights"| MODELS[data/models]
+  API -->|"normalization stats + chi datasets"| DATA[data/]
+  API -->|".npy curves"| CURVES[data/curves]
+  API -->|"settings*.yml/.yaml"| ROOT[src/backend]
   CURVES --> EXPT[data/curves/expt]
 ```
 
@@ -264,38 +264,38 @@ Each saved generation contains:
 
 ## API Endpoints
 
-| Endpoint                    | Method | Description                             |
-| --------------------------- | ------ | --------------------------------------- |
-| `/api/health`               | GET    | Health check                            |
-| `/api/limits`               | GET    | Current limits and production flag      |
-| `/api/defaults`             | GET    | Default parameters                      |
-| `/api/generate`             | POST   | Generate NR/SLD curves (non-streaming)  |
-| `/api/generate/stream`      | POST   | Generate with SSE log stream            |
-| `/api/status`               | GET    | Backend status and data files           |
-| `/api/upload`               | POST   | Upload files (+ optional roles)         |
-| `/api/history`              | GET    | List saved generations                  |
-| `/api/history`              | POST   | Save a generation manually              |
-| `/api/history/{id}`         | GET    | Get full details of a save              |
-| `/api/history/{id}`         | DELETE | Delete a saved generation and its model |
-| `/api/models/{model_id}`    | GET    | Download a saved model                  |
-| `/api/models/{model_id}`    | DELETE | Delete a local model file               |
-| `/api/models/{model_id}/info` | GET  | Get model size and source               |
+| Endpoint                      | Method | Description                             |
+| ----------------------------- | ------ | --------------------------------------- |
+| `/api/health`                 | GET    | Health check                            |
+| `/api/limits`                 | GET    | Current limits and production flag      |
+| `/api/defaults`               | GET    | Default parameters                      |
+| `/api/generate`               | POST   | Generate NR/SLD curves (non-streaming)  |
+| `/api/generate/stream`        | POST   | Generate with SSE log stream            |
+| `/api/status`                 | GET    | Backend status and data files           |
+| `/api/upload`                 | POST   | Upload files (+ optional roles)         |
+| `/api/history`                | GET    | List saved generations                  |
+| `/api/history`                | POST   | Save a generation manually              |
+| `/api/history/{id}`           | GET    | Get full details of a save              |
+| `/api/history/{id}`           | DELETE | Delete a saved generation and its model |
+| `/api/models/{model_id}`      | GET    | Download a saved model                  |
+| `/api/models/{model_id}`      | DELETE | Delete a local model file               |
+| `/api/models/{model_id}/info` | GET    | Get model size and source               |
 
 ## Production Limits
 
 Set `PRODUCTION=true` in `src/backend/.env` to enable limits.
 
-| Parameter       | Local     | Production |
-| --------------- | --------- | ---------- |
-| Curves          | 100,000   | 5,000      |
-| Film Layers     | 20        | 10         |
-| Batch Size      | 512       | 64         |
-| Epochs          | 1,000     | 50         |
-| CNN Layers      | 20        | 12         |
-| Dropout         | 0.9       | 0.5        |
-| Latent Dim      | 128       | 32         |
-| AE Epochs       | 500       | 100        |
-| MLP Epochs      | 500       | 100        |
+| Parameter   | Local   | Production |
+| ----------- | ------- | ---------- |
+| Curves      | 100,000 | 5,000      |
+| Film Layers | 20      | 10         |
+| Batch Size  | 512     | 64         |
+| Epochs      | 1,000   | 50         |
+| CNN Layers  | 20      | 12         |
+| Dropout     | 0.9     | 0.5        |
+| Latent Dim  | 128     | 32         |
+| AE Epochs   | 500     | 100        |
+| MLP Epochs  | 500     | 100        |
 
 ## Model Storage Notes
 
