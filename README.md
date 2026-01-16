@@ -9,11 +9,13 @@ A monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyr
 
 - GitHub OAuth via NextAuth with optional MongoDB persistence for saved generations
 - History explorer with search, restore, delete, and local/HF model availability
+  - ObjectStorage via [Hugging Face](https://huggingface.co/Northeastern-Research-ORNL-1)
 - Named runs, auto-save on generation, plus import/export of full sessions (params + results)
 - Film layer editor (add/remove, collapse) with inline numeric edits beyond slider limits
 - Real-time SSE logs, progress, and elapsed time during generation
 - Interactive charts (NR, SLD, training loss, chi scatter) with PNG export and fullscreen expand
 - Dataset/model upload for `.npy`, `.pth`, `.pt`, and `settings*.yml/.yaml`
+- Real-data mode via `settings.yml` with NR → SLD (train/infer), SLD → Chi, and NR → SLD → Chi workflows
 - Model download with size lookup; optional Hugging Face dataset offload
 - Local state persistence across refreshes (params, results, logs)
 - Monochrome UI with JetBrains Mono and responsive layout
@@ -35,7 +37,10 @@ flowchart LR
   subgraph Backend
     API[FastAPI API]
     PY[pyreflect + torch]
-    FS[(Local data/models)]
+    FS[(Local data/)]
+    FS_MODELS[data/models]
+    FS_CURVES[data/curves]
+    FS_EXPT[data/curves/expt]
   end
 
   subgraph External
@@ -49,28 +54,81 @@ flowchart LR
   Auth --> GH
   API --> PY
   API --> FS
+  FS --> FS_MODELS
+  FS --> FS_CURVES
+  FS_CURVES --> FS_EXPT
   API -. optional .-> DB
   API -. optional .-> HF
 ```
 
-### Generation Flow (SSE)
+### Synthetic Workflow (Current)
 
 ```mermaid
-sequenceDiagram
-  participant UI as Next.js UI
-  participant API as FastAPI
-  participant PY as pyreflect/torch
-  participant DB as MongoDB (optional)
-  participant HF as Hugging Face (optional)
-
-  UI->>API: POST /api/generate/stream (params, name, X-User-ID)
-  API->>PY: generate + train
-  API-->>UI: SSE log/progress events
-  API->>API: save model to local data/models
-  API->>HF: upload model (if configured)
-  API-->>UI: SSE result (nr/sld/metrics, model_id)
-  API->>DB: persist history (if configured)
+flowchart TD
+  UI[UI: film layers + params] --> API[POST /api/generate/stream]
+  API --> GEN[ReflectivityDataGenerator]
+  GEN --> SYN[synthetic NR/SLD curves]
+  SYN --> TRAIN[Train CNN NR → SLD]
+  TRAIN --> RESULT[metrics + curves + model_id]
+  RESULT --> UI
+  TRAIN --> FS_MODELS[data/models/*.pth]
+  API -. optional .-> DB[(MongoDB)]
+  API -. optional .-> HF[(Hugging Face Dataset)]
+  API -- SSE logs --> UI
 ```
+
+### Real-Data Workflow
+
+```mermaid
+flowchart TD
+  UI[UI: real-data mode] --> API[POST /api/generate/stream]
+  API --> CFG[read settings.yml]
+  CFG --> ROUTE{workflow}
+  ROUTE -->|NR → SLD (train)| LOAD[load nr_train + sld_train]
+  LOAD --> TRAIN[train CNN NR → SLD\n(optional: auto-generate model + stats)]
+  TRAIN --> RESULT[metrics + curves + model_id]
+  ROUTE -->|NR → SLD (infer)| INFER[load model + stats + experimental_nr]
+  INFER --> RESULT
+  ROUTE -->|SLD → Chi| CHI[train AE + MLP on SLD/chi\npredict chi for experimental SLD]
+  CHI --> RESULT
+  ROUTE -->|NR → SLD → Chi| CHAIN[predict SLD from NR\nthen predict chi from SLD]
+  CHAIN --> RESULT
+  RESULT --> UI
+```
+
+> Real-data mode uses the paths in `settings.yml` and ignores film-layer controls.
+
+### Upload Flow
+
+```mermaid
+flowchart LR
+  UI[Upload dropzone] --> API[POST /api/upload]
+  API -->|.pth/.pt model weights| MODELS[data/models]
+  API -->|normalization stats + chi datasets| DATA[data/]
+  API -->|.npy curves| CURVES[data/curves]
+  API -->|settings*.yml/.yaml| ROOT[src/backend]
+  CURVES --> EXPT[data/curves/expt]
+```
+
+### Upload Roles (Real Data)
+
+When uploading datasets, assign a role so `settings.yml` is updated correctly:
+
+- `nr_train` → `nr_predict_sld.file.nr_train`
+- `sld_train` → `nr_predict_sld.file.sld_train`
+- `experimental_nr` → `nr_predict_sld.file.experimental_nr_file`
+- `normalization_stats` → `nr_predict_sld.models.normalization_stats`
+- `nr_sld_model` → `nr_predict_sld.models.model`
+- `sld_chi_experimental_profile` → `sld_predict_chi.file.model_experimental_sld_profile`
+- `sld_chi_model_sld_file` → `sld_predict_chi.file.model_sld_file`
+- `sld_chi_model_chi_params_file` → `sld_predict_chi.file.model_chi_params_file`
+
+The UI defaults to `auto` and will infer roles from common PyReflect filenames when possible.
+
+### Train vs Infer (NR → SLD)
+
+- **Train**: Uses `nr_train` + `sld_train` to train NR → SLD. If auto‑generate is enabled, the model (`.pth`) and normalization stats (`.npy`) are created and saved to the configured `settings.yml` paths.
+- **Infer**: Uses `experimental_nr` + existing model + normalization stats to predict SLD. In NR → SLD → Chi, chi is computed from the inferred SLD output.
 
 ## Project Structure
 
@@ -214,7 +272,7 @@ Each saved generation contains:
 | `/api/generate`             | POST   | Generate NR/SLD curves (non-streaming)  |
 | `/api/generate/stream`      | POST   | Generate with SSE log stream            |
 | `/api/status`               | GET    | Backend status and data files           |
-| `/api/upload`               | POST   | Upload dataset/model files              |
+| `/api/upload`               | POST   | Upload files (+ optional roles)         |
 | `/api/history`              | GET    | List saved generations                  |
 | `/api/history`              | POST   | Save a generation manually              |
 | `/api/history/{id}`         | GET    | Get full details of a save              |
@@ -241,7 +299,7 @@ Set `PRODUCTION=true` in `src/backend/.env` to enable limits.
 
 ## Model Storage Notes
 
-- Local storage keeps up to 2 models; runs will fail if the limit is reached.
+- Synthetic training keeps up to 2 local models; runs will fail if the limit is reached.
 - Set `HF_TOKEN` and `HF_REPO_ID` to offload models to Hugging Face and auto-clean local files.
 - Deleting a history item also deletes its model file locally and from Hugging Face (if configured).
 
