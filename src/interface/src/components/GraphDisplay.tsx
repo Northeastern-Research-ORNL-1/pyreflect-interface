@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useCallback } from 'react';
+import { useMemo, useCallback, useState, useEffect } from 'react';
 import {
   LineChart,
   Line,
@@ -104,6 +104,32 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
       data.chi.map(c => [c.x, c.predicted, c.actual]));
   }, [data]);
 
+  // Fullscreen expansion state
+  const [expandedCard, setExpandedCard] = useState<string | null>(null);
+
+  const toggleExpand = useCallback((cardId: string) => {
+    setExpandedCard(prev => prev === cardId ? null : cardId);
+  }, []);
+
+  const getCardClassName = useCallback((cardId: string) => {
+    if (expandedCard === cardId) {
+      return `graph-card ${styles.expandedCard}`;
+    }
+    return 'graph-card';
+  }, [expandedCard]);
+
+  // Handle Escape key to close expanded card
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && expandedCard) {
+        setExpandedCard(null);
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [expandedCard]);
+
   if (!data) {
     return (
       <div className={styles.empty}>
@@ -137,13 +163,30 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
         </div>
       </div>
 
+      {/* Fullscreen Backdrop */}
+      {expandedCard && (
+        <div 
+          className={styles.backdrop} 
+          onClick={() => setExpandedCard(null)}
+        />
+      )}
+
       {/* Graphs Grid */}
-      <div className="graph-container">
+      <div className={expandedCard ? `graph-container ${styles.expandedContainer}` : 'graph-container'}>
         {/* NR Curve */}
-        <div className="graph-card">
+        <div className={getCardClassName('nr')}>
           <div className="graph-card__header">
             <span className="graph-card__title">Neutron Reflectivity</span>
-            <button className={styles.downloadBtn} onClick={exportNRData} title="Download CSV">↓</button>
+            <div className={styles.headerActions}>
+              <button className={styles.downloadBtn} onClick={exportNRData} title="Download CSV">↓</button>
+              <button 
+                className={styles.expandBtn} 
+                onClick={() => toggleExpand('nr')} 
+                title={expandedCard === 'nr' ? 'Collapse' : 'Expand'}
+              >
+                {expandedCard === 'nr' ? '×' : '⛶'}
+              </button>
+            </div>
           </div>
           <div className="graph-card__content">
             <ResponsiveContainer width="100%" height="100%">
@@ -200,10 +243,19 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
         </div>
 
         {/* SLD Profile */}
-        <div className="graph-card">
+        <div className={getCardClassName('sld')}>
           <div className="graph-card__header">
             <span className="graph-card__title">SLD Profile</span>
-            <button className={styles.downloadBtn} onClick={exportSLDData} title="Download CSV">↓</button>
+            <div className={styles.headerActions}>
+              <button className={styles.downloadBtn} onClick={exportSLDData} title="Download CSV">↓</button>
+              <button 
+                className={styles.expandBtn} 
+                onClick={() => toggleExpand('sld')} 
+                title={expandedCard === 'sld' ? 'Collapse' : 'Expand'}
+              >
+                {expandedCard === 'sld' ? '×' : '⛶'}
+              </button>
+            </div>
           </div>
           <div className="graph-card__content">
             <ResponsiveContainer width="100%" height="100%">
@@ -257,10 +309,19 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
         </div>
 
         {/* Training Loss */}
-        <div className="graph-card">
+        <div className={getCardClassName('training')}>
           <div className="graph-card__header">
             <span className="graph-card__title">Training Loss</span>
-            <button className={styles.downloadBtn} onClick={exportTrainingData} title="Download CSV">↓</button>
+            <div className={styles.headerActions}>
+              <button className={styles.downloadBtn} onClick={exportTrainingData} title="Download CSV">↓</button>
+              <button 
+                className={styles.expandBtn} 
+                onClick={() => toggleExpand('training')} 
+                title={expandedCard === 'training' ? 'Collapse' : 'Expand'}
+              >
+                {expandedCard === 'training' ? '×' : '⛶'}
+              </button>
+            </div>
           </div>
           <div className="graph-card__content">
             <ResponsiveContainer width="100%" height="100%">
@@ -312,10 +373,19 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
         </div>
 
         {/* Chi Parameters */}
-        <div className="graph-card">
+        <div className={getCardClassName('chi')}>
           <div className="graph-card__header">
             <span className="graph-card__title">Chi Parameters</span>
-            <button className={styles.downloadBtn} onClick={exportChiData} title="Download CSV">↓</button>
+            <div className={styles.headerActions}>
+              <button className={styles.downloadBtn} onClick={exportChiData} title="Download CSV">↓</button>
+              <button 
+                className={styles.expandBtn} 
+                onClick={() => toggleExpand('chi')} 
+                title={expandedCard === 'chi' ? 'Collapse' : 'Expand'}
+              >
+                {expandedCard === 'chi' ? '×' : '⛶'}
+              </button>
+            </div>
           </div>
           <div className="graph-card__content">
             <ResponsiveContainer width="100%" height="100%">
