@@ -389,7 +389,7 @@ export function useDownloadBundle({
             else resolve(data);
           });
         });
-        const blob = new Blob([zipData], { type: 'application/zip' });
+        const blob = new Blob([zipData.buffer.slice(zipData.byteOffset, zipData.byteOffset + zipData.byteLength) as ArrayBuffer], { type: 'application/zip' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
