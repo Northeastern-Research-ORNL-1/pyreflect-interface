@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect } from 'react';
+import { useSession, signIn, signOut } from 'next-auth/react';
 import ParameterPanel from '../components/ParameterPanel';
 import GraphDisplay from '../components/GraphDisplay';
 import ConsoleOutput from '../components/ConsoleOutput';
@@ -41,6 +42,7 @@ const DEFAULT_TRAINING: TrainingParams = {
 };
 
 export default function Home() {
+  const { data: session } = useSession();
   const [filmLayers, setFilmLayers] = useState<FilmLayer[]>(DEFAULT_LAYERS);
   const [generatorParams, setGeneratorParams] = useState<GeneratorParams>(DEFAULT_GENERATOR);
   const [trainingParams, setTrainingParams] = useState<TrainingParams>(DEFAULT_TRAINING);
@@ -55,6 +57,8 @@ export default function Home() {
   const [limits, setLimits] = useState<Limits>(DEFAULT_LIMITS);
   const [isProduction, setIsProduction] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const addLog = useCallback((message: string) => {
     const timestamp = new Date().toLocaleTimeString();
@@ -171,9 +175,15 @@ export default function Home() {
     addLog(`Params: ${generatorParams.numCurves} curves, ${trainingParams.epochs} epochs`);
     
     try {
+      // Build headers with user ID for MongoDB persistence
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (session?.user && 'id' in session.user) {
+        headers['X-User-ID'] = session.user.id as string;
+      }
+      
       const response = await fetch(`${API_URL}/api/generate/stream`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           layers: filmLayers,
           generator: generatorParams,
@@ -226,7 +236,7 @@ export default function Home() {
       setIsGenerating(false);
       setGenerationStart(null);
     }
-  }, [filmLayers, generatorParams, trainingParams, addLog]);
+  }, [filmLayers, generatorParams, trainingParams, addLog, session]);
 
   const handleUploadFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) return;
@@ -296,6 +306,40 @@ export default function Home() {
     input.click();
   }, [addLog]);
 
+  const handleSave = useCallback(async () => {
+    if (!graphData) return;
+    if (!session?.user || !('id' in session.user)) {
+      addLog('Error: Sign in to save results');
+      return;
+    }
+    setIsSaving(true);
+    try {
+      const response = await fetch(`${API_URL}/api/save`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-ID': session.user.id as string,
+        },
+        body: JSON.stringify({
+          layers: filmLayers,
+          generator: generatorParams,
+          training: trainingParams,
+          result: graphData,
+        }),
+      });
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.detail || response.statusText);
+      }
+      const result = await response.json();
+      addLog(`Saved to database (ID: ${result.id})`);
+    } catch (err) {
+      addLog(`Save error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setIsSaving(false);
+    }
+  }, [graphData, session, filmLayers, generatorParams, trainingParams, addLog]);
+
   return (
     <div className="container">
       <header className="header">
@@ -304,6 +348,10 @@ export default function Home() {
           <span>PYREFLECT</span>
           <span className="header__version">v0.0.1</span>
           {isProduction && <span className="header__version" style={{ color: '#f59e0b', marginLeft: '8px' }}>PROD</span>}
+          <span className={`status ${isGenerating ? 'status--training' : 'status--active'}`} style={{ marginLeft: '12px' }}>
+            <span className="status__dot"></span>
+            {isGenerating ? 'Training...' : 'Ready'}
+          </span>
         </div>
         <nav className="header__nav">
           <button className="header__export-btn" onClick={handleImportJSON}>
@@ -314,10 +362,44 @@ export default function Home() {
               ↓ Export All
             </button>
           )}
-          <span className={`status ${isGenerating ? 'status--training' : 'status--active'}`}>
-            <span className="status__dot"></span>
-            {isGenerating ? 'Training...' : 'Ready'}
-          </span>
+          {graphData && session && (
+            <button 
+              className="header__export-btn" 
+              onClick={handleSave}
+              disabled={isSaving}
+            >
+              {isSaving ? 'Saving...' : 'Save'}
+            </button>
+          )}
+          {/* GitHub Auth */}
+          {session ? (
+            <div style={{ position: 'relative', marginLeft: '16px', marginRight: '16px', display: 'flex', alignItems: 'left' }}>
+              {session.user?.image && (
+                <img 
+                  src={session.user.image} 
+                  alt="" 
+                  onClick={() => setShowUserMenu(!showUserMenu)}
+                  style={{ width: 28, height: 28, borderRadius: '50%', cursor: 'pointer' }}
+                />
+              )}
+              {showUserMenu && (
+                <button 
+                  className="header__export-btn"
+                  onClick={() => { setShowUserMenu(false); signOut(); }}
+                  style={{ marginLeft: '16px' }}
+                >
+                  →
+                </button>
+              )}
+            </div>
+          ) : (
+            <button 
+              className="header__export-btn" 
+              onClick={() => signIn('github')}
+            >
+              Sign in
+            </button>
+          )}
         </nav>
       </header>
 

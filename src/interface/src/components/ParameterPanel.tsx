@@ -3,6 +3,7 @@
 import { useState, useRef, type ChangeEvent, type DragEvent } from 'react';
 import { FilmLayer, GeneratorParams, TrainingParams, Limits, DEFAULT_LIMITS } from '@/types';
 import EditableValue from './EditableValue';
+import InfoTooltip from './InfoTooltip';
 import styles from './ParameterPanel.module.css';
 
 interface BackendStatus {
@@ -211,7 +212,7 @@ export default function ParameterPanel({
                 <div className={styles.layerParams}>
                 <div className="control">
                   <div className="control__label">
-                    <span>SLD</span>
+                    <span>SLD<InfoTooltip hint="Scattering Length Density (×10⁻⁶ Å⁻²). Determines neutron contrast of this layer." /></span>
                     <EditableValue
                       value={layer.sld}
                       onChange={(v) => updateLayer(index, 'sld', v)}
@@ -234,7 +235,7 @@ export default function ParameterPanel({
 
                 <div className="control">
                   <div className="control__label">
-                    <span>Thickness (Å)</span>
+                    <span>Thickness (Å)<InfoTooltip hint="Layer thickness in Angstroms. Affects fringe spacing in reflectivity curve." /></span>
                     <EditableValue
                       value={layer.thickness}
                       onChange={(v) => updateLayer(index, 'thickness', v)}
@@ -259,7 +260,7 @@ export default function ParameterPanel({
 
                 <div className="control">
                   <div className="control__label">
-                    <span>Roughness (Å)</span>
+                    <span>Roughness (Å)<InfoTooltip hint="Interfacial roughness in Angstroms. Smears the interface and reduces fringe amplitude." /></span>
                     <EditableValue
                       value={layer.roughness}
                       onChange={(v) => updateLayer(index, 'roughness', v)}
@@ -282,7 +283,7 @@ export default function ParameterPanel({
 
                 <div className="control">
                   <div className="control__label">
-                    <span>iSLD</span>
+                    <span>iSLD<InfoTooltip hint="Imaginary SLD. Represents absorption in the layer (typically small or zero)." /></span>
                     <EditableValue
                       value={layer.isld}
                       onChange={(v) => updateLayer(index, 'isld', v)}
@@ -317,7 +318,7 @@ export default function ParameterPanel({
         
         <div className="control">
           <div className="control__label">
-            <span>Number of Curves{isProduction && ` (max ${limits.max_curves})`}</span>
+            <span>Number of Curves<InfoTooltip hint="How many synthetic NR curves to generate for training. More curves = better model but longer training." />{isProduction && ` (max ${limits.max_curves})`}</span>
             <EditableValue
               value={generatorParams.numCurves}
               onChange={(v) => onGeneratorParamsChange({ ...generatorParams, numCurves: Math.min(Math.round(v), limits.max_curves) })}
@@ -343,7 +344,7 @@ export default function ParameterPanel({
 
         <div className="control">
           <div className="control__label">
-            <span>Max Film Layers</span>
+            <span>Max Film Layers<InfoTooltip hint="Maximum number of film layers to include in the synthetic data generation." /></span>
             <EditableValue
               value={generatorParams.numFilmLayers}
               onChange={(v) => onGeneratorParamsChange({ ...generatorParams, numFilmLayers: Math.min(Math.max(1, Math.round(v)), filmLayers.length) })}
@@ -376,7 +377,7 @@ export default function ParameterPanel({
         
         <div className="control">
           <div className="control__label">
-            <span>Batch Size{isProduction && ` (max ${limits.max_batch_size})`}</span>
+            <span>Batch Size<InfoTooltip hint="Number of samples processed together in one training step. Larger = faster but uses more memory." />{isProduction && ` (max ${limits.max_batch_size})`}</span>
             <EditableValue
               value={trainingParams.batchSize}
               onChange={(v) => onTrainingParamsChange({ ...trainingParams, batchSize: Math.min(Math.round(v), limits.max_batch_size) })}
@@ -402,7 +403,7 @@ export default function ParameterPanel({
 
         <div className="control">
           <div className="control__label">
-            <span>Epochs{isProduction && ` (max ${limits.max_epochs})`}</span>
+            <span>Epochs<InfoTooltip hint="Complete passes through the training data. More epochs = better fit but may overfit." />{isProduction && ` (max ${limits.max_epochs})`}</span>
             <EditableValue
               value={trainingParams.epochs}
               onChange={(v) => onTrainingParamsChange({ ...trainingParams, epochs: Math.min(Math.round(v), limits.max_epochs) })}
@@ -428,7 +429,7 @@ export default function ParameterPanel({
 
         <div className="control">
           <div className="control__label">
-            <span>CNN Layers{isProduction && ` (max ${limits.max_cnn_layers})`}</span>
+            <span>CNN Layers<InfoTooltip hint="Depth of the convolutional neural network. More layers = more capacity to learn complex patterns." />{isProduction && ` (max ${limits.max_cnn_layers})`}</span>
             <EditableValue
               value={trainingParams.layers}
               onChange={(v) => onTrainingParamsChange({ ...trainingParams, layers: Math.min(Math.round(v), limits.max_cnn_layers) })}
@@ -454,7 +455,7 @@ export default function ParameterPanel({
 
         <div className="control">
           <div className="control__label">
-            <span>Dropout{isProduction && ` (max ${limits.max_dropout})`}</span>
+            <span>Dropout<InfoTooltip hint="Regularization to prevent overfitting. Higher = more regularization, may reduce accuracy." />{isProduction && ` (max ${limits.max_dropout})`}</span>
             <EditableValue
               value={trainingParams.dropout}
               onChange={(v) => onTrainingParamsChange({ ...trainingParams, dropout: Math.min(v, limits.max_dropout) })}
@@ -480,7 +481,7 @@ export default function ParameterPanel({
 
         <div className="control">
           <div className="control__label">
-            <span>Latent Dimension{isProduction && ` (max ${limits.max_latent_dim})`}</span>
+            <span>Latent Dimension<InfoTooltip hint="Size of the compressed representation in the autoencoder. Larger = more info retained." />{isProduction && ` (max ${limits.max_latent_dim})`}</span>
             <EditableValue
               value={trainingParams.latentDim}
               onChange={(v) => onTrainingParamsChange({ ...trainingParams, latentDim: Math.min(Math.round(v), limits.max_latent_dim) })}
@@ -506,7 +507,7 @@ export default function ParameterPanel({
 
         <div className="control">
           <div className="control__label">
-            <span>AE Epochs{isProduction && ` (max ${limits.max_ae_epochs})`}</span>
+            <span>AE Epochs<InfoTooltip hint="Autoencoder training epochs. The AE learns to compress NR curves into latent space." />{isProduction && ` (max ${limits.max_ae_epochs})`}</span>
             <EditableValue
               value={trainingParams.aeEpochs}
               onChange={(v) => onTrainingParamsChange({ ...trainingParams, aeEpochs: Math.min(Math.round(v), limits.max_ae_epochs) })}
@@ -532,7 +533,7 @@ export default function ParameterPanel({
 
         <div className="control">
           <div className="control__label">
-            <span>MLP Epochs{isProduction && ` (max ${limits.max_mlp_epochs})`}</span>
+            <span>MLP Epochs<InfoTooltip hint="Multi-layer perceptron epochs. The MLP maps latent space to SLD profiles." />{isProduction && ` (max ${limits.max_mlp_epochs})`}</span>
             <EditableValue
               value={trainingParams.mlpEpochs}
               onChange={(v) => onTrainingParamsChange({ ...trainingParams, mlpEpochs: Math.min(Math.round(v), limits.max_mlp_epochs) })}
