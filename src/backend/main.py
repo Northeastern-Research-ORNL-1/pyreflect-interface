@@ -1097,6 +1097,16 @@ async def delete_save(save_id: str, x_user_id: str | None = Header(default=None)
                         print(f"Deleted orphan model file: {model_id}.pth")
                 except Exception as e:
                     print(f"Warning: Failed to delete model file: {e}")
+                if HF_REPO_ID and hf_api:
+                    try:
+                        hf_api.delete_file(
+                            repo_id=HF_REPO_ID,
+                            path_in_repo=f"{model_id}.pth",
+                            repo_type="dataset",
+                        )
+                        print(f"Deleted HF model file: {model_id}.pth")
+                    except Exception as e:
+                        print(f"Warning: Failed to delete HF model file: {e}")
 
         result = generations_collection.delete_one({
             "_id": ObjectId(save_id),
