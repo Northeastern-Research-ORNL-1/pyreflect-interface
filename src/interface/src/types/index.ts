@@ -51,6 +51,12 @@ export interface Metrics {
   mae: number;
 }
 
+export interface ExportPngs {
+  encoding: 'base64';
+  normal: Record<string, string>;
+  expanded: Record<string, string>;
+}
+
 export interface GenerateResponse {
   nr: NRData;
   sld: SLDData;
@@ -60,6 +66,7 @@ export interface GenerateResponse {
   name?: string;
   model_id?: string;
   model_size_mb?: number;
+  export_pngs?: ExportPngs;
 }
 
 export interface Limits {

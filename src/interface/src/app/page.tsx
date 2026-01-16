@@ -6,7 +6,7 @@ import ParameterPanel from '../components/ParameterPanel';
 import GraphDisplay from '../components/GraphDisplay';
 import ConsoleOutput from '../components/ConsoleOutput';
 import ExploreSidebar from '../components/ExploreSidebar';
-import { FilmLayer, GeneratorParams, TrainingParams, GenerateResponse, Limits, LimitsResponse, DEFAULT_LIMITS, DataSource, Workflow, NrSldMode, UploadRole } from '@/types';
+import { FilmLayer, GeneratorParams, TrainingParams, GenerateResponse, Limits, LimitsResponse, DEFAULT_LIMITS, DataSource, Workflow, NrSldMode, UploadRole, ExportPngs } from '@/types';
 import packageJson from '../../package.json';
 import { toPng } from 'html-to-image';
 import { zipSync, strToU8 } from 'fflate';
@@ -108,6 +108,8 @@ export default function Home() {
   const [showJsonMenuMobile, setShowJsonMenuMobile] = useState(false);
   const [showBundleConfirm, setShowBundleConfirm] = useState(false);
   const [bundlePayload, setBundlePayload] = useState<BundlePayload | null>(null);
+  const [exportPngs, setExportPngs] = useState<ExportPngs | null>(null);
+  const [shouldCapturePngs, setShouldCapturePngs] = useState(false);
   const [bundleEstimate, setBundleEstimate] = useState<{
     jsonBytes: number;
     pngBytes: number;
@@ -130,7 +132,7 @@ export default function Home() {
   const [pendingImportData, setPendingImportData] = useState<GenerateResponse | null>(null);
   const [importName, setImportName] = useState('');
   const jsonMenuRef = useRef<HTMLDivElement>(null);
-  const bundlePngCacheRef = useRef<{ payload: BundlePayload | null; files: Record<string, Uint8Array> } | null>(null);
+  const bundlePngCacheRef = useRef<{ payload: BundlePayload | null; pngs: ExportPngs } | null>(null);
 
   const addLog = useCallback((message: string) => {
     const timestamp = new Date().toLocaleTimeString();
@@ -142,11 +144,12 @@ export default function Home() {
     if (!session?.user || !('id' in session.user)) return;
     
     try {
+      const { export_pngs, ...resultRest } = data.result;
       const payload = {
         layers: data.params.layers,
         generator: data.params.generator,
         training: data.params.training,
-        result: { ...data.result, name: data.name },
+        result: { ...resultRest, name: data.name },
         name: data.name
       };
 
@@ -203,12 +206,15 @@ export default function Home() {
     setGeneratorParams(DEFAULT_GENERATOR);
     setTrainingParams(DEFAULT_TRAINING);
     setGraphData(null);
+    setExportPngs(null);
+    setShouldCapturePngs(false);
     setConsoleLogs([]);
     setError(null);
     setDataSource('synthetic');
     setWorkflow('nr_sld');
     setNrSldMode('train');
     setAutoGenerateModelStats(true);
+    bundlePngCacheRef.current = null;
     if (typeof window !== 'undefined') {
       localStorage.removeItem(`${STORAGE_KEY}_layers`);
       localStorage.removeItem(`${STORAGE_KEY}_generator`);
@@ -276,7 +282,12 @@ export default function Home() {
 
   useEffect(() => {
     if (!isHydrated) return;
-    localStorage.setItem(`${STORAGE_KEY}_graphData`, JSON.stringify(graphData));
+    if (!graphData) {
+      localStorage.setItem(`${STORAGE_KEY}_graphData`, JSON.stringify(graphData));
+      return;
+    }
+    const { export_pngs, ...rest } = graphData;
+    localStorage.setItem(`${STORAGE_KEY}_graphData`, JSON.stringify(rest));
   }, [graphData, isHydrated]);
 
   useEffect(() => {
@@ -349,6 +360,8 @@ export default function Home() {
   const handleGenerate = useCallback(async (name?: string) => {
     setIsGenerating(true);
     setGenerationStart(Date.now());
+    setExportPngs(null);
+    setShouldCapturePngs(false);
     setEpochProgress(null);
     setActiveGenerationName(name ?? null);
     setError(null);
@@ -416,6 +429,8 @@ export default function Home() {
               }
             } else if (currentEvent === 'result') {
               setGraphData(data as GenerateResponse);
+              setExportPngs(null);
+              setShouldCapturePngs(true);
               addLog(`Generation complete. MSE: ${data.metrics.mse.toFixed(4)}`);
             } else if (currentEvent === 'error') {
               throw new Error(data);
@@ -508,15 +523,23 @@ export default function Home() {
             }
         }
 
+        const { export_pngs, ...resultRest } = resultData;
+        if (export_pngs) {
+          setExportPngs(export_pngs);
+        } else {
+          setExportPngs(null);
+        }
+        const cleanedResult = resultRest as GenerateResponse;
+
         // Handle Name & Save
-        const finalName = resultData.name;
+        const finalName = cleanedResult.name;
         
         if (finalName) {
-            setGraphData(resultData);
+            setGraphData(cleanedResult);
             addLog(`Imported data from ${file.name} (Name: ${finalName})`);
             saveToHistory({
                 params: paramsData,
-                result: resultData,
+                result: cleanedResult,
                 name: finalName
             });
         } else {
@@ -529,7 +552,7 @@ export default function Home() {
             // and confirmImportName will use DEFAULTs (which is wrong if I just set them!).
             
             // Let's update pending logic.
-            setPendingImportData(resultData);
+            setPendingImportData(cleanedResult);
             setImportName('');
             setImportNamePopup(true);
             
@@ -553,23 +576,9 @@ export default function Home() {
     setGeneratorParams(params.generator);
     setTrainingParams(params.training);
     setGraphData(result);
+    setExportPngs(null);
     addLog('Loaded saved session from history');
   }, [addLog]);
-
-  const buildExportPayload = useCallback(
-    (
-      params: { layers: FilmLayer[]; generator: GeneratorParams; training: TrainingParams },
-      result: GenerateResponse
-    ) => ({
-      params: {
-        layers: params.layers,
-        generator: params.generator,
-        training: params.training,
-      },
-      result,
-    }),
-    []
-  );
 
   const downloadJsonPayload = useCallback((payload: object, fileName?: string) => {
     const name = fileName ?? `pyreflect_export_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
@@ -602,19 +611,42 @@ export default function Home() {
     }
   }, []);
 
+  const dataUrlToBase64 = useCallback((dataUrl: string) => {
+    const commaIndex = dataUrl.indexOf(',');
+    return commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl;
+  }, []);
+
+  const estimateBase64Bytes = useCallback((base64: string) => {
+    const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+    return Math.max(0, (base64.length * 3) / 4 - padding);
+  }, []);
+
+  const base64ToUint8 = useCallback((base64: string) => {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  }, []);
+
   const captureChartPngs = useCallback(async () => {
     await waitForCharts();
-    const files: Record<string, Uint8Array> = {};
+    const normal: Record<string, string> = {};
+    const expanded: Record<string, string> = {};
+
     for (const chart of EXPORT_CHARTS) {
       const node = document.querySelector(`[data-export-id="${chart.id}"]`) as HTMLElement | null;
       if (!node) continue;
       const { clientWidth, clientHeight } = node;
       if (clientWidth === 0 || clientHeight === 0) continue;
-      const dataUrl = await toPng(node, {
+
+      const normalUrl = await toPng(node, {
         cacheBust: true,
         backgroundColor: '#000000',
         width: clientWidth,
         height: clientHeight,
+        pixelRatio: 1,
         style: {
           transform: 'none',
           position: 'static',
@@ -628,17 +660,64 @@ export default function Home() {
           animation: 'none',
         },
       });
-      const pngBuffer = await fetch(dataUrl).then((res) => res.arrayBuffer());
-      files[chart.filename] = new Uint8Array(pngBuffer);
+
+      const expandedUrl = await toPng(node, {
+        cacheBust: true,
+        backgroundColor: '#000000',
+        width: clientWidth,
+        height: clientHeight,
+        pixelRatio: 2,
+        style: {
+          transform: 'none',
+          position: 'static',
+          top: '0',
+          left: '0',
+          right: 'auto',
+          bottom: 'auto',
+          margin: '0',
+          width: `${clientWidth}px`,
+          height: `${clientHeight}px`,
+          animation: 'none',
+        },
+      });
+
+      normal[chart.id] = dataUrlToBase64(normalUrl);
+      expanded[chart.id] = dataUrlToBase64(expandedUrl);
     }
-    return files;
-  }, [waitForCharts]);
+
+    return { encoding: 'base64', normal, expanded } as ExportPngs;
+  }, [waitForCharts, dataUrlToBase64]);
 
   const openBundleConfirm = useCallback((payload: BundlePayload) => {
     setBundlePayload(payload);
     setShowBundleConfirm(true);
     bundlePngCacheRef.current = null;
   }, []);
+
+  useEffect(() => {
+    if (!shouldCapturePngs || !graphData) return;
+    let cancelled = false;
+
+    const runCapture = async () => {
+      try {
+        const pngPayload = await captureChartPngs();
+        if (!cancelled) {
+          setExportPngs(pngPayload);
+        }
+      } catch (err) {
+        addLog('Warning: Failed to auto-capture PNGs.');
+      } finally {
+        if (!cancelled) {
+          setShouldCapturePngs(false);
+        }
+      }
+    };
+
+    runCapture();
+    return () => {
+      cancelled = true;
+    };
+  }, [shouldCapturePngs, graphData, captureChartPngs, addLog]);
 
   useEffect(() => {
     if (!showBundleConfirm || !bundlePayload) return;
@@ -655,15 +734,29 @@ export default function Home() {
         estimating: true,
       });
 
-      const exportData = buildExportPayload(bundlePayload.params, bundlePayload.result);
-      const jsonStr = JSON.stringify(exportData, null, 2);
-      const jsonBytes = new TextEncoder().encode(jsonStr).length;
-
       let pngBytes = 0;
+      let jsonBytes = 0;
       try {
-        const files = await captureChartPngs();
-        pngBytes = Object.values(files).reduce((sum, file) => sum + file.length, 0);
-        bundlePngCacheRef.current = { payload: bundlePayload, files };
+        const pngPayload = exportPngs ?? await captureChartPngs();
+        const exportData = {
+          params: {
+            layers: bundlePayload.params.layers,
+            generator: bundlePayload.params.generator,
+            training: bundlePayload.params.training,
+          },
+          result: {
+            ...bundlePayload.result,
+            export_pngs: pngPayload,
+          },
+        };
+        const jsonStr = JSON.stringify(exportData, null, 2);
+        jsonBytes = new TextEncoder().encode(jsonStr).length;
+        const allPngs = [
+          ...Object.values(pngPayload.normal),
+          ...Object.values(pngPayload.expanded),
+        ];
+        pngBytes = allPngs.reduce((sum, base64) => sum + estimateBase64Bytes(base64), 0);
+        bundlePngCacheRef.current = { payload: bundlePayload, pngs: pngPayload };
       } catch (err) {
         setBundleEstimateError('Could not estimate PNG size.');
       }
@@ -703,18 +796,36 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [showBundleConfirm, bundlePayload, buildExportPayload, captureChartPngs]);
+  }, [showBundleConfirm, bundlePayload, captureChartPngs, exportPngs, estimateBase64Bytes]);
 
-  const handleExportAll = useCallback(() => {
+  const handleExportAll = useCallback(async () => {
     if (!graphData) return;
-    
-    const exportData = buildExportPayload(
-      { layers: filmLayers, generator: generatorParams, training: trainingParams },
-      graphData
-    );
+
+    let pngPayload = exportPngs;
+    if (!pngPayload) {
+      try {
+        pngPayload = await captureChartPngs();
+        setExportPngs(pngPayload);
+      } catch {
+        addLog('Warning: PNG export capture failed.');
+      }
+    }
+
+    const exportData = {
+      params: {
+        layers: filmLayers,
+        generator: generatorParams,
+        training: trainingParams,
+      },
+      result: {
+        ...graphData,
+        export_pngs: pngPayload ?? graphData.export_pngs,
+      },
+    };
+
     downloadJsonPayload(exportData);
     addLog('Exported full session data (params + results)');
-  }, [graphData, filmLayers, generatorParams, trainingParams, addLog, buildExportPayload, downloadJsonPayload]);
+  }, [graphData, filmLayers, generatorParams, trainingParams, exportPngs, captureChartPngs, addLog, downloadJsonPayload]);
 
   const handleDownloadBundle = useCallback(async (payload?: BundlePayload) => {
     const resolvedResult = payload?.result ?? graphData;
@@ -729,23 +840,44 @@ export default function Home() {
       training: trainingParams,
     };
 
-    const exportData = buildExportPayload(resolvedParams, resolvedResult);
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const baseName = resolvedResult.name
       ? resolvedResult.name.replace(/[^a-z0-9_-]+/gi, '_').slice(0, 32)
       : `pyreflect_bundle_${timestamp}`;
-    const files: Record<string, Uint8Array> = {
-      'output.json': strToU8(JSON.stringify(exportData, null, 2)),
-    };
+    const files: Record<string, Uint8Array> = {};
 
     try {
       addLog('Preparing download bundle...');
       const cached = bundlePngCacheRef.current;
-      const pngFiles =
+      const pngPayload =
         cached && cached.payload === payload
-          ? cached.files
-          : await captureChartPngs();
-      Object.assign(files, pngFiles);
+          ? cached.pngs
+          : exportPngs ?? await captureChartPngs();
+
+      const exportData = {
+        params: {
+          layers: resolvedParams.layers,
+          generator: resolvedParams.generator,
+          training: resolvedParams.training,
+        },
+        result: {
+          ...resolvedResult,
+          export_pngs: pngPayload,
+        },
+      };
+      files['output.json'] = strToU8(JSON.stringify(exportData, null, 2));
+
+      for (const chart of EXPORT_CHARTS) {
+        const normalBase64 = pngPayload.normal[chart.id];
+        if (normalBase64) {
+          files[chart.filename] = base64ToUint8(normalBase64);
+        }
+        const expandedBase64 = pngPayload.expanded[chart.id];
+        if (expandedBase64) {
+          const expandedName = chart.filename.replace(/\.png$/i, '_expanded.png');
+          files[expandedName] = base64ToUint8(expandedBase64);
+        }
+      }
 
       if (resolvedResult.model_id) {
         const modelRes = await fetch(`${API_URL}/api/models/${resolvedResult.model_id}`);
@@ -774,7 +906,7 @@ export default function Home() {
       const errorMsg = err instanceof Error ? err.message : 'Failed to build download bundle';
       addLog(`Download error: ${errorMsg}`);
     }
-  }, [graphData, filmLayers, generatorParams, trainingParams, buildExportPayload, captureChartPngs, addLog]);
+  }, [graphData, filmLayers, generatorParams, trainingParams, captureChartPngs, exportPngs, base64ToUint8, addLog]);
 
   const handleDownloadBundleClick = useCallback(() => {
     if (!graphData) {
@@ -1081,7 +1213,7 @@ export default function Home() {
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: '13px', marginBottom: '16px', lineHeight: '1.4' }}>
               <div style={{ fontWeight: 600, marginBottom: '8px' }}>Download Bundle?</div>
               <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginBottom: '10px' }}>
-                Includes model (.pth), chart PNGs, and output.json. Model is pulled from Hugging Face if not local.
+                Includes model (.pth), normal + expanded chart PNGs, and output.json. Model is pulled from Hugging Face if not local.
               </div>
               <div style={{ display: 'grid', gap: '6px', fontSize: '12px' }}>
                 <div>Model: <span style={{ color: 'var(--text-secondary)' }}>
