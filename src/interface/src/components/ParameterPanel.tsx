@@ -103,8 +103,22 @@ export default function ParameterPanel({
     dataSource === 'synthetic' ||
     (dataSource === 'real' && (workflow === 'sld_chi' || workflow === 'nr_sld_chi' || nrSldMode === 'train'));
 
+  const trainingTooltip =
+    dataSource === 'synthetic'
+      ? 'Used to train the synthetic generator/film stack for this run.'
+      : workflow === 'nr_sld' && nrSldMode === 'train'
+        ? 'Needed to train the NR→SLD model from nr_train/sld_train. Not used in infer.'
+        : workflow === 'sld_chi'
+          ? 'Used to train the SLD→Chi model from SLD/chi training files.'
+          : workflow === 'nr_sld_chi' && nrSldMode === 'train'
+            ? 'Applies to the training stages in this pipeline: NR→SLD training (and SLD→Chi training if enabled).'
+            : 'Training controls are only used when the pipeline includes a training stage.';
+
   const settingsPaths = backendStatus?.settings_paths;
   const settingsStatus = backendStatus?.settings_status;
+  const stripKnownExtension = (path: string): string =>
+    path.replace(/\.(npy|pth|pt|yml|yaml)$/i, '');
+  const stripLabelSuffix = (label: string): string => label.replace(/\s*\([^)]*\)\s*$/, '');
   const getSettingPath = (role: UploadRole): string | undefined => {
     if (!settingsPaths) return undefined;
     switch (role) {
@@ -165,10 +179,10 @@ export default function ParameterPanel({
     sld_chi_model_chi_params_file: 'SLD→Chi Chi Params (.npy)',
   };
 
-  const requiredUploads: UploadRole[] = (() => {
+  const requiredUploads = (() => {
     if (dataSource !== 'real') return [];
     if (workflow === 'sld_chi') {
-      return ['sld_chi_experimental_profile', 'sld_chi_model_sld_file', 'sld_chi_model_chi_params_file'];
+      return ['sld_chi_experimental_profile', 'sld_chi_model_sld_file', 'sld_chi_model_chi_params_file'] as const;
     }
     if (workflow === 'nr_sld_chi') {
       if (nrSldMode === 'infer') {
@@ -180,18 +194,18 @@ export default function ParameterPanel({
         ...(autoGenerateModelStats ? [] : ['nr_sld_model', 'normalization_stats']),
         'sld_chi_model_sld_file',
         'sld_chi_model_chi_params_file',
-      ];
+      ] as const;
     }
     if (nrSldMode === 'infer') {
-      return ['experimental_nr', 'nr_sld_model', 'normalization_stats'];
+      return ['experimental_nr', 'nr_sld_model', 'normalization_stats'] as const;
     }
-    return ['nr_train', 'sld_train', ...(autoGenerateModelStats ? [] : ['nr_sld_model', 'normalization_stats'])];
-  })();
+    return ['nr_train', 'sld_train', ...(autoGenerateModelStats ? [] : ['nr_sld_model', 'normalization_stats'])] as const;
+  })() as UploadRole[];
 
-  const pipelineRoles: UploadRole[] = (() => {
+  const pipelineRoles = (() => {
     if (dataSource !== 'real') return [];
     if (workflow === 'sld_chi') {
-      return ['sld_chi_experimental_profile', 'sld_chi_model_sld_file', 'sld_chi_model_chi_params_file'];
+      return ['sld_chi_experimental_profile', 'sld_chi_model_sld_file', 'sld_chi_model_chi_params_file'] as const;
     }
     if (workflow === 'nr_sld_chi') {
       if (nrSldMode === 'infer') {
@@ -201,7 +215,7 @@ export default function ParameterPanel({
           'normalization_stats',
           'sld_chi_model_sld_file',
           'sld_chi_model_chi_params_file',
-        ];
+        ] as const;
       }
       return [
         'nr_train',
@@ -210,13 +224,13 @@ export default function ParameterPanel({
         'normalization_stats',
         'sld_chi_model_sld_file',
         'sld_chi_model_chi_params_file',
-      ];
+      ] as const;
     }
     if (nrSldMode === 'infer') {
-      return ['experimental_nr', 'nr_sld_model', 'normalization_stats'];
+      return ['experimental_nr', 'nr_sld_model', 'normalization_stats'] as const;
     }
-    return ['nr_train', 'sld_train', 'nr_sld_model', 'normalization_stats'];
-  })();
+    return ['nr_train', 'sld_train', 'nr_sld_model', 'normalization_stats'] as const;
+  })() as UploadRole[];
 
   const missingUploads = requiredUploads.filter((role) => !hasSettingFile(role));
   const canGenerate = dataSource === 'synthetic' || (requiredUploads.length === 0 ? true : missingUploads.length === 0);
@@ -717,7 +731,10 @@ export default function ParameterPanel({
       {shouldShowTraining && (
         <div className="section">
           <div className="section__header">
-            <h3 className="section__title">Training</h3>
+            <h3 className="section__title">
+              Training
+              <InfoTooltip hint={trainingTooltip} />
+            </h3>
           </div>
           
           <div className="control">
@@ -915,7 +932,10 @@ export default function ParameterPanel({
             <>
               {requiredUploads.length > 0 && (
                 <div className={styles.requirements}>
-                  <div className={styles.requirementsLabel}>Required uploads</div>
+                  <div className={styles.requirementsLabel}>
+                    Required uploads
+                    <InfoTooltip hint="Click any missing item to upload the specific file used by this pipeline and mode." />
+                  </div>
                   <div className={styles.requirementsList}>
                     {requiredUploads.map((role) => {
                       const hasFile = hasSettingFile(role);
@@ -960,15 +980,20 @@ export default function ParameterPanel({
               )}
 
               <div className={styles.mapping}>
-                <div className={styles.mappingLabel}>Current file mapping</div>
+                <div className={styles.mappingLabel}>
+                  Current file mapping
+                  <InfoTooltip hint="Shows the settings.yml path for each role and whether the file exists on disk." />
+                </div>
                 {pipelineRoles.map((role) => {
                   const path = getSettingPath(role);
                   const exists = hasSettingFile(role);
                   return (
                     <div key={role} className={styles.mappingRow}>
-                      <span className={styles.mappingKey}>{uploadRequirementLabels[role]}</span>
+                      <span className={styles.mappingKey}>
+                        {stripLabelSuffix(uploadRequirementLabels[role])}
+                      </span>
                       <span className={`${styles.mappingValue} ${exists ? styles.mappingOk : styles.mappingMissing}`}>
-                        {path || 'Not set'}
+                        {path ? stripKnownExtension(path) : 'Not set'}
                       </span>
                     </div>
                   );
