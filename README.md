@@ -3,7 +3,7 @@
 A monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyreflect) neutron reflectivity analysis package.
 
 ![Status](https://img.shields.io/badge/status-development-black)
-![Version](https://img.shields.io/badge/version-v0.1.0-black)
+![Version](https://img.shields.io/badge/version-v0.1.1-black)
 
 ## Highlights
 
