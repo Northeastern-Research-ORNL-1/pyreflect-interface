@@ -15,7 +15,8 @@ export default function ConsoleOutput({ logs, isGenerating, startTimeMs }: Conso
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!isGenerating || startTimeMs === null) {
+    if (startTimeMs === null) {
+      setElapsedMs(0);
       return;
     }
     const update = () => setElapsedMs(Date.now() - startTimeMs);
@@ -37,7 +38,7 @@ export default function ConsoleOutput({ logs, isGenerating, startTimeMs }: Conso
     const seconds = totalSeconds % 60;
     return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
   };
-  const displayElapsed = isGenerating && startTimeMs !== null ? elapsedMs : 0;
+  const displayElapsed = startTimeMs !== null ? elapsedMs : 0;
 
   return (
     <div className={styles.container}>
@@ -51,7 +52,7 @@ export default function ConsoleOutput({ logs, isGenerating, startTimeMs }: Conso
         </span>
         <span className={styles.meta}>
           <span className={styles.elapsed}>
-            {isGenerating && startTimeMs !== null ? formatElapsed(displayElapsed) : '--:--:--'}
+            {startTimeMs !== null ? formatElapsed(displayElapsed) : '--:--:--'}
           </span>
           <span className={styles.count}>{logs.length}</span>
         </span>

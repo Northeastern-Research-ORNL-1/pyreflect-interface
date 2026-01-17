@@ -66,6 +66,12 @@ export interface GenerateResponse {
   name?: string;
   model_id?: string;
   model_size_mb?: number;
+  timing?: {
+    generation?: number;
+    training?: number;
+    inference?: number;
+    total?: number;
+  };
   export_pngs?: ExportPngs;
 }
 

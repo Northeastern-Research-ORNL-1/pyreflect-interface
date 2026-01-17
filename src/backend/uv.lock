@@ -322,6 +322,19 @@ wheels = [
 ]
 
 [[package]]
+name = "croniter"
+version = "6.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "python-dateutil", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
+    { name = "pytz", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ad/2f/44d1ae153a0e27be56be43465e5cb39b9650c781e001e7864389deb25090/croniter-6.0.0.tar.gz", hash = "sha256:37c504b313956114a983ece2c2b07790b1f1094fe9d81cc94739214748255577", size = 64481, upload-time = "2024-12-17T17:17:47.32Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/4b/290b4c3efd6417a8b0c284896de19b1d5855e6dbdb97d2a35e68fa42de85/croniter-6.0.0-py2.py3-none-any.whl", hash = "sha256:2f878c3856f17896979b2a4379ba1f09c83e374931ea15cc835c5dd2eee9b368", size = 25468, upload-time = "2024-12-17T17:17:45.359Z" },
+]
+
+[[package]]
 name = "cycler"
 version = "0.12.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1267,42 +1280,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "service"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "boto3", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
-    { name = "fastapi", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
-    { name = "huggingface-hub", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
-    { name = "numpy", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
-    { name = "pydantic", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
-    { name = "pymongo", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
-    { name = "pyreflect", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
-    { name = "python-dotenv", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
-    { name = "python-multipart", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
-    { name = "pyyaml", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
-    { name = "uvicorn", extra = ["standard"], marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "boto3", specifier = ">=1.42.29" },
-    { name = "fastapi", specifier = ">=0.104.0" },
-    { name = "huggingface-hub", specifier = ">=1.3.2" },
-    { name = "numpy", specifier = ">=2.1.0" },
-    { name = "pydantic", specifier = ">=2.0.0" },
-    { name = "pymongo", specifier = ">=4.6.0" },
-    { name = "pyreflect", git = "https://github.com/williamQyq/pyreflect.git?rev=main" },
-    { name = "python-dotenv", specifier = ">=1.0.0" },
-    { name = "python-multipart", specifier = ">=0.0.6" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
-]
-
-[package.metadata.requires-dev]
-dev = []
-
-[[package]]
 name = "python-dateutil"
 version = "2.9.0.post0"
 source = { registry = "https://pypi.org/simple" }
@@ -1393,6 +1370,18 @@ wheels = [
 ]
 
 [[package]]
+name = "redis"
+version = "7.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "async-timeout", marker = "(python_full_version < '3.11.3' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.11.3' and sys_platform == 'linux')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/43/c8/983d5c6579a411d8a99bc5823cc5712768859b5ce2c8afe1a65b37832c81/redis-7.1.0.tar.gz", hash = "sha256:b1cc3cfa5a2cb9c2ab3ba700864fb0ad75617b41f01352ce5779dabf6d5f9c3c", size = 4796669, upload-time = "2025-11-19T15:54:39.961Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/89/f0/8956f8a86b20d7bb9d6ac0187cf4cd54d8065bc9a1a09eb8011d4d326596/redis-7.1.0-py3-none-any.whl", hash = "sha256:23c52b208f92b56103e17c5d06bdc1a6c2c0b3106583985a76a18f83b265de2b", size = 354159, upload-time = "2025-11-19T15:54:38.064Z" },
+]
+
+[[package]]
 name = "refl1d"
 version = "1.0.1a1"
 source = { registry = "https://pypi.org/simple" }
@@ -1442,6 +1431,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/fb/d2/8920e102050a0de7bfabeb4c4614a49248cf8d5d7a8d01885fbb24dc767a/rich-14.2.0.tar.gz", hash = "sha256:73ff50c7c0c1c77c8243079283f4edb376f0f6442433aecb8ce7e6d0b92d1fe4", size = 219990, upload-time = "2025-10-09T14:16:53.064Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/25/7a/b0178788f8dc6cafce37a212c99565fa1fe7872c70c6c9c1e1a372d9d88f/rich-14.2.0-py3-none-any.whl", hash = "sha256:76bc51fe2e57d2b1be1f96c524b890b816e334ab4c1e45888799bfaab0021edd", size = 243393, upload-time = "2025-10-09T14:16:51.245Z" },
+]
+
+[[package]]
+name = "rq"
+version = "2.6.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "click", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
+    { name = "croniter", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
+    { name = "redis", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/86/6f/a2848f5ba0ca7f1f879c7ad44a2e7b06b98197a7da39be39eda775807f33/rq-2.6.1.tar.gz", hash = "sha256:db5c0d125ac9dbd4438f9a5225ea3e64050542b416fd791d424e2ab5b2853289", size = 675386, upload-time = "2025-11-22T06:45:16.673Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4b/cc/919ccbf0c9b4f8b0f68c3f53e6d8e1e94af4d74cee4e6d3cb2e81f7d0da9/rq-2.6.1-py3-none-any.whl", hash = "sha256:5cc88d3bb5263a407fb2ba2dc6fe8dc710dae94b6f74396cdfe1b32beded9408", size = 112578, upload-time = "2025-11-22T06:45:13.529Z" },
 ]
 
 [[package]]
@@ -1590,6 +1593,46 @@ sdist = { url = "https://files.pythonhosted.org/packages/86/59/a451d7420a77ab0b9
 wheels = [
     { url = "https://files.pythonhosted.org/packages/83/11/00d3c3dfc25ad54e731d91449895a79e4bf2384dc3ac01809010ba88f6d5/seaborn-0.13.2-py3-none-any.whl", hash = "sha256:636f8336facf092165e27924f223d3c62ca560b1f2bb5dff7ab7fad265361987", size = 294914, upload-time = "2024-01-25T13:21:49.598Z" },
 ]
+
+[[package]]
+name = "service"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "boto3", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
+    { name = "fastapi", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
+    { name = "huggingface-hub", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
+    { name = "numpy", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
+    { name = "pydantic", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
+    { name = "pymongo", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
+    { name = "pyreflect", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
+    { name = "python-dotenv", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
+    { name = "python-multipart", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
+    { name = "pyyaml", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
+    { name = "redis", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
+    { name = "rq", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
+    { name = "uvicorn", extra = ["standard"], marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "boto3", specifier = ">=1.42.29" },
+    { name = "fastapi", specifier = ">=0.104.0" },
+    { name = "huggingface-hub", specifier = ">=1.3.2" },
+    { name = "numpy", specifier = ">=2.1.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pymongo", specifier = ">=4.6.0" },
+    { name = "pyreflect", git = "https://github.com/williamQyq/pyreflect.git?rev=main" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
+    { name = "python-multipart", specifier = ">=0.0.6" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "redis", specifier = ">=5.0.0" },
+    { name = "rq", specifier = ">=1.16.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
+]
+
+[package.metadata.requires-dev]
+dev = []
 
 [[package]]
 name = "setuptools"

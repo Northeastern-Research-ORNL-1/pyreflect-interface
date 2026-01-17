@@ -3,12 +3,16 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Header, HTTPException, Request
+from pydantic import BaseModel
 
 from ..config import HF_REPO_ID, MODELS_DIR
 from ..integrations.huggingface import delete_model_file
 from ..schemas import SaveResultRequest
 
 router = APIRouter()
+
+class RenameHistoryRequest(BaseModel):
+    name: str | None = None
 
 
 def _get_generations_collection(http_request: Request):
@@ -105,6 +109,43 @@ async def get_save(save_id: str, http_request: Request, x_user_id: str | None = 
     return doc
 
 
+@router.patch("/history/{save_id}")
+async def rename_save(
+    save_id: str,
+    request: RenameHistoryRequest,
+    http_request: Request,
+    x_user_id: str | None = Header(default=None),
+):
+    generations = _get_generations_collection(http_request)
+    if generations is None:
+        raise HTTPException(status_code=503, detail="MongoDB not available")
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    from bson import ObjectId
+
+    if not ObjectId.is_valid(save_id):
+        raise HTTPException(status_code=400, detail="Invalid ID format")
+
+    name = request.name
+    if name is not None:
+        name = name.strip()
+        if name == "":
+            name = None
+        if name is not None and len(name) > 80:
+            raise HTTPException(status_code=400, detail="Name too long (max 80 chars)")
+
+    oid = ObjectId(save_id)
+    result = generations.update_one(
+        {"_id": oid, "user_id": x_user_id},
+        {"$set": {"name": name, "updated_at": datetime.now(timezone.utc)}},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Save not found or access denied")
+
+    return {"success": True, "id": save_id, "name": name}
+
+
 @router.delete("/history/{save_id}")
 async def delete_save(save_id: str, http_request: Request, x_user_id: str | None = Header(default=None)):
     generations = _get_generations_collection(http_request)
@@ -148,4 +189,3 @@ async def delete_save(save_id: str, http_request: Request, x_user_id: str | None
     except Exception as exc:
         print(f"Error deleting save: {exc}")
         raise HTTPException(status_code=500, detail="Failed to delete save")
-

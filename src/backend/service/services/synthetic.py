@@ -11,7 +11,15 @@ from typing import Any, Generator, TextIO, cast
 
 import numpy as np
 
-from ..config import LEARNING_RATE, MODELS_DIR, SPLIT_RATIO, WEIGHT_DECAY
+from ..config import (
+    LEARNING_RATE,
+    LOCAL_MODEL_WAIT_POLL_S,
+    LOCAL_MODEL_WAIT_TIMEOUT_S,
+    MAX_LOCAL_MODELS,
+    MODELS_DIR,
+    SPLIT_RATIO,
+    WEIGHT_DECAY,
+)
 from ..integrations.huggingface import HuggingFaceIntegration, upload_model
 from ..schemas import (
     ChiDataPoint,
@@ -24,6 +32,10 @@ from ..schemas import (
     TrainingParams,
 )
 from .pyreflect_runtime import PYREFLECT
+from .local_model_limit import (
+    save_torch_state_dict_with_local_limit,
+    wait_for_local_model_slot,
+)
 
 
 def compute_norm_stats(curves: np.ndarray) -> dict:
@@ -112,20 +124,26 @@ def generate_with_pyreflect_streaming(
     )
 
     try:
-        local_models = list(MODELS_DIR.glob("*.pth"))
-        if len(local_models) >= 2:
-            yield emit(
-                "log",
-                f"Error: Local storage limit reached ({len(local_models)}/2 models).",
-            )
-            yield emit(
-                "log",
-                "Please delete old local models or configure Hugging Face to offload them.",
-            )
-            yield emit("error", "Local model limit reached (max 2). Delete models to continue.")
-            return
+        for msg in wait_for_local_model_slot(
+            models_dir=MODELS_DIR,
+            max_models=MAX_LOCAL_MODELS,
+            timeout_s=LOCAL_MODEL_WAIT_TIMEOUT_S,
+            poll_s=LOCAL_MODEL_WAIT_POLL_S,
+        ):
+            yield emit("log", msg)
+            heartbeat = maybe_heartbeat()
+            if heartbeat:
+                yield heartbeat
+    except TimeoutError as exc:
+        yield emit("log", f"Error: {exc}")
+        yield emit(
+            "log",
+            "Delete old local models or configure Hugging Face to offload them.",
+        )
+        yield emit("error", str(exc))
+        return
     except Exception as exc:
-        yield emit("log", f"Warning: Could not check local model count: {exc}")
+        yield emit("log", f"Warning: Could not check/wait for local model slots: {exc}")
 
     data_generator = ReflectivityDataGenerator(num_layers=gen_params.numFilmLayers)
     gen_start = time.perf_counter()
@@ -256,7 +274,36 @@ def generate_with_pyreflect_streaming(
 
     model_id = str(uuid.uuid4())
     model_path = MODELS_DIR / f"{model_id}.pth"
-    torch.save(model.state_dict(), model_path)
+    yield emit("log", "Preparing model for save (moving tensors to CPU)...")
+    try:
+        raw_state_dict = model.state_dict()
+        cpu_state_dict = {}
+        for key, value in raw_state_dict.items():
+            try:
+                cpu_state_dict[key] = value.detach().cpu()  # type: ignore[union-attr]
+            except Exception:
+                cpu_state_dict[key] = value
+    except Exception as exc:
+        yield emit("log", f"Warning: Failed to prepare CPU state_dict: {exc}")
+        cpu_state_dict = model.state_dict()
+    try:
+        for msg in save_torch_state_dict_with_local_limit(
+            torch=torch,
+            state_dict=cpu_state_dict,
+            model_path=model_path,
+            models_dir=MODELS_DIR,
+            max_models=MAX_LOCAL_MODELS,
+            timeout_s=LOCAL_MODEL_WAIT_TIMEOUT_S,
+            poll_s=LOCAL_MODEL_WAIT_POLL_S,
+        ):
+            yield emit("log", msg)
+            heartbeat = maybe_heartbeat()
+            if heartbeat:
+                yield heartbeat
+    except TimeoutError as exc:
+        yield emit("log", f"Error: {exc}")
+        yield emit("error", str(exc))
+        return
     model_size_mb = model_path.stat().st_size / (1024 * 1024)
     yield emit("log", f"Model saved locally: {model_id}.pth ({model_size_mb:.2f} MB)")
 
@@ -474,7 +521,28 @@ def generate_with_pyreflect(
 
     model_id = str(uuid.uuid4())
     model_path = MODELS_DIR / f"{model_id}.pth"
-    torch.save(model.state_dict(), model_path)
+    print("Preparing model for save (moving tensors to CPU)...")
+    try:
+        raw_state_dict = model.state_dict()
+        cpu_state_dict = {}
+        for key, value in raw_state_dict.items():
+            try:
+                cpu_state_dict[key] = value.detach().cpu()  # type: ignore[union-attr]
+            except Exception:
+                cpu_state_dict[key] = value
+    except Exception as exc:
+        print(f"Warning: Failed to prepare CPU state_dict: {exc}")
+        cpu_state_dict = model.state_dict()
+    for msg in save_torch_state_dict_with_local_limit(
+        torch=torch,
+        state_dict=cpu_state_dict,
+        model_path=model_path,
+        models_dir=MODELS_DIR,
+        max_models=MAX_LOCAL_MODELS,
+        timeout_s=LOCAL_MODEL_WAIT_TIMEOUT_S,
+        poll_s=LOCAL_MODEL_WAIT_POLL_S,
+    ):
+        print(msg)
     print(f"Model saved: {model_id}.pth")
 
     print("Training complete!")
@@ -536,4 +604,3 @@ def generate_with_pyreflect(
         metrics=Metrics(mse=float(final_mse), r2=float(np.clip(r2, 0, 1)), mae=mae),
         model_id=model_id,
     )
-
