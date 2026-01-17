@@ -538,11 +538,16 @@ async def purge_user_jobs(
 
 
 @router.get("/queue")
-async def queue_status(http_request: Request):
+async def queue_status(
+    http_request: Request,
+    x_user_id: str | None = Header(default=None),
+):
     """
     Get the current queue status.
 
     Returns queue availability, length, and job IDs.
+    Jobs are filtered by user - only returns jobs belonging to the authenticated user,
+    or jobs with no user_id set (unclaimed jobs that can be claimed on login).
     """
     rq = getattr(http_request.app.state, "rq", None)
 
@@ -550,6 +555,33 @@ async def queue_status(http_request: Request):
         return {"available": False, "message": "Queue integration not configured"}
 
     info = get_queue_info(rq)
+
+    # Filter job_ids by user ownership
+    if info.get("available") and info.get("job_ids"):
+        from rq.job import Job
+
+        filtered_ids = []
+        for job_id in info["job_ids"]:
+            try:
+                job = Job.fetch(job_id, connection=rq.redis)
+                meta = job.meta or {}
+                job_user_id = meta.get("user_id")
+                # Show jobs that:
+                # 1. Belong to the current user (if logged in)
+                # 2. Have no user_id (unclaimed - can be claimed by the current user)
+                if x_user_id:
+                    # Logged in: show user's jobs and unclaimed jobs
+                    if job_user_id is None or job_user_id == x_user_id:
+                        filtered_ids.append(job_id)
+                else:
+                    # Not logged in: only show unclaimed jobs (no user_id)
+                    if job_user_id is None:
+                        filtered_ids.append(job_id)
+            except Exception:
+                # Job not found or error - skip it
+                pass
+
+        info["job_ids"] = filtered_ids
 
     # Add worker info if available
     if rq.available and rq.redis:
