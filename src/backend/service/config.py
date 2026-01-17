@@ -75,3 +75,25 @@ LEARNING_RATE = 2.15481e-05
 WEIGHT_DECAY = 2.6324e-05
 SPLIT_RATIO = 0.8
 
+# =====================
+# Local Model Storage
+# =====================
+
+# Max number of locally stored model files (MODELS_DIR/*.pth). When reached, new
+# training runs will wait until a slot is freed (e.g. after HF upload cleanup or
+# manual deletion).
+MAX_LOCAL_MODELS = int(os.getenv("MAX_LOCAL_MODELS", "2"))
+
+# How long to wait for a local model slot before failing (seconds). Set to 0 to
+# wait indefinitely.
+LOCAL_MODEL_WAIT_TIMEOUT_S = float(os.getenv("LOCAL_MODEL_WAIT_TIMEOUT_S", "900"))
+
+# Poll interval while waiting for a slot (seconds).
+LOCAL_MODEL_WAIT_POLL_S = float(os.getenv("LOCAL_MODEL_WAIT_POLL_S", "2.0"))
+
+# =====================
+# RQ (Job Queue)
+# =====================
+
+# Training job timeout for RQ (supports strings like "30m", "2h", or seconds).
+RQ_JOB_TIMEOUT = os.getenv("RQ_JOB_TIMEOUT", "2h")

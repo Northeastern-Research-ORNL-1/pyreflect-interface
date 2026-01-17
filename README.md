@@ -12,8 +12,9 @@ A monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyr
 - Two data modes: `Synthetic (film layers)` and `Real data (.npy via settings.yml)`
 - Real-data pipelines: `NR → SLD` (train/infer), `SLD → Chi`, and `NR → SLD → Chi` (chains predicted SLD into chi)
 - Role-based uploads that update `src/backend/settings.yml`, plus a UI mapping view to show what each role points to
-- Live SSE logs + per-epoch training progress (header + in-history “in progress” card)
+- Streaming SSE endpoint for synchronous logs/progress (`/api/generate/stream`)
 - Export JSON (params + result + embedded chart PNGs) and download a ZIP bundle (JSON + PNGs + model)
+- Redis-backed queue for non-blocking, concurrent synthetic training submissions. The "Explore" panel shows real-time jobs (elapsed time + last log line), supports rename (double-click) + cancel (queued) + retry/delete (failed), and auto-claims guest-started jobs when you log in so results save to history.
 - Model Object Storage via [Hugging Face dataset](https://huggingface.co/datasets/Northeastern-Research-ORNL-1/models/tree/main) + size lookup and download redirect
 
 ## Architecture
@@ -40,6 +41,11 @@ flowchart LR
     FS_EXPT[data/curves/expt/*.npy]
   end
 
+  subgraph Queue["Job Queue (optional)"]
+    REDIS[(Redis)]
+    RQ[RQ Worker]
+  end
+
   subgraph External
     GH[GitHub]
     DB[(MongoDB)]
@@ -52,6 +58,9 @@ flowchart LR
   API --> PY
   API --> CFG
   API --> FS
+  API -.-> REDIS
+  REDIS --> RQ
+  RQ --> PY
   FS --> FS_MODELS
   FS --> FS_CURVES
   FS_CURVES --> FS_EXPT
@@ -63,18 +72,20 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-  UI[UI: film layers + params] --> API[POST /api/generate/stream]
-  API --> GEN[pyreflect: ReflectivityDataGenerator]
+  UI[UI: film layers + params] --> API[POST /api/jobs/submit]
+  API --> REDIS[(Redis)]
+  REDIS --> RQ[RQ Worker]
+  RQ --> GEN[pyreflect: ReflectivityDataGenerator]
   GEN --> SYN["Synthetic NR/SLD arrays (in-memory)"]
   SYN --> TRAIN[Train CNN NR → SLD]
   TRAIN --> SAVE[Save model_id.pth]
   SAVE --> FS_MODELS[data/models/]
   SAVE -. "optional" .-> HF[(Hugging Face Dataset)]
   TRAIN --> RESULT[result JSON + model_id]
-  RESULT --> UI
   RESULT -. "optional" .-> DB["(MongoDB history)"]
-  API -- "SSE log/progress/result" --> UI
 ```
+
+> Synchronous runs are still available via `POST /api/generate/stream` (SSE), but the current UI submits via the job queue.
 
 ### Real-Data Workflow
 
@@ -169,7 +180,7 @@ This section documents what each major UI button does and which code path it tri
 
 ```mermaid
 flowchart LR
-  H[Header buttons] -->|History| HS[Open History sidebar]
+  H[Header buttons] -->|Explore| HS[Open Explore sidebar]
   HS -->|fetch| APIH[GET /api/history]
   H -->|JSON ▾ → Import| IMP[Import JSON]
   IMP --> FP[Choose .json file]
@@ -188,7 +199,7 @@ flowchart LR
 
 **Buttons**
 
-- `History` → opens the history sidebar (`src/interface/src/components/ExploreSidebar.tsx`).
+- `Explore` → opens the Explore sidebar (Queue + History) (`src/interface/src/components/ExploreSidebar.tsx`).
 - `JSON` VIEW menu → `Import` / `Export`.
 - `Download` → opens the download confirmation modal (`src/interface/src/components/DownloadBundleModal.tsx`).
 - `Profile` → `Sign in` / `Sign out` → GitHub OAuth via NextAuth.
@@ -200,10 +211,9 @@ flowchart TD
   P[Parameter panel buttons] -->|RESET| RST[Reset params + clear current run]
   P -->|GENERATE| GEN[Start generation]
   GEN -->|needs name| POP[Name popup]
-  POP -->|START| RUN["POST /api/generate/stream (SSE)"]
+  POP -->|START| RUN["POST /api/jobs/submit (queue, non-blocking)"]
   POP -->|CANCEL| STOP[Close popup]
-  RUN --> LOGS[Stream logs + progress]
-  RUN --> RES[Render charts + metrics]
+  RUN --> QLOG[Log job id + show in Explore]
   P -->|+ ADD| ADDL[Add film layer]
   P -->|×| RML[Remove film layer]
   P -->|EXPAND/COLLAPSE| LAY[Expand/collapse all layers]
@@ -235,12 +245,18 @@ flowchart LR
 flowchart TD
   HS[History item] -->|click row| LOAD["GET /api/history/{id}"]
   LOAD --> APPLY[Apply to UI state]
+  HS -->|double-click rename| REN["PATCH /api/history/{id}"]
   HS -->|Download icon| DLREQ[Load + open download confirm]
   DLREQ --> BUILD[Build ZIP in browser]
   HS -->|Delete| CONF[Delete confirm popup]
   CONF -->|DELETE| DEL["DELETE /api/history/{id}"]
   DEL --> REFRESH[Refresh list]
 ```
+
+Notes:
+
+- History + Queue names can be renamed inline (double-click → edit → blur/Enter saves).
+- Explore includes a `Clear job cache` button to remove your finished/failed job records from Redis (does not delete history).
 
 ### Download Confirmation Modal
 
@@ -300,6 +316,29 @@ uv run uvicorn main:app --reload --port 8000
 
 Backend runs at `http://localhost:8000`.
 
+#### Job Queue (Optional)
+
+For non-blocking job submission (allows multiple concurrent generations):
+
+```bash
+# Install Redis (one-time)
+brew install redis  # macOS
+sudo apt install redis-server  # Ubuntu
+
+# Start Redis before running uvicorn
+redis-server --daemonize yes
+```
+
+When Redis is running, the backend will automatically:
+
+1. Connect to Redis on startup
+2. Spawn an RQ worker subprocess
+3. Accept job submissions via `/api/jobs/submit`
+
+Jobs are queued and processed in the background. Results appear in history when complete.
+
+> Note: the current UI submits work via the job queue (`/api/jobs/submit`). If Redis/RQ isn’t available you’ll see a “Queue not available” message; you can still call `/api/generate/stream` manually (curl/Postman) for a synchronous run.
+
 ### 2. Frontend Setup
 
 ```bash
@@ -330,6 +369,19 @@ HF_REPO_ID=your-username/pyreflect-models
 # Production limits (only used when PRODUCTION=true)
 MAX_CURVES=5000
 ...
+
+# Redis Queue (optional, for job queuing)
+REDIS_URL=redis://localhost:6379
+# RQ timeout for training jobs (e.g. 30m, 2h)
+RQ_JOB_TIMEOUT=2h
+
+# Local model storage (MODELS_DIR/*.pth)
+# If the folder is full, runs will wait instead of erroring.
+MAX_LOCAL_MODELS=2
+# Seconds to wait for a slot (0 = wait forever)
+LOCAL_MODEL_WAIT_TIMEOUT_S=900
+# Poll interval while waiting
+LOCAL_MODEL_WAIT_POLL_S=2.0
 ```
 
 ### Frontend (`src/interface/.env.local`)
@@ -397,10 +449,20 @@ Each saved generation contains:
 | `/api/history`                | GET    | List saved generations                  |
 | `/api/history`                | POST   | Save a generation manually              |
 | `/api/history/{id}`           | GET    | Get full details of a save              |
+| `/api/history/{id}`           | PATCH  | Rename a saved generation               |
 | `/api/history/{id}`           | DELETE | Delete a saved generation and its model |
 | `/api/models/{model_id}`      | GET    | Download a saved model                  |
 | `/api/models/{model_id}`      | DELETE | Delete a local model file               |
 | `/api/models/{model_id}/info` | GET    | Get model size and source               |
+| `/api/jobs/submit`            | POST   | Submit job to queue (non-blocking)      |
+| `/api/jobs/{job_id}`          | GET    | Get job status, progress, and result    |
+| `/api/jobs/{job_id}`          | DELETE | Cancel a queued job                     |
+| `/api/jobs/{job_id}/name`     | PATCH  | Rename a queued job                     |
+| `/api/jobs/{job_id}/retry`    | POST   | Retry a failed/finished job             |
+| `/api/jobs/{job_id}/delete`   | DELETE | Delete a job record (non-running only)  |
+| `/api/jobs/{job_id}/claim`    | POST   | Attach a job to a user (login mid-run)  |
+| `/api/jobs/purge`             | DELETE | Delete non-running jobs for a user      |
+| `/api/queue`                  | GET    | Queue status and worker info            |
 
 ## Production Limits
 
@@ -420,7 +482,8 @@ Set `PRODUCTION=true` in `src/backend/.env` to enable limits.
 
 ## Model Storage Notes
 
-- Synthetic training keeps up to 2 local models; runs will fail if the limit is reached.
+- Synthetic training keeps up to `MAX_LOCAL_MODELS` local `*.pth` files under `src/backend/data/models/`. When the limit is reached, new runs will wait (up to `LOCAL_MODEL_WAIT_TIMEOUT_S`) for a slot to free up.
+  - Any `*.pth` file counts (including test/dummy files).
 - Set `HF_TOKEN` and `HF_REPO_ID` to offload models to Hugging Face and auto-clean local files.
 - Deleting a history item also deletes its model file locally and from Hugging Face (if configured).
 
@@ -433,3 +496,103 @@ lsof -ti:8000 | xargs kill -9
 # Kill process on port 3000
 lsof -ti:3000 | xargs kill -9
 ```
+
+Common issues:
+
+- **Job looks stuck on “Saving model…”**: the local models folder is full (`src/backend/data/models/*.pth`) or `torch.save` is slow. Check the last log line in Explore; delete/move a `*.pth` file or bump `MAX_LOCAL_MODELS`.
+- **Jobs marked failed after ~30m**: increase `RQ_JOB_TIMEOUT` (the default is `2h`).
+- **Guest → login mid-job**: Explore will attempt to “claim” the running job so the worker can save to Mongo history when it finishes (`/api/jobs/{job_id}/claim`).
+
+## Job Queue Architecture
+
+When Redis is available, the system supports queued job execution:
+
+```mermaid
+sequenceDiagram
+    participant UI as Frontend
+    participant API as FastAPI
+    participant Redis as Redis Queue
+    participant RQ as RQ Worker
+    participant DB as MongoDB
+
+    UI->>API: POST /api/jobs/submit
+    API->>Redis: Enqueue job
+    API-->>UI: {job_id, status: "queued"}
+    Note over UI: UI can submit more jobs
+
+    RQ->>Redis: Fetch job
+    RQ->>RQ: Run training
+    RQ->>DB: Save result
+
+    UI->>API: GET /api/jobs/{job_id}
+    API->>Redis: Get job status
+    API-->>UI: {status, progress, result}
+```
+
+### Job API Examples
+
+**Submit a job:**
+
+```bash
+curl -X POST http://localhost:8000/api/jobs/submit \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: user123" \
+  -d '{"name": "My Job", "layers": [], "generator": {"numCurves": 1000}, "training": {"epochs": 50}}'
+```
+
+**Check job status:**
+
+```bash
+curl http://localhost:8000/api/jobs/{job_id}
+```
+
+Response includes `status` (queued/started/finished/failed), `meta.progress`, and `result` when complete.
+
+**Rename a job:**
+
+```bash
+curl -X PATCH http://localhost:8000/api/jobs/{job_id}/name \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: user123" \
+  -d '{"name": "New name"}'
+```
+
+**Rename a history item:**
+
+```bash
+curl -X PATCH http://localhost:8000/api/history/{id} \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: user123" \
+  -d '{"name": "New name"}'
+```
+
+**Clear job cache (finished/failed jobs):**
+
+```bash
+curl -X DELETE http://localhost:8000/api/jobs/purge \
+  -H "X-User-Id: user123"
+```
+
+### Additional Workers
+
+To process multiple jobs in parallel:
+
+```bash
+uv run rq worker training --path .                # Single worker
+uv run rq worker-pool training -n 2 --path .      # Worker pool
+```
+
+### Monitoring
+
+```bash
+uv run rq info              # Queue status
+uv run rq info --by-queue   # Jobs by queue
+```
+
+Optional dashboard:
+
+```bash
+uv add rq-dashboard && uv run rq-dashboard   # http://localhost:9181
+```
+
+**Fallback Behavior (UI)**: The current UI does not auto-fallback; it will log that the queue is unavailable. Use `/api/generate/stream` directly if you want synchronous execution without Redis.
