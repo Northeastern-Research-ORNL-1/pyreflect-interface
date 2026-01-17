@@ -212,3 +212,10 @@ __marimo__/
 
 # Plan
 /plan.md
+
+# Redis
+dump.rdb
+# Model lock files
+*.lock
+# or more specifically:
+src/backend/data/models/.models.lock
