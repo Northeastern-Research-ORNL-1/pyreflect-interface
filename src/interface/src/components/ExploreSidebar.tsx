@@ -423,7 +423,11 @@ export default function ExploreSidebar({
 
     const fetchQueue = async () => {
       try {
-        const res = await fetch(`${API_URL}/api/queue`, { cache: 'no-store' });
+        const headers: Record<string, string> = {};
+        if (userId) {
+          headers['X-User-ID'] = userId;
+        }
+        const res = await fetch(`${API_URL}/api/queue`, { cache: 'no-store', headers });
         if (!res.ok) return;
         const data: QueueInfo = await res.json();
         
@@ -824,23 +828,28 @@ export default function ExploreSidebar({
           )}
 
           {!userId ? (
-            <div className={styles.emptyState}>
-              History not saved, please log in
+            <>
               {onResetLocal && (
-                <div style={{ marginTop: '12px' }}>
-                  <button
-                    className={styles.jobActionBtn}
-                    onClick={() => {
-                      onResetLocal();
-                      onClose();
-                    }}
-                    title="Clears local saved state (cache)"
-                  >
-                    Clear local cache
-                  </button>
+                <div className={styles.jobsSection}>
+                  <div className={styles.sectionTitleRow}>
+                    <div className={styles.sectionTitle}></div>
+                    <button
+                      className={styles.jobActionBtn}
+                      onClick={() => {
+                        onResetLocal();
+                        onClose();
+                      }}
+                      title="Clears local saved state (cache)"
+                    >
+                      Clear local cache
+                    </button>
+                  </div>
                 </div>
               )}
-            </div>
+              <div className={styles.emptyState}>
+                History not saved, please log in
+              </div>
+            </>
           ) : loading && !historyLoadedOnce ? (
             <div className={styles.emptyState}>Loading...</div>
           ) : error ? (
