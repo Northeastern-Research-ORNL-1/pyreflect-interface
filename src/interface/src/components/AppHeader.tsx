@@ -100,7 +100,7 @@ export default function AppHeader({
             >
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
             </svg>
-            <span className="header__btn-label">History</span>
+            <span className="header__btn-label">Explore</span>
           </button>
           <div className="header__menu" ref={jsonMenuRef}>
             <button className="header__export-btn" onClick={() => setShowJsonMenu((prev) => !prev)}>
