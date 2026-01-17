@@ -984,17 +984,17 @@ export default function ParameterPanel({
             className="btn btn--outline"
             onClick={onReset}
             type="button"
-            disabled={isGenerating || isUploading}
+            disabled={isUploading}
           >
             RESET
           </button>
           <button
             className={`btn btn--full ${!canGenerate ? styles.generateBlocked : ''}`}
             onClick={handleGenerateClick}
-            disabled={isGenerating || isUploading || !canGenerate}
+            disabled={isUploading || !canGenerate}
             title={canGenerate ? undefined : generateBlockReason}
           >
-            {isGenerating ? 'GENERATING...' : 'GENERATE'}
+            GENERATE
           </button>
         </div>
       </div>

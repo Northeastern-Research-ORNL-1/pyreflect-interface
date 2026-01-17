@@ -130,6 +130,7 @@ export default function HomePage() {
   const [importName, setImportName] = useState('');
 
   const addLog = useCallback((message: string) => {
+    setGenerationStart((prev) => prev ?? Date.now());
     const timestamp = new Date().toLocaleTimeString();
     setConsoleLogs((prev) => [...prev, `[${timestamp}] ${message}`]);
   }, []);
@@ -247,6 +248,7 @@ export default function HomePage() {
     closeBundleConfirm();
     resetPngs();
     setConsoleLogs([]);
+    setGenerationStart(null);
     setDataSource('synthetic');
     setWorkflow('nr_sld');
     setNrSldMode('train');
@@ -388,11 +390,7 @@ export default function HomePage() {
 
   const handleGenerate = useCallback(
     async (name?: string) => {
-      setIsGenerating(true);
-      setGenerationStart(Date.now());
       resetPngs();
-      setEpochProgress(null);
-      setActiveGenerationName(name ?? null);
       addLog('Starting generation...');
 
       if (dataSource === 'real') {
@@ -404,79 +402,46 @@ export default function HomePage() {
         addLog(`Params: ${generatorParams.numCurves} curves, ${trainingParams.epochs} epochs`);
       }
 
-      try {
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (sessionUserId) headers['X-User-ID'] = sessionUserId;
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (sessionUserId) headers['X-User-ID'] = sessionUserId;
 
-        const response = await fetch(`${API_URL}/api/generate/stream`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            layers: filmLayers,
-            generator: generatorParams,
-            training: trainingParams,
-            name,
-            dataSource,
-            workflow,
-            mode: nrSldMode,
-            autoGenerateModelStats,
-          }),
+      const payload = {
+        layers: filmLayers,
+        generator: generatorParams,
+        training: trainingParams,
+        name,
+        dataSource,
+        workflow,
+        mode: nrSldMode,
+        autoGenerateModelStats,
+      };
+
+      // Try queue first (fire-and-forget for instant button return)
+      fetch(`${API_URL}/api/jobs/submit`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      })
+        .then(async (queueRes) => {
+          if (queueRes.ok) {
+            const queueData = await queueRes.json();
+            addLog(`Job queued: ${queueData.job_id.slice(0, 8)}... (position: ${queueData.queue_position})`);
+            addLog('Job will run in background. Check history when complete.');
+          } else {
+            // Queue not available - user should use streaming mode manually
+            addLog('Queue not available. Click again to use streaming mode.');
+          }
+        })
+        .catch(() => {
+          addLog('Queue not reachable. Click again to use streaming mode.');
         });
 
-        if (!response.ok) throw new Error(`Generation failed: ${response.statusText}`);
-
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error('No response body');
-
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-
-          let currentEvent = '';
-          for (const line of lines) {
-            if (line.startsWith('event: ')) {
-              currentEvent = line.slice(7);
-            } else if (line.startsWith('data: ')) {
-              const data = JSON.parse(line.slice(6));
-              if (currentEvent === 'log') {
-                addLog(data);
-              } else if (currentEvent === 'progress') {
-                if (typeof data.epoch === 'number' && typeof data.total === 'number') {
-                  setEpochProgress({ current: data.epoch, total: data.total });
-                }
-              } else if (currentEvent === 'result') {
-                setGraphData(data as GenerateResponse);
-                resetPngs();
-                requestAutoCapture();
-                addLog(`Generation complete. MSE: ${data.metrics.mse.toFixed(4)}`);
-              } else if (currentEvent === 'error') {
-                throw new Error(data);
-              }
-            }
-          }
-        }
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : 'Backend not deployed';
-        addLog(`Error: ${errorMsg}`);
-      } finally {
-        setIsGenerating(false);
-        setGenerationStart(null);
-        setEpochProgress(null);
-        setActiveGenerationName(null);
-      }
+      // Fire-and-forget - return immediately so user can submit more jobs
     },
     [
       addLog,
       autoGenerateModelStats,
       dataSource,
-      requestAutoCapture,
       resetPngs,
       filmLayers,
       generatorParams,
@@ -628,6 +593,7 @@ export default function HomePage() {
         isOpen={showExplore}
         onClose={() => setShowExplore(false)}
         userId={sessionUserId}
+        onResetLocal={handleReset}
         onLoadSave={(params, result) => {
           resetPngs();
           handleLoadSaveCore(params, result);

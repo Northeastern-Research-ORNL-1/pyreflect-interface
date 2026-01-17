@@ -1,0 +1,571 @@
+"""
+Job queue API endpoints.
+
+Provides endpoints for submitting training jobs to the queue,
+checking job status, and managing the queue.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Header, HTTPException, Request
+from pydantic import BaseModel
+
+from ..integrations.redis_queue import get_job_status, get_queue_info
+from ..schemas import GenerateRequest, validate_limits
+
+router = APIRouter()
+
+class RenameJobRequest(BaseModel):
+    name: str | None = None
+
+
+@router.post("/jobs/submit")
+async def submit_job(
+    request: GenerateRequest,
+    http_request: Request,
+    x_user_id: str | None = Header(default=None),
+):
+    """
+    Submit a training job to the queue.
+
+    Returns immediately with a job_id that can be used to poll for status.
+    If the queue is not available, falls back to synchronous execution.
+    """
+    rq = getattr(http_request.app.state, "rq", None)
+    hf = getattr(http_request.app.state, "hf", None)
+
+    if not rq or not rq.available:
+        raise HTTPException(
+            status_code=503,
+            detail="Job queue not available. Use /api/generate/stream for synchronous execution.",
+        )
+
+    # Validate limits
+    validate_limits(request.generator, request.training)
+
+    # Build job parameters
+    job_params = {
+        "layers": [layer.model_dump() for layer in request.layers],
+        "generator": request.generator.model_dump(),
+        "training": request.training.model_dump(),
+    }
+
+    # Build HF config if available
+    hf_config = None
+    if hf and hf.available and hf.repo_id:
+        from ..config import HF_TOKEN
+        hf_config = {"token": HF_TOKEN, "repo_id": hf.repo_id}
+
+    # Get MongoDB URI from config
+    from ..config import MONGODB_URI, RQ_JOB_TIMEOUT
+
+    try:
+        from ..jobs import run_training_job
+
+        job = rq.queue.enqueue(
+            run_training_job,
+            job_params,
+            user_id=x_user_id,
+            name=request.name,
+            hf_config=hf_config,
+            mongo_uri=MONGODB_URI,
+            job_timeout=RQ_JOB_TIMEOUT,
+            result_ttl=3600,  # Keep results for 1 hour
+        )
+
+        # Persist enough info for UI actions like "retry"
+        try:
+            job.meta["job_params"] = job_params
+            job.meta["user_id"] = x_user_id
+            job.meta["name"] = request.name
+            job.save_meta()
+        except Exception:
+            pass
+
+        return {
+            "job_id": job.id,
+            "status": "queued",
+            "message": "Job submitted successfully. Poll /api/jobs/{job_id} for status.",
+            "queue_position": len(rq.queue),
+        }
+
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to submit job: {exc}") from exc
+
+
+@router.get("/jobs/{job_id}")
+async def get_job(job_id: str, http_request: Request):
+    """
+    Get the status of a submitted job.
+
+    Returns job status, progress, logs, and result (if completed).
+    """
+    rq = getattr(http_request.app.state, "rq", None)
+
+    if not rq or not rq.available:
+        raise HTTPException(status_code=503, detail="Job queue not available.")
+
+    status = get_job_status(rq, job_id)
+
+    if "error" in status and "not found" in status["error"].lower():
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    # Also try to get job meta for progress/logs
+    try:
+        from rq.job import Job
+
+        job = Job.fetch(job_id, connection=rq.redis)
+        meta = job.meta or {}
+        status["meta"] = {
+            "status": meta.get("status"),
+            "progress": meta.get("progress"),
+            "logs": meta.get("logs", [])[-20:],  # Last 20 log entries
+            "started_at": meta.get("started_at"),
+            "completed_at": meta.get("completed_at"),
+            "updated_at": meta.get("updated_at"),
+            "user_id": meta.get("user_id"),
+            "name": meta.get("name"),
+            "retried_from": meta.get("retried_from"),
+        }
+    except Exception:
+        pass
+
+    return status
+
+
+@router.patch("/jobs/{job_id}/name")
+async def rename_job(
+    job_id: str,
+    request: RenameJobRequest,
+    http_request: Request,
+    x_user_id: str | None = Header(default=None),
+):
+    """
+    Rename a job (stored in Redis meta).
+
+    Also claims the job for the user if it isn't claimed yet.
+    """
+    rq = getattr(http_request.app.state, "rq", None)
+
+    if not rq or not rq.available or not rq.redis:
+        raise HTTPException(status_code=503, detail="Job queue not available.")
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    name = request.name
+    if name is not None:
+        name = name.strip()
+        if name == "":
+            name = None
+        if name is not None and len(name) > 80:
+            raise HTTPException(status_code=400, detail="Name too long (max 80 chars)")
+
+    try:
+        from rq.job import Job
+
+        job = Job.fetch(job_id, connection=rq.redis)
+        meta = job.meta or {}
+
+        existing_user = meta.get("user_id")
+        if existing_user and existing_user != x_user_id:
+            raise HTTPException(status_code=403, detail="Job already claimed by another user")
+
+        meta["name"] = name
+        meta["user_id"] = existing_user or x_user_id
+        job.meta = meta
+        job.save_meta()
+        return {"job_id": job_id, "name": name}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to rename job: {exc}") from exc
+
+
+@router.post("/jobs/{job_id}/claim")
+async def claim_job(job_id: str, http_request: Request, x_user_id: str | None = Header(default=None)):
+    """
+    Attach a job to a user after it was created (e.g. user logs in mid-run).
+
+    This sets job.meta.user_id so the worker can save results to history when complete.
+    """
+    rq = getattr(http_request.app.state, "rq", None)
+
+    if not rq or not rq.available or not rq.redis:
+        raise HTTPException(status_code=503, detail="Job queue not available.")
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        from rq.job import Job
+
+        job = Job.fetch(job_id, connection=rq.redis)
+        meta = job.meta or {}
+
+        existing = meta.get("user_id")
+        if existing and existing != x_user_id:
+            raise HTTPException(status_code=403, detail="Job already claimed by another user")
+
+        meta["user_id"] = x_user_id
+        job.meta = meta
+        job.save_meta()
+
+        # If the job already finished, attempt to persist it to history immediately.
+        mongo = getattr(http_request.app.state, "mongo", None)
+        generations = getattr(mongo, "generations", None) if mongo else None
+        if generations is not None and job.get_status() == "finished":
+            try:
+                result = None
+                try:
+                    latest = job.latest_result()
+                    if latest and getattr(latest, "type", None) and latest.type.name == "SUCCESSFUL":
+                        result = latest.return_value
+                except Exception:
+                    result = None
+                if result is None:
+                    try:
+                        result = job.result
+                    except Exception:
+                        result = None
+
+                if isinstance(result, dict):
+                    model_id = (result.get("model_id") if isinstance(result.get("model_id"), str) else None)
+                    if model_id:
+                        existing = generations.find_one(
+                            {"user_id": x_user_id, "result.model_id": model_id},
+                            {"_id": 1},
+                        )
+                        if not existing:
+                            job_params = meta.get("job_params")
+                            if not isinstance(job_params, dict):
+                                try:
+                                    if job.args and isinstance(job.args[0], dict):
+                                        job_params = job.args[0]
+                                except Exception:
+                                    job_params = None
+
+                            if isinstance(job_params, dict):
+                                created_at = job.ended_at or datetime.now(timezone.utc)
+                                doc = {
+                                    "user_id": x_user_id,
+                                    "created_at": created_at,
+                                    "name": meta.get("name"),
+                                    "params": job_params,
+                                    "result": result,
+                                }
+                                generations.insert_one(doc)
+            except Exception:
+                # Don't block claim if persistence fails
+                pass
+
+        return {"job_id": job_id, "user_id": x_user_id, "status": "claimed"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to claim job: {exc}") from exc
+
+
+@router.post("/jobs/{job_id}/retry")
+async def retry_job(job_id: str, http_request: Request):
+    """
+    Retry a failed/finished job by re-enqueueing it with the same parameters.
+
+    Requires the original job to have stored job_params in Redis meta.
+    """
+    rq = getattr(http_request.app.state, "rq", None)
+    hf = getattr(http_request.app.state, "hf", None)
+
+    if not rq or not rq.available or not rq.redis or not rq.queue:
+        raise HTTPException(status_code=503, detail="Job queue not available.")
+
+    try:
+        from rq.job import Job
+
+        old_job = Job.fetch(job_id, connection=rq.redis)
+        old_status = old_job.get_status()
+        if old_status not in ("failed", "finished", "canceled", "stopped"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job {job_id} is {old_status}; only failed/finished jobs can be retried.",
+            )
+
+        meta = old_job.meta or {}
+
+        # Prefer explicitly stored params; fall back to the original job args for
+        # backwards compatibility (jobs created before retry support).
+        job_params = meta.get("job_params")
+        if not isinstance(job_params, dict):
+            try:
+                if old_job.args and isinstance(old_job.args[0], dict):
+                    job_params = old_job.args[0]
+            except Exception:
+                job_params = None
+
+        if not isinstance(job_params, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="Job parameters not available for retry.",
+            )
+
+        from ..jobs import run_training_job
+        from ..config import MONGODB_URI, RQ_JOB_TIMEOUT
+
+        # Build HF config if available (same behavior as submit)
+        hf_config = None
+        if hf and hf.available and hf.repo_id:
+            from ..config import HF_TOKEN
+
+            hf_config = {"token": HF_TOKEN, "repo_id": hf.repo_id}
+
+        # Preserve old user/name when possible, but don't require meta to exist.
+        old_user_id = (
+            meta.get("user_id") if meta.get("user_id") else (old_job.kwargs or {}).get("user_id")
+        )
+        old_name = meta.get("name") if meta.get("name") else (old_job.kwargs or {}).get("name")
+
+        new_job = rq.queue.enqueue(
+            run_training_job,
+            job_params,
+            user_id=old_user_id,
+            name=old_name,
+            hf_config=hf_config,
+            mongo_uri=MONGODB_URI,
+            job_timeout=RQ_JOB_TIMEOUT,
+            result_ttl=3600,
+        )
+        try:
+            new_job.meta["job_params"] = job_params
+            new_job.meta["user_id"] = old_user_id
+            new_job.meta["name"] = old_name
+            new_job.meta["retried_from"] = job_id
+            new_job.save_meta()
+        except Exception:
+            pass
+
+        return {
+            "job_id": new_job.id,
+            "status": "queued",
+            "message": f"Job retried from {job_id}. Poll /api/jobs/{new_job.id} for status.",
+            "queue_position": len(rq.queue),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to retry job: {exc}") from exc
+
+
+@router.delete("/jobs/{job_id}")
+async def cancel_job(job_id: str, http_request: Request):
+    """
+    Cancel a queued job.
+
+    Only works for jobs that haven't started yet.
+    """
+    rq = getattr(http_request.app.state, "rq", None)
+
+    if not rq or not rq.available:
+        raise HTTPException(status_code=503, detail="Job queue not available.")
+
+    try:
+        from rq.job import Job
+
+        job = Job.fetch(job_id, connection=rq.redis)
+        status = job.get_status()
+
+        if status == "started":
+            raise HTTPException(status_code=400, detail="Cannot cancel a running job")
+
+        if status == "finished":
+            raise HTTPException(status_code=400, detail="Job already completed")
+
+        job.cancel()
+        return {"job_id": job_id, "status": "cancelled", "message": "Job cancelled successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to cancel job: {exc}") from exc
+
+
+@router.delete("/jobs/{job_id}/delete")
+async def delete_job(job_id: str, http_request: Request):
+    """
+    Delete a job record from Redis (useful to clear failed jobs from the UI).
+
+    Refuses to delete running jobs.
+    """
+    rq = getattr(http_request.app.state, "rq", None)
+
+    if not rq or not rq.available or not rq.redis or not rq.queue:
+        raise HTTPException(status_code=503, detail="Job queue not available.")
+
+    try:
+        from rq.job import Job
+        from rq.registry import FailedJobRegistry, FinishedJobRegistry, StartedJobRegistry
+
+        job = Job.fetch(job_id, connection=rq.redis)
+        status = job.get_status()
+
+        if status == "started":
+            raise HTTPException(status_code=400, detail="Cannot delete a running job")
+
+        # Best-effort removal from queue/registries
+        try:
+            rq.queue.remove(job_id)
+        except Exception:
+            pass
+        try:
+            StartedJobRegistry(queue=rq.queue).remove(job_id, delete_job=False)
+        except Exception:
+            pass
+        try:
+            FinishedJobRegistry(queue=rq.queue).remove(job_id, delete_job=False)
+        except Exception:
+            pass
+        try:
+            FailedJobRegistry(queue=rq.queue).remove(job_id, delete_job=False)
+        except Exception:
+            pass
+
+        try:
+            job.delete()
+        except Exception:
+            # Fall back to manual delete if older rq API
+            try:
+                rq.redis.delete(job.key)
+            except Exception:
+                raise
+
+        return {"job_id": job_id, "status": "deleted"}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to delete job: {exc}") from exc
+
+
+@router.delete("/jobs/purge")
+async def purge_user_jobs(
+    http_request: Request,
+    x_user_id: str | None = Header(default=None),
+    include_queued: bool = False,
+):
+    """
+    Delete non-running job records associated with the current user from Redis/RQ.
+
+    - Default: deletes finished/failed/etc jobs, but keeps queued jobs.
+    - Set include_queued=true to also delete queued jobs.
+    """
+    rq = getattr(http_request.app.state, "rq", None)
+
+    if not rq or not rq.available or not rq.redis or not rq.queue:
+        raise HTTPException(status_code=503, detail="Job queue not available.")
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        from rq.job import Job
+        from rq.registry import FailedJobRegistry, FinishedJobRegistry, StartedJobRegistry
+
+        started_registry = StartedJobRegistry(queue=rq.queue)
+        finished_registry = FinishedJobRegistry(queue=rq.queue)
+        failed_registry = FailedJobRegistry(queue=rq.queue)
+
+        candidate_ids = set(rq.queue.job_ids)
+        candidate_ids.update(started_registry.get_job_ids())
+        candidate_ids.update(finished_registry.get_job_ids())
+        candidate_ids.update(failed_registry.get_job_ids())
+
+        deleted = 0
+        skipped_running = 0
+        skipped_unowned = 0
+        skipped_queued = 0
+        missing = 0
+
+        for job_id in candidate_ids:
+            try:
+                job = Job.fetch(job_id, connection=rq.redis)
+            except Exception:
+                missing += 1
+                continue
+
+            meta = job.meta or {}
+            if meta.get("user_id") != x_user_id:
+                skipped_unowned += 1
+                continue
+
+            status = job.get_status()
+            if status == "started":
+                skipped_running += 1
+                continue
+            if status == "queued" and not include_queued:
+                skipped_queued += 1
+                continue
+
+            # Best-effort removal from queue/registries, then delete job key.
+            try:
+                rq.queue.remove(job_id)
+            except Exception:
+                pass
+            for registry in (started_registry, finished_registry, failed_registry):
+                try:
+                    registry.remove(job_id, delete_job=False)
+                except Exception:
+                    pass
+            try:
+                job.delete()
+            except Exception:
+                try:
+                    rq.redis.delete(job.key)
+                except Exception:
+                    pass
+
+            deleted += 1
+
+        return {
+            "user_id": x_user_id,
+            "deleted": deleted,
+            "skipped_running": skipped_running,
+            "skipped_queued": skipped_queued,
+            "skipped_unowned": skipped_unowned,
+            "missing": missing,
+            "include_queued": include_queued,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to purge jobs: {exc}") from exc
+
+
+@router.get("/queue")
+async def queue_status(http_request: Request):
+    """
+    Get the current queue status.
+
+    Returns queue availability, length, and job IDs.
+    """
+    rq = getattr(http_request.app.state, "rq", None)
+
+    if not rq:
+        return {"available": False, "message": "Queue integration not configured"}
+
+    info = get_queue_info(rq)
+
+    # Add worker info if available
+    if rq.available and rq.redis:
+        try:
+            from rq import Worker
+
+            workers = Worker.all(connection=rq.redis)
+            info["workers"] = [
+                {
+                    "name": w.name,
+                    "state": w.state,
+                    "current_job": w.get_current_job_id(),
+                }
+                for w in workers
+            ]
+        except Exception:
+            info["workers"] = []
+
+    return info
