@@ -30,6 +30,9 @@ _SERVICE_DIR = _HERE / "service"
 # CPU-only PyTorch wheel. Use a CUDA-enabled torch build for Modal GPUs.
 image = (
     modal.Image.debian_slim(python_version="3.11")
+    # Torch 2.2.x is not compatible with NumPy 2.x at runtime (breaks torch<->numpy
+    # interop and emits warnings). Pin NumPy <2 inside Modal to keep training stable.
+    .pip_install("numpy<2")
     # IMPORTANT: PyPI `torch` is often CPU-only. Install a CUDA wheel explicitly so
     # the Modal GPU is actually used.
     # NOTE: The CUDA wheels use a local version tag (e.g. `2.2.2+cu121`), so pin it
@@ -38,14 +41,15 @@ image = (
     .pip_install(
         "redis",
         "rq",
-        "numpy",
         "scipy",
         "scikit-learn",
         "python-dotenv",
         "requests",
         "pymongo",
         "huggingface_hub",
-        "pyreflect",
+        # Install the same pyreflect build as the backend (the PyPI `pyreflect`
+        # package is a different project and is missing required modules).
+        "pyreflect @ https://github.com/williamQyq/pyreflect/archive/refs/heads/main.zip",
     )
     # Bundle only the backend service package so the RQ worker can import
     # `service.jobs.run_training_job` without pulling in unrelated repo files.

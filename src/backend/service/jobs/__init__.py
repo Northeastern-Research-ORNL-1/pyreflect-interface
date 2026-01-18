@@ -297,14 +297,24 @@ def run_training_job(
     upload_token = os.getenv("MODEL_UPLOAD_TOKEN")
     want_backend_upload = bool(upload_url and upload_token)
 
-    # Upload to HuggingFace if configured
-    if hf_config and hf_config.get("token") and hf_config.get("repo_id"):
+    # Upload to HuggingFace if configured.
+    # NOTE: Do not rely on tokens passed via job args (those get logged by RQ).
+    if hf_config and hf_config.get("repo_id"):
         set_meta({"status": "uploading"})
         log("Uploading to Hugging Face...")
         try:
+            import os
             from huggingface_hub import HfApi
 
-            api = HfApi(token=hf_config["token"])
+            hf_token = hf_config.get("token") or os.getenv("HF_TOKEN")
+            if not hf_token:
+                log("Warning: HF_TOKEN not set; skipping Hugging Face upload.")
+                hf_token = None
+
+            if not hf_token:
+                raise RuntimeError("Missing HF_TOKEN")
+
+            api = HfApi(token=hf_token)
             hf = HuggingFaceIntegration(
                 available=True,
                 api=api,

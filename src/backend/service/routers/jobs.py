@@ -79,8 +79,9 @@ async def submit_job(
     # Build HF config if available
     hf_config = None
     if hf and hf.available and hf.repo_id:
-        from ..config import HF_TOKEN
-        hf_config = {"token": HF_TOKEN, "repo_id": hf.repo_id}
+        # Do NOT pass tokens via job args: RQ logs job arguments, which would leak
+        # secrets into worker logs (including Modal logs).
+        hf_config = {"repo_id": hf.repo_id}
 
     # Get MongoDB URI from config
     from ..config import MONGODB_URI, RQ_JOB_TIMEOUT
