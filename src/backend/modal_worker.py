@@ -32,7 +32,9 @@ image = (
     modal.Image.debian_slim(python_version="3.11")
     # IMPORTANT: PyPI `torch` is often CPU-only. Install a CUDA wheel explicitly so
     # the Modal GPU is actually used.
-    .pip_install("torch==2.2.2", index_url="https://download.pytorch.org/whl/cu121")
+    # NOTE: The CUDA wheels use a local version tag (e.g. `2.2.2+cu121`), so pin it
+    # explicitly to avoid accidentally pulling the CPU-only wheel from PyPI.
+    .pip_install("torch==2.2.2+cu121", index_url="https://download.pytorch.org/whl/cu121")
     .pip_install(
         "redis",
         "rq",
@@ -57,9 +59,23 @@ def _normalize_redis_url(value: str) -> str:
     Users often set `REDIS_URL` to `host:6379` or `:password@host:6379`.
     Accept those by assuming `redis://`.
     """
+    value = (value or "").strip()
+    if value.lower().startswith("redis_url="):
+        value = value.split("=", 1)[1].strip()
+
+    # Strip wrapping quotes, even if mismatched (common when secrets get saved with
+    # accidental extra quotes).
     value = value.strip()
-    if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
-        value = value[1:-1].strip()
+    if value[:1] in {'"', "'"}:
+        value = value[1:]
+    if value[-1:] in {'"', "'"}:
+        value = value[:-1]
+    value = value.strip()
+
+    # Normalize scheme casing (URL schemes are case-insensitive, but our checks aren't).
+    if "://" in value:
+        scheme, rest = value.split("://", 1)
+        value = f"{scheme.lower()}://{rest}"
 
     if value.startswith(("redis://", "rediss://", "unix://")):
         return value
@@ -185,19 +201,7 @@ def poll_queue():
         print("REDIS_URL not set; poll_queue is idle.")
         return
     redis_url = _normalize_redis_url(redis_url)
-    print(
-        "REDIS_URL loaded. "
-        f"starts_redis={redis_url.startswith(('redis://','rediss://','unix://'))} "
-        f"starts_slashes={redis_url.startswith('//')}"
-    )
-
     parsed = urlparse(redis_url)
-    if parsed.scheme not in {"redis", "rediss", "unix"}:
-        print(
-            f"Invalid REDIS_URL scheme '{parsed.scheme}'. "
-            "Set Modal secret 'pyreflect-redis' with REDIS_URL=redis://:PASSWORD@HOST:6379 (no spaces around '=')."
-        )
-        return
     redis_host = parsed.hostname or "unknown"
     redis_port = parsed.port or 6379
     if redis_host in {"localhost", "127.0.0.1", "::1"}:
