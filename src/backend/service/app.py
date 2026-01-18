@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import BACKEND_ROOT, CORS_ORIGINS, HF_REPO_ID, HF_TOKEN, MONGODB_URI
+from .config import START_LOCAL_RQ_WORKER
 from .integrations.huggingface import init_huggingface
 from .integrations.mongo import init_mongo, mongo_keepalive
 from .integrations.redis_queue import create_rq_integration
@@ -24,8 +25,10 @@ from .settings_store import ensure_backend_layout
 def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        import os
         import subprocess
         import sys
+        from urllib.parse import urlparse
 
         mongo = init_mongo(MONGODB_URI)
         hf = init_huggingface(HF_TOKEN, HF_REPO_ID)
@@ -38,11 +41,20 @@ def create_app() -> FastAPI:
         print(f"   pyreflect available: {PYREFLECT.available}")
         print(f"   MongoDB available: {mongo.available}")
         print(f"   Redis Queue available: {rq.available}")
+        try:
+            redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+            parsed = urlparse(redis_url)
+            redis_host = parsed.hostname or "localhost"
+            if not START_LOCAL_RQ_WORKER and redis_host in {"localhost", "127.0.0.1", "::1"}:
+                print("   WARNING: START_LOCAL_RQ_WORKER=false but REDIS_URL points to localhost.")
+                print("            Remote workers (Modal) cannot see jobs from this Redis.")
+        except Exception:
+            pass
         ensure_backend_layout()
 
         # Start RQ worker subprocess if queue is available
         worker_process = None
-        if rq.available:
+        if rq.available and START_LOCAL_RQ_WORKER:
             try:
                 # Use SimpleWorker to avoid macOS fork() crash with PyTorch
                 # SimpleWorker runs jobs in the main process (no forking)
@@ -60,6 +72,8 @@ def create_app() -> FastAPI:
             except Exception as exc:
                 print(f"   Warning: Failed to start RQ worker: {exc}")
                 worker_process = None
+        elif rq.available and not START_LOCAL_RQ_WORKER:
+            print("   Local RQ worker disabled (START_LOCAL_RQ_WORKER=false)")
 
         keepalive_task = None
         if mongo.available and mongo.client is not None:

@@ -7,10 +7,13 @@ checking job status, and managing the queue.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
+from ..config import START_LOCAL_RQ_WORKER
 from ..integrations.redis_queue import get_job_status, get_queue_info
 from ..schemas import GenerateRequest, validate_limits
 
@@ -590,6 +593,19 @@ async def queue_status(
         return {"available": False, "message": "Queue integration not configured"}
 
     info = get_queue_info(rq)
+    try:
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+        parsed = urlparse(redis_url)
+        redis_host = parsed.hostname
+        info["redis"] = {
+            "scheme": parsed.scheme,
+            "host": redis_host,
+            "port": parsed.port,
+        }
+        info["remote_workers_compatible"] = redis_host not in {"localhost", "127.0.0.1", "::1"}
+    except Exception:
+        pass
+    info["local_worker_enabled"] = START_LOCAL_RQ_WORKER
 
     # Filter job_ids by user ownership
     if info.get("available") and info.get("job_ids"):

@@ -61,36 +61,54 @@ def run_training_job(
     job = get_current_job()
     logs: list[str] = []
 
+    def set_meta(fields: dict[str, Any]) -> None:
+        """
+        Safely update job meta without clobbering fields set by the API.
+
+        RQ stores meta as a single serialized blob; `job.save_meta()` overwrites
+        the whole thing. Since the API can set flags like `stop_requested` while
+        the worker is running, we always refresh meta from Redis, then merge.
+        """
+        if not job:
+            return
+        try:
+            meta = job.get_meta(refresh=True) or {}
+        except Exception:
+            meta = job.meta or {}
+        meta.update(fields)
+        meta["updated_at"] = datetime.now(timezone.utc).isoformat()
+        job.meta = meta
+        job.save_meta()
+
     def log(message: str) -> None:
         """Add a log message and update job meta."""
         logs.append(message)
-        if job:
-            job.meta["logs"] = logs
-            job.meta["updated_at"] = datetime.now(timezone.utc).isoformat()
-            job.save_meta()
+        set_meta({"logs": logs})
 
     def update_progress(epoch: int, total: int, train_loss: float, val_loss: float) -> None:
         """Update training progress in job meta."""
-        if job:
-            job.meta["progress"] = {
-                "epoch": epoch,
-                "total": total,
-                "trainLoss": train_loss,
-                "valLoss": val_loss,
+        set_meta(
+            {
+                "progress": {
+                    "epoch": epoch,
+                    "total": total,
+                    "trainLoss": train_loss,
+                    "valLoss": val_loss,
+                }
             }
-            job.meta["updated_at"] = datetime.now(timezone.utc).isoformat()
-            job.save_meta()
+        )
 
     # Initialize job meta
-    if job:
-        job.meta["status"] = "initializing"
-        job.meta["logs"] = logs
-        if user_id:
-            job.meta["user_id"] = user_id
-        if name:
-            job.meta["name"] = name
-        job.meta["started_at"] = datetime.now(timezone.utc).isoformat()
-        job.save_meta()
+    init_meta: dict[str, Any] = {
+        "status": "initializing",
+        "logs": logs,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if user_id:
+        init_meta["user_id"] = user_id
+    if name:
+        init_meta["name"] = name
+    set_meta(init_meta)
 
     if not PYREFLECT.available:
         raise RuntimeError("pyreflect not available. Please install pyreflect dependencies.")
@@ -98,9 +116,25 @@ def run_training_job(
     ReflectivityDataGenerator = PYREFLECT.ReflectivityDataGenerator
     DataProcessor = PYREFLECT.DataProcessor
     CNN = PYREFLECT.CNN
-    DEVICE = PYREFLECT.DEVICE
+    runtime_device = PYREFLECT.DEVICE
     torch = PYREFLECT.torch
     compute_nr_from_sld = PYREFLECT.compute_nr_from_sld
+
+    # Prefer CUDA when available (e.g. Modal GPU workers), regardless of what the
+    # upstream `pyreflect.config.runtime.DEVICE` defaulted to.
+    device = runtime_device
+    try:
+        if torch is not None and getattr(torch, "cuda", None) and torch.cuda.is_available():
+            device = torch.device("cuda")
+    except Exception:
+        device = runtime_device
+
+    log(f"Device selected: {device!s}")
+    try:
+        if torch is not None and getattr(torch, "cuda", None):
+            log(f"torch.cuda.is_available(): {torch.cuda.is_available()}")
+    except Exception:
+        pass
 
     # Extract parameters
     gen_params = job_params.get("generator", {})
@@ -119,9 +153,7 @@ def run_training_job(
     # Data Generation
     # =====================
     log(f"Generating {num_curves} synthetic curves with {num_film_layers} film layers...")
-    if job:
-        job.meta["status"] = "generating"
-        job.save_meta()
+    set_meta({"status": "generating"})
 
     gen_start = time.perf_counter()
     data_generator = ReflectivityDataGenerator(num_layers=num_film_layers)
@@ -135,9 +167,7 @@ def run_training_job(
     # Preprocessing
     # =====================
     log("Preprocessing data...")
-    if job:
-        job.meta["status"] = "preprocessing"
-        job.save_meta()
+    set_meta({"status": "preprocessing"})
 
     nr_log = np.array(nr_curves, copy=True)
     nr_log[:, 1, :] = np.log10(np.clip(nr_log[:, 1, :], 1e-8, None))
@@ -153,11 +183,9 @@ def run_training_job(
     # Training
     # =====================
     log(f"Training CNN model ({epochs} epochs, batch size {batch_size})...")
-    if job:
-        job.meta["status"] = "training"
-        job.save_meta()
+    set_meta({"status": "training"})
 
-    model = CNN(layers=layers, dropout_prob=dropout).to(DEVICE)
+    model = CNN(layers=layers, dropout_prob=dropout).to(device)
     model.train()
 
     list_arrays = DataProcessor.split_arrays(reshaped_nr, normalized_sld, size_split=SPLIT_RATIO)
@@ -177,7 +205,7 @@ def run_training_job(
         model.train()
         running_loss = 0.0
         for X_batch, y_batch in train_loader:
-            X_batch, y_batch = X_batch.to(DEVICE), y_batch.to(DEVICE)
+            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
             optimizer.zero_grad()
             outputs = model(X_batch)
             loss = loss_fn(outputs, y_batch)
@@ -190,7 +218,7 @@ def run_training_job(
         val_running_loss = 0.0
         with torch.no_grad():
             for X_batch, y_batch in valid_loader:
-                X_batch, y_batch = X_batch.to(DEVICE), y_batch.to(DEVICE)
+                X_batch, y_batch = X_batch.to(device), y_batch.to(device)
                 outputs = model(X_batch)
                 val_running_loss += loss_fn(outputs, y_batch).item()
         val_loss = val_running_loss / len(valid_loader)
@@ -204,8 +232,11 @@ def run_training_job(
 
         # Check for stop request after each epoch
         if job:
-            job.refresh()  # Reload meta from Redis
-            if job.meta.get("stop_requested"):
+            try:
+                meta = job.get_meta(refresh=True) or {}
+            except Exception:
+                meta = job.meta or {}
+            if meta.get("stop_requested"):
                 log(f"⚠️ Stop requested - stopping after epoch {epoch + 1}")
                 stopped_early = True
                 break
@@ -218,9 +249,7 @@ def run_training_job(
     # Save Model
     # =====================
     log("Saving model...")
-    if job:
-        job.meta["status"] = "saving"
-        job.save_meta()
+    set_meta({"status": "saving"})
 
     # Saving tensors on MPS/GPU can be extremely slow or hang; always move to CPU first.
     log("Preparing model for save (moving tensors to CPU)...")
@@ -251,8 +280,7 @@ def run_training_job(
             poll_s=LOCAL_MODEL_WAIT_POLL_S,
         ):
             if job and not waiting_marked:
-                job.meta["status"] = "waiting_for_local_model_slot"
-                job.save_meta()
+                set_meta({"status": "waiting_for_local_model_slot"})
                 waiting_marked = True
             log(msg)
     except TimeoutError as exc:
@@ -262,9 +290,7 @@ def run_training_job(
 
     # Upload to HuggingFace if configured
     if hf_config and hf_config.get("token") and hf_config.get("repo_id"):
-        if job:
-            job.meta["status"] = "uploading"
-            job.save_meta()
+        set_meta({"status": "uploading"})
         log("Uploading to Hugging Face...")
         try:
             from huggingface_hub import HfApi
@@ -293,9 +319,7 @@ def run_training_job(
     # Inference
     # =====================
     log("Running inference on test sample...")
-    if job:
-        job.meta["status"] = "inference"
-        job.save_meta()
+    set_meta({"status": "inference"})
 
     split_idx = int(len(nr_curves) * SPLIT_RATIO)
     test_idx = split_idx
@@ -307,7 +331,7 @@ def run_training_job(
     model.eval()
     with torch.no_grad():
         test_nr_normalized = normalized_nr[test_idx : test_idx + 1, 1:2, :]
-        test_input = torch.tensor(test_nr_normalized, dtype=torch.float32).to(DEVICE)
+        test_input = torch.tensor(test_nr_normalized, dtype=torch.float32).to(device)
         pred_sld_normalized = model(test_input).cpu().numpy()
 
     pred_sld_denorm = DataProcessor.denormalize_xy_curves(pred_sld_normalized, stats=sld_stats, apply_exp=False)
@@ -377,9 +401,7 @@ def run_training_job(
         runtime_user_id = user_id
 
     if mongo_uri and runtime_user_id:
-        if job:
-            job.meta["status"] = "saving_to_history"
-            job.save_meta()
+        set_meta({"status": "saving_to_history"})
         log("Training complete - moving to history...")
         log("Saving to database...")
         try:
@@ -406,11 +428,13 @@ def run_training_job(
             log(f"Warning: Could not save to database: {exc}")
 
     # Finalize job meta
-    if job:
-        job.meta["status"] = "completed"
-        job.meta["completed_at"] = datetime.now(timezone.utc).isoformat()
-        job.meta["logs"] = logs
-        job.save_meta()
+    set_meta(
+        {
+            "status": "completed",
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "logs": logs,
+        }
+    )
 
     log("Training complete!")
     return result

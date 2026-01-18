@@ -3,12 +3,11 @@
 A minimal, monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyreflect) neutron reflectivity analysis package.
 
 ![Interface Preview](https://img.shields.io/badge/status-development-black)
-![Version](https://img.shields.io/badge/version-v0.0.1-black)
+![Version](https://img.shields.io/badge/version-v0.1.1-black)
 
 ## Version
 
-- **v0.0.1** — Initial GUI release with streaming backend, charts, and uploads.
-  - **NOTE** — Curve set to 1000 default globally
+- **v0.1.1** — GitHub auth, explore/history sidebar, and download bundle support.
 
 ## Features
 
@@ -298,13 +297,20 @@ sequenceDiagram
 
 - [Bun](https://bun.sh) (frontend)
 - [uv](https://docs.astral.sh/uv/) (backend)
+- [Redis](https://redis.io/) (required for background job queue)
 
 ### 1. Backend Setup
 
 ```bash
 cd src/backend
+uv python pin 3.12
 uv sync
-uv run uvicorn main:app --port 8000
+
+# Start Redis (required for /api/jobs/* and /api/queue)
+# macOS (Homebrew): brew install redis && redis-server
+# Docker: docker run -p 6379:6379 redis:7
+
+uv run uvicorn main:app --reload --port 8000
 ```
 
 Backend runs at **http://localhost:8000**
@@ -321,34 +327,84 @@ Frontend runs at **http://localhost:3000**
 
 ### 3. GPU Worker (Optional - Modal)
 
-For GPU-accelerated training, deploy the serverless Modal worker:
+For GPU-accelerated training (serverless, pay-per-use), deploy the Modal worker.
+
+Important:
+- Your backend must enqueue to a Redis instance reachable from Modal (`REDIS_URL`).
+- Disable the backend's local worker so jobs aren't consumed on CPU (`START_LOCAL_RQ_WORKER=false`).
+- `REDIS_URL=redis://localhost:6379` will NOT work with Modal (localhost is inside the Modal container).
 
 ```bash
 cd src/backend
 
-# Install Modal CLI
-uv add modal
+# Install backend + dev deps (includes Modal CLI)
+uv sync
 
-# Login (uses GitHub OAuth)
+# Auth (pick one)
+# Option A: browser/OAuth flow
 uv run modal setup
+#
+# Option B: token flow (Modal dashboard -> Settings -> Tokens)
+uv run modal token set --token-id <token-id> --token-secret <token-secret>
 
-# Add your Redis secret
-uv run modal secret create pyreflect-redis REDIS_URL="redis://:PASSWORD@YOUR_VPS_IP:6379"
+# Add your Redis secret (must match backend REDIS_URL).
+# Modal containers can't read your local `.env`, and you shouldn't bake secrets into the image.
+uv run modal secret create --force pyreflect-redis REDIS_URL="redis://:PASSWORD@YOUR_PUBLIC_REDIS_HOST:6379"
 
-# Deploy (auto-scales when jobs arrive)
-uv run modal deploy ../../modal_worker.py
+# Deploy (cron polls Redis and spawns a GPU RQ worker only when jobs are pending)
+uv run modal deploy modal_worker.py
 ```
 
 The worker automatically:
 
-- Spins up T4 GPU when jobs are queued
-- Processes jobs and updates progress in real-time
+- Spins up a T4 GPU when jobs are queued
+- Runs the same `service.jobs.run_training_job` code as local workers (progress, results, model uploads)
 - Scales down when idle (no cost)
+
+**Verify end-to-end:**
+
+- Backend: `GET /api/queue` should show `local_worker_enabled: false` and `remote_workers_compatible: true`.
+- When you enqueue a training job, `queued_jobs` should become `> 0` briefly.
+- Modal logs should show `pending=<N>` and then `Starting RQ SimpleWorker ... (burst mode)`:
+
+```bash
+cd src/backend
+uv run modal app logs pyreflect-worker --timestamps
+```
 
 **Stop/Undeploy:**
 
 ```bash
-modal app stop pyreflect-worker
+cd src/backend
+uv run modal app stop pyreflect-worker
+```
+
+#### Bare-metal Redis (required for Modal)
+
+If your Redis runs on your own machine, **Modal can only reach it if it’s reachable from the public internet**.
+That usually means your machine has a public IP (or you set up port-forwarding), and Redis is configured to accept
+remote connections securely.
+
+Minimum checklist (Redis host):
+
+- Configure Redis to listen on a reachable interface (`bind 0.0.0.0` or your public NIC) and require auth (`requirepass` or ACLs).
+- Open firewall / router port-forward for TCP `6379` to the Redis host.
+- Confirm connectivity from outside your network: `redis-cli -h <public-host> -a <password> ping` (should return `PONG`).
+
+If you can’t safely expose Redis publicly, use a managed Redis (Upstash / Redis Cloud) and point both the backend and Modal at it.
+
+#### Does `modal deploy` run when I start `uvicorn`?
+
+No. `uv run modal deploy ...` deploys the Modal app to Modal’s infra and runs independently. Starting `uvicorn` only starts the API server.
+
+#### Why doesn’t it “auto-spawn” a GPU on deploy?
+
+`modal deploy` registers your functions + schedule. In this project, the GPU worker is spawned by `poll_queue` on a cron (`* * * * *`).
+To start immediately (for testing), run the poller once:
+
+```bash
+cd src/backend
+uv run modal run modal_worker.py::poll_queue
 ```
 
 ### Troubleshooting
@@ -380,6 +436,18 @@ PRODUCTION=true
 # CORS (comma-separated origins)
 CORS_ORIGINS=http://localhost:3000,https://your-app.vercel.app
 
+# Redis queue (required for background jobs in the UI)
+REDIS_URL=redis://localhost:6379
+RQ_JOB_TIMEOUT=2h
+
+# Disable local worker if using Modal/remote GPU workers
+START_LOCAL_RQ_WORKER=false
+
+# Optional: enable history + model downloads
+#MONGODB_URI=mongodb+srv://...
+#HF_TOKEN=hf_...
+#HF_REPO_ID=your-username/pyreflect-models
+
 # Optional: override individual limits
 MAX_CURVES=5000
 MAX_EPOCHS=50
@@ -396,6 +464,32 @@ Then run normally:
 ```bash
 uv run uvicorn main:app --port 8000
 ```
+
+### Bare-metal Deployment (Backend + Redis)
+
+If you want the backend + Redis on your own machine (and Modal only for GPU), the minimum flow is:
+
+1) On the bare-metal host, run Redis and make it reachable from Modal (see “Bare-metal Redis” above).
+2) Point the backend to that same `REDIS_URL` and disable the local worker:
+
+```bash
+cd src/backend
+cp .env.example .env
+# Edit:
+#   REDIS_URL=redis://:PASSWORD@<your-public-host>:6379
+#   START_LOCAL_RQ_WORKER=false
+uv sync
+uv run uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+3) Run the frontend either on the same host or locally, pointing it at your backend:
+
+```bash
+cd src/interface
+NEXT_PUBLIC_API_URL=http://<baremetal-host>:8000 bun dev
+```
+
+Note: Modal workers do not share your bare-metal filesystem. If you need model files to persist, configure Hugging Face uploads (`HF_TOKEN`, `HF_REPO_ID`) or another shared storage mechanism.
 
 ## Vercel Deployment (Frontend)
 

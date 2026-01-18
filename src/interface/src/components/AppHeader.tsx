@@ -44,6 +44,8 @@ export default function AppHeader({
   const [workers, setWorkers] = useState<WorkerInfo[]>([]);
   const [backendOnline, setBackendOnline] = useState(true);
   const jsonMenuRef = useRef<HTMLDivElement>(null);
+  const userLabel = session?.user?.name ?? session?.user?.email ?? 'User';
+  const userInitial = userLabel.trim().slice(0, 1).toUpperCase() || 'U';
 
   // Poll for worker info
   useEffect(() => {
@@ -328,13 +330,14 @@ export default function AppHeader({
 
         {session ? (
           <div className="header__user">
-            {session.user?.image && (
-              <button
-                type="button"
-                className="header__avatar"
-                onClick={() => setShowUserMenu((prev) => !prev)}
-                aria-label="User menu"
-              >
+            <button
+              type="button"
+              className="header__avatar"
+              onClick={() => setShowUserMenu((prev) => !prev)}
+              aria-label="User menu"
+              title={userLabel}
+            >
+              {session.user?.image ? (
                 <Image
                   src={session.user.image}
                   alt=""
@@ -345,8 +348,27 @@ export default function AppHeader({
                     border: '1px solid var(--text-primary)',
                   }}
                 />
-              </button>
-            )}
+              ) : (
+                <span
+                  aria-hidden="true"
+                  style={{
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: '50%',
+                    border: '1px solid var(--text-primary)',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '12px',
+                    lineHeight: 1,
+                    color: 'var(--text-primary)',
+                  }}
+                >
+                  {userInitial}
+                </span>
+              )}
+            </button>
             {showUserMenu && (
               <button
                 className="header__export-btn header__export-btn--danger"
@@ -354,6 +376,7 @@ export default function AppHeader({
                   setShowUserMenu(false);
                   signOut();
                 }}
+                title="Sign out"
               >
                 <span>→</span>
                 <span className="header__btn-label">Sign out</span>
@@ -361,7 +384,12 @@ export default function AppHeader({
             )}
           </div>
         ) : (
-          <button className="header__export-btn" onClick={() => signIn('github')}>
+          <button
+            className="header__export-btn"
+            onClick={() => signIn('github')}
+            title="Sign in with GitHub"
+            aria-label="Sign in with GitHub"
+          >
             <span>←</span>
             <span className="header__btn-label">Sign in</span>
           </button>
