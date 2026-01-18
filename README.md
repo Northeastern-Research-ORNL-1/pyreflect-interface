@@ -320,6 +320,8 @@ Backend runs at `http://localhost:8000`.
 
 For non-blocking job submission (allows multiple concurrent generations):
 
+**Local Development:**
+
 ```bash
 # Install Redis (one-time)
 brew install redis  # macOS
@@ -327,6 +329,32 @@ sudo apt install redis-server  # Ubuntu
 
 # Start Redis before running uvicorn
 redis-server --daemonize yes
+```
+
+**Production VPS Setup:**
+
+```bash
+# Install Redis
+sudo apt install redis-server
+
+# Configure Redis for remote access
+sudo nano /etc/redis/redis.conf
+
+# Make these changes:
+bind 0.0.0.0                    # Allow remote connections
+requirepass YOUR_STRONG_PASSWORD  # Set a password
+
+# Restart Redis
+sudo systemctl restart redis
+
+# Open firewall (if using ufw)
+sudo ufw allow 6379
+```
+
+Then update your backend `.env`:
+
+```env
+REDIS_URL=redis://:YOUR_PASSWORD@localhost:6379
 ```
 
 When Redis is running, the backend will automatically:
@@ -590,29 +618,6 @@ Use `colab_gpu_worker.ipynb` to process training jobs on Colab's free GPU:
 2. Update `REDIS_URL` with your VPS credentials: `redis://:PASSWORD@YOUR_VPS_IP:6379`
 3. Enable GPU runtime: `Runtime > Change runtime type > T4 GPU`
 4. Run all cells — the worker will connect to your queue and process jobs
-
-**VPS Redis setup:**
-
-```bash
-# Edit redis.conf
-sudo nano /etc/redis/redis.conf
-
-# Add/uncomment these lines:
-bind 0.0.0.0
-requirepass YOUR_STRONG_PASSWORD
-
-# Restart Redis
-sudo systemctl restart redis
-
-# Open firewall (if needed)
-sudo ufw allow 6379
-```
-
-Update your backend `.env` to use the password:
-
-```env
-REDIS_URL=redis://:YOUR_PASSWORD@localhost:6379
-```
 
 > Note: Colab notebooks are private by default, so your Redis password is safe unless you share the notebook.
 
