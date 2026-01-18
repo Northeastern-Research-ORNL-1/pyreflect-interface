@@ -352,11 +352,12 @@ uv run modal token set --token-id <token-id> --token-secret <token-secret>
 # Modal containers can't read your local `.env`, and you shouldn't bake secrets into the image.
 uv run modal secret create --force pyreflect-redis \
   REDIS_URL="redis://:PASSWORD@YOUR_PUBLIC_REDIS_HOST:6379" \
-  MODEL_UPLOAD_URL="https://YOUR_PUBLIC_BACKEND_HOST:8000/api/models/upload" \
-  MODEL_UPLOAD_TOKEN="change-me" \
-  HF_TOKEN="hf_..."  # Optional: enables Hugging Face upload from Modal
+  HF_TOKEN="hf_..." \
+  HF_REPO_ID="your-username/pyreflect-models" \
+  MODEL_STORAGE="hf" \
+  MONGODB_URI="mongodb+srv://..."  # Optional: enables history persistence from Modal
 
-# Deploy (cron polls Redis and spawns a GPU RQ worker only when jobs are pending)
+# Deploy (backend can trigger an instant spawn; cron poll is a fallback)
 uv run modal deploy modal_worker.py
 ```
 
@@ -364,7 +365,7 @@ The worker automatically:
 
 - Spins up a T4 GPU when jobs are queued
 - Runs the same `service.jobs.run_training_job` code as local workers (progress, results, model uploads)
-- If `MODEL_UPLOAD_URL` + `MODEL_UPLOAD_TOKEN` are set, uploads `.pth` back to your backend `data/models/` and deletes the Modal-local copy
+- Uploads the model directly to Hugging Face when `MODEL_STORAGE=hf` (no backend model storage)
 - Scales down when idle (no cost)
 
 **Verify end-to-end:**
@@ -405,7 +406,9 @@ No. `uv run modal deploy ...` deploys the Modal app to Modal’s infra and runs 
 
 #### Why doesn’t it “auto-spawn” a GPU on deploy?
 
-`modal deploy` registers your functions + schedule. In this project, the GPU worker is spawned by `poll_queue` on a cron (`* * * * *`).
+`modal deploy` registers your functions + schedule. By default, the backend will try to trigger a GPU worker immediately
+after enqueuing a job (`MODAL_INSTANT_SPAWN=true`). A cron-based `poll_queue` still runs as a fallback (every 5 minutes).
+
 To start immediately (for testing), run the poller once:
 
 ```bash
@@ -446,9 +449,8 @@ CORS_ORIGINS=http://localhost:3000,https://your-app.vercel.app
 REDIS_URL=redis://localhost:6379
 RQ_JOB_TIMEOUT=2h
 
-# Remote worker model upload (Optional, for Modal GPU)
-MODEL_UPLOAD_TOKEN=change-me
-MODEL_UPLOAD_URL=https://your-backend.example.com/api/models/upload
+# Instant Modal worker spawn (removes cron latency)
+MODAL_INSTANT_SPAWN=true
 
 # Disable local worker if using Modal/remote GPU workers
 START_LOCAL_RQ_WORKER=false
@@ -457,6 +459,9 @@ START_LOCAL_RQ_WORKER=false
 #MONGODB_URI=mongodb+srv://...
 #HF_TOKEN=hf_...
 #HF_REPO_ID=your-username/pyreflect-models
+
+# Optional: store models on Hugging Face instead of locally
+#MODEL_STORAGE=hf
 
 # Optional: override individual limits
 MAX_CURVES=5000
@@ -499,7 +504,7 @@ cd src/interface
 NEXT_PUBLIC_API_URL=http://<baremetal-host>:8000 bun dev
 ```
 
-Note: Modal workers do not share your bare-metal filesystem. To persist models on your machine, set `MODEL_UPLOAD_URL` + `MODEL_UPLOAD_TOKEN` (and configure the backend to accept uploads), or use Hugging Face uploads (`HF_TOKEN`, `HF_REPO_ID`).
+Note: Modal workers do not share your bare-metal filesystem. For fastest end-to-end, store models on Hugging Face (`MODEL_STORAGE=hf` + `HF_TOKEN` + `HF_REPO_ID`) so the backend can redirect downloads to HF without any model upload back to the backend.
 
 ## Vercel Deployment (Frontend)
 

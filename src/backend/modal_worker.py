@@ -185,7 +185,7 @@ def run_rq_worker_burst(lock_value: str):
 
 @app.function(
     image=image,
-    schedule=modal.Cron("* * * * *"),  # Every minute
+    schedule=modal.Cron("*/5 * * * *"),  # Fallback poll (backend can trigger instant spawn)
     secrets=[modal.Secret.from_name("pyreflect-redis")],
 )
 def poll_queue():
