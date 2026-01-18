@@ -627,7 +627,7 @@ select.control__input {
 .status {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
+  gap: 10px;
   font-size: var(--font-size-sm);
   color: var(--text-muted);
 }

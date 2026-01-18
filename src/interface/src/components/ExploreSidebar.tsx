@@ -54,6 +54,7 @@ interface QueuedJob {
     retried_from?: string;
     updated_at?: string;
     completed_at?: string;
+    stop_requested?: boolean;
   };
 }
 
@@ -136,6 +137,7 @@ export default function ExploreSidebar({
   const [searchTerm, setSearchTerm] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [cancelJobId, setCancelJobId] = useState<string | null>(null);
+  const [stopJobId, setStopJobId] = useState<string | null>(null);
   const [retryJobId, setRetryJobId] = useState<string | null>(null);
   const [deleteJobId, setDeleteJobId] = useState<string | null>(null);
   const [purgeJobsOpen, setPurgeJobsOpen] = useState(false);
@@ -163,6 +165,11 @@ export default function ExploreSidebar({
   const requestCancelJob = (e: React.MouseEvent, jobId: string) => {
     e.stopPropagation();
     setCancelJobId(jobId);
+  };
+
+  const requestStopJob = (e: React.MouseEvent, jobId: string) => {
+    e.stopPropagation();
+    setStopJobId(jobId);
   };
 
   const requestRetryJob = (e: React.MouseEvent, jobId: string) => {
@@ -209,6 +216,22 @@ export default function ExploreSidebar({
     } catch (err) {
       console.error(err);
       alert('Failed to cancel job');
+    }
+  };
+
+  const confirmStopJob = async () => {
+    if (!stopJobId) return;
+    const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    try {
+      const res = await fetch(`${API_URL}/api/jobs/${stopJobId}/stop`, { method: 'POST' });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw new Error(detail || 'Failed to stop job');
+      }
+      setStopJobId(null);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to stop job');
     }
   };
 
@@ -528,7 +551,7 @@ export default function ExploreSidebar({
     };
 
     fetchQueue();
-    const interval = setInterval(fetchQueue, 3000);
+    const interval = setInterval(fetchQueue, 1000);
     return () => clearInterval(interval);
   }, [API_URL, fetchHistory, history, isOpen, userId]);
 
@@ -589,6 +612,24 @@ export default function ExploreSidebar({
               <div className={styles.popupActions}>
                 <button className={`${styles.popupBtn} ${styles.popupBtnCancel}`} onClick={() => setCancelJobId(null)}>KEEP</button>
                 <button className={`${styles.popupBtn} ${styles.popupBtnDelete}`} onClick={confirmCancelJob}>CANCEL JOB</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {stopJobId && (
+          <div className={styles.deletePopupOverlay}>
+            <div className={styles.deletePopupContent}>
+              <p className={styles.popupText}>
+                Stop running job?
+                <strong>{stopJobId.slice(0, 8)}</strong>
+                <span style={{ display: 'block', marginTop: '6px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                  Training will stop after the current epoch completes.
+                </span>
+              </p>
+              <div className={styles.popupActions}>
+                <button className={`${styles.popupBtn} ${styles.popupBtnCancel}`} onClick={() => setStopJobId(null)}>KEEP RUNNING</button>
+                <button className={`${styles.popupBtn} ${styles.popupBtnDelete}`} onClick={confirmStopJob}>STOP</button>
               </div>
             </div>
           </div>
@@ -800,6 +841,18 @@ export default function ExploreSidebar({
                         >
                           Cancel
                         </button>
+                      )}
+                      {job.status === 'started' && !job.meta?.stop_requested && (
+                        <button
+                          className={`${styles.jobActionBtn} ${styles.jobActionDanger}`}
+                          onClick={(e) => requestStopJob(e, job.job_id)}
+                          title="Stop training after current epoch"
+                        >
+                          Stop
+                        </button>
+                      )}
+                      {job.status === 'started' && job.meta?.stop_requested && (
+                        <span className={styles.stoppingLabel}>Stopping...</span>
                       )}
                       {job.status === 'failed' && (
                         <>
