@@ -40,6 +40,7 @@ image = (
         "scipy",
         "scikit-learn",
         "python-dotenv",
+        "requests",
         "pymongo",
         "huggingface_hub",
         "pyreflect",

@@ -55,7 +55,7 @@ def run_training_job(
         WEIGHT_DECAY,
     )
     from ..integrations.huggingface import HuggingFaceIntegration, upload_model
-    from ..services.local_model_limit import save_torch_state_dict_with_local_limit
+    from ..services.local_model_limit import delete_local_model, save_torch_state_dict_with_local_limit
     from ..services.pyreflect_runtime import PYREFLECT
 
     job = get_current_job()
@@ -278,6 +278,7 @@ def run_training_job(
             max_models=MAX_LOCAL_MODELS,
             timeout_s=LOCAL_MODEL_WAIT_TIMEOUT_S,
             poll_s=LOCAL_MODEL_WAIT_POLL_S,
+            user_id=user_id,
         ):
             if job and not waiting_marked:
                 set_meta({"status": "waiting_for_local_model_slot"})
@@ -287,6 +288,14 @@ def run_training_job(
         raise RuntimeError(str(exc)) from exc
     model_size_mb = model_path.stat().st_size / (1024 * 1024)
     log(f"Model saved locally: {model_id}.pth ({model_size_mb:.2f} MB)")
+
+    # Optional: upload the model artifact back to the backend so Modal workers
+    # don't retain large files on ephemeral disk.
+    import os
+
+    upload_url = os.getenv("MODEL_UPLOAD_URL")
+    upload_token = os.getenv("MODEL_UPLOAD_TOKEN")
+    want_backend_upload = bool(upload_url and upload_token)
 
     # Upload to HuggingFace if configured
     if hf_config and hf_config.get("token") and hf_config.get("repo_id"):
@@ -306,14 +315,46 @@ def run_training_job(
                 # Verify and cleanup
                 try:
                     if api.file_exists(repo_id=hf.repo_id, filename=f"{model_id}.pth", repo_type="dataset"):
-                        model_path.unlink()
-                        log("Verified on HF. Local model file deleted (cleanup)")
+                        if want_backend_upload:
+                            log("Verified on HF. Keeping local model temporarily for backend upload.")
+                        else:
+                            delete_local_model(models_dir=MODELS_DIR, model_id=model_id)
+                            log("Verified on HF. Local model file deleted (cleanup)")
                 except Exception:
                     pass  # Keep local file if verification fails
             else:
                 log("Warning: Model NOT uploaded to HF (Error occurred)")
         except Exception as exc:
             log(f"Warning: HuggingFace upload failed: {exc}")
+
+    if want_backend_upload and model_path.exists():
+        set_meta({"status": "uploading_to_backend"})
+        log("Uploading model artifact to backend...")
+        try:
+            import requests
+
+            with model_path.open("rb") as f:
+                resp = requests.post(
+                    upload_url,  # type: ignore[arg-type]
+                    headers={"X-Model-Upload-Token": upload_token},  # type: ignore[arg-type]
+                    data={"model_id": model_id, "user_id": user_id or ""},
+                    files={"file": (f"{model_id}.pth", f, "application/octet-stream")},
+                    timeout=60 * 5,
+                )
+            if resp.ok:
+                try:
+                    payload = resp.json()
+                except Exception:
+                    payload = None
+                log(f"Model uploaded to backend (status={resp.status_code}).")
+                if payload and payload.get("evicted"):
+                    log(f"Backend evicted old models: {payload['evicted']}")
+                delete_local_model(models_dir=MODELS_DIR, model_id=model_id)
+                log("Deleted local model copy after backend upload (cleanup).")
+            else:
+                log(f"Warning: Backend model upload failed (status={resp.status_code}): {resp.text[:500]}")
+        except Exception as exc:
+            log(f"Warning: Backend model upload failed: {exc}")
 
     # =====================
     # Inference
