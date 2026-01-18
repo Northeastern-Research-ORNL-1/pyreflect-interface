@@ -79,9 +79,8 @@ SPLIT_RATIO = 0.8
 # Local Model Storage
 # =====================
 
-# Max number of locally stored model files (MODELS_DIR/*.pth). When reached, new
-# training runs will wait until a slot is freed (e.g. after HF upload cleanup or
-# manual deletion).
+# Max number of locally stored model files per user (MODELS_DIR/*.pth).
+# When reached, new training runs will evict the oldest models for that user.
 MAX_LOCAL_MODELS = int(os.getenv("MAX_LOCAL_MODELS", "2"))
 
 # How long to wait for a local model slot before failing (seconds). Set to 0 to

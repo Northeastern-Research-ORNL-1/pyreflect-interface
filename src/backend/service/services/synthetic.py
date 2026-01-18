@@ -295,6 +295,7 @@ def generate_with_pyreflect_streaming(
             max_models=MAX_LOCAL_MODELS,
             timeout_s=LOCAL_MODEL_WAIT_TIMEOUT_S,
             poll_s=LOCAL_MODEL_WAIT_POLL_S,
+            user_id=None,
         ):
             yield emit("log", msg)
             heartbeat = maybe_heartbeat()
@@ -541,6 +542,7 @@ def generate_with_pyreflect(
         max_models=MAX_LOCAL_MODELS,
         timeout_s=LOCAL_MODEL_WAIT_TIMEOUT_S,
         poll_s=LOCAL_MODEL_WAIT_POLL_S,
+        user_id=None,
     ):
         print(msg)
     print(f"Model saved: {model_id}.pth")

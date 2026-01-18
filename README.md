@@ -349,7 +349,10 @@ uv run modal token set --token-id <token-id> --token-secret <token-secret>
 
 # Add your Redis secret (must match backend REDIS_URL).
 # Modal containers can't read your local `.env`, and you shouldn't bake secrets into the image.
-uv run modal secret create --force pyreflect-redis REDIS_URL="redis://:PASSWORD@YOUR_PUBLIC_REDIS_HOST:6379"
+uv run modal secret create --force pyreflect-redis \
+  REDIS_URL="redis://:PASSWORD@YOUR_PUBLIC_REDIS_HOST:6379" \
+  MODEL_UPLOAD_URL="https://YOUR_PUBLIC_BACKEND_HOST:8000/api/models/upload" \
+  MODEL_UPLOAD_TOKEN="change-me"
 
 # Deploy (cron polls Redis and spawns a GPU RQ worker only when jobs are pending)
 uv run modal deploy modal_worker.py
@@ -359,6 +362,7 @@ The worker automatically:
 
 - Spins up a T4 GPU when jobs are queued
 - Runs the same `service.jobs.run_training_job` code as local workers (progress, results, model uploads)
+- If `MODEL_UPLOAD_URL` + `MODEL_UPLOAD_TOKEN` are set, uploads `.pth` back to your backend `data/models/` and deletes the Modal-local copy
 - Scales down when idle (no cost)
 
 **Verify end-to-end:**
@@ -440,6 +444,10 @@ CORS_ORIGINS=http://localhost:3000,https://your-app.vercel.app
 REDIS_URL=redis://localhost:6379
 RQ_JOB_TIMEOUT=2h
 
+# Remote worker model upload (Optional, for Modal GPU)
+MODEL_UPLOAD_TOKEN=change-me
+MODEL_UPLOAD_URL=https://your-backend.example.com/api/models/upload
+
 # Disable local worker if using Modal/remote GPU workers
 START_LOCAL_RQ_WORKER=false
 
@@ -489,7 +497,7 @@ cd src/interface
 NEXT_PUBLIC_API_URL=http://<baremetal-host>:8000 bun dev
 ```
 
-Note: Modal workers do not share your bare-metal filesystem. If you need model files to persist, configure Hugging Face uploads (`HF_TOKEN`, `HF_REPO_ID`) or another shared storage mechanism.
+Note: Modal workers do not share your bare-metal filesystem. To persist models on your machine, set `MODEL_UPLOAD_URL` + `MODEL_UPLOAD_TOKEN` (and configure the backend to accept uploads), or use Hugging Face uploads (`HF_TOKEN`, `HF_REPO_ID`).
 
 ## Vercel Deployment (Frontend)
 
