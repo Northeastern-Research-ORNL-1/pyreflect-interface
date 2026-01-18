@@ -37,6 +37,8 @@ def create_rq_integration() -> RQIntegration:
         RQIntegration instance with queue ready for use.
     """
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    if redis_url and not redis_url.startswith(("redis://", "rediss://", "unix://")) and "://" not in redis_url:
+        redis_url = f"redis://{redis_url}"
     parsed = urlparse(redis_url)
     redis_host = parsed.hostname or "localhost"
     redis_port = parsed.port or 6379

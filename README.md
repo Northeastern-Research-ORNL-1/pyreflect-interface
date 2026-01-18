@@ -333,6 +333,7 @@ Important:
 - Your backend must enqueue to a Redis instance reachable from Modal (`REDIS_URL`).
 - Disable the backend's local worker so jobs aren't consumed on CPU (`START_LOCAL_RQ_WORKER=false`).
 - `REDIS_URL=redis://localhost:6379` will NOT work with Modal (localhost is inside the Modal container).
+- `REDIS_URL` must include a scheme like `redis://` (e.g. `redis://:PASSWORD@HOST:6379`).
 
 ```bash
 cd src/backend

@@ -50,6 +50,19 @@ image = (
     .add_local_dir(_SERVICE_DIR, remote_path="/root/backend/service")
 )
 
+def _normalize_redis_url(value: str) -> str:
+    """
+    Redis client expects a URL with an explicit scheme.
+
+    Users often set `REDIS_URL` to `host:6379` or `:password@host:6379`.
+    Accept those by assuming `redis://`.
+    """
+    if value.startswith(("redis://", "rediss://", "unix://")):
+        return value
+    if "://" not in value:
+        return f"redis://{value}"
+    return value
+
 
 @app.function(
     image=image,
@@ -77,6 +90,7 @@ def run_rq_worker_burst(lock_value: str):
     redis_url = os.environ.get("REDIS_URL")
     if not redis_url:
         raise RuntimeError("REDIS_URL not set (configure Modal secret 'pyreflect-redis').")
+    redis_url = _normalize_redis_url(redis_url)
 
     parsed = urlparse(redis_url)
     redis_host = parsed.hostname or "unknown"
@@ -147,6 +161,7 @@ def poll_queue():
     redis_url = os.environ.get("REDIS_URL")
     if not redis_url:
         return
+    redis_url = _normalize_redis_url(redis_url)
 
     parsed = urlparse(redis_url)
     redis_host = parsed.hostname or "unknown"
