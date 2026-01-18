@@ -8,12 +8,20 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import os
+import time
+import uuid
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
-from ..config import START_LOCAL_RQ_WORKER
+from ..config import (
+    MODAL_APP_NAME,
+    MODAL_FUNCTION_NAME,
+    MODAL_INSTANT_SPAWN,
+    MODAL_SPAWN_LOCK_TTL_S,
+    START_LOCAL_RQ_WORKER,
+)
 from ..integrations.redis_queue import get_job_status, get_queue_info, normalize_redis_url
 from ..schemas import GenerateRequest, validate_limits
 
@@ -21,6 +29,56 @@ router = APIRouter()
 
 class RenameJobRequest(BaseModel):
     name: str | None = None
+
+
+def _maybe_trigger_modal_gpu_worker(rq) -> bool:
+    """
+    Best-effort: spawn a Modal GPU worker right after a job is enqueued.
+
+    This removes the minute-level latency from the Modal cron poller.
+    """
+    if START_LOCAL_RQ_WORKER or not MODAL_INSTANT_SPAWN:
+        return False
+    if not rq or not getattr(rq, "available", False) or not getattr(rq, "redis", None):
+        return False
+
+    redis_conn = rq.redis
+    lock_key = "pyreflect:modal_worker_lock"
+
+    # Avoid spawning if a GPU worker already exists.
+    try:
+        from rq import Worker
+
+        workers = Worker.all(connection=redis_conn)
+        if any((getattr(w, "name", "") or "").lower().startswith("gpu-") for w in workers):
+            return False
+    except Exception:
+        pass
+
+    lock_value = f"{uuid.uuid4()}:{int(time.time())}"
+    try:
+        acquired = redis_conn.set(lock_key, lock_value, nx=True, ex=max(int(MODAL_SPAWN_LOCK_TTL_S), 60))
+    except Exception:
+        return False
+    if not acquired:
+        return False
+
+    try:
+        import modal
+
+        fn = modal.Function.lookup(MODAL_APP_NAME, MODAL_FUNCTION_NAME)
+        fn.spawn(lock_value)
+        return True
+    except Exception as exc:
+        print(f"Warning: Failed to trigger Modal worker spawn: {exc}")
+        # Release lock if we still own it so the cron poller can recover quickly.
+        try:
+            current = redis_conn.get(lock_key)
+            if current is not None and current.decode("utf-8") == lock_value:
+                redis_conn.delete(lock_key)
+        except Exception:
+            pass
+        return False
 
 
 @router.post("/jobs/submit")
@@ -36,7 +94,6 @@ async def submit_job(
     If the queue is not available, falls back to synchronous execution.
     """
     rq = getattr(http_request.app.state, "rq", None)
-    hf = getattr(http_request.app.state, "hf", None)
 
     if not rq or not rq.available:
         raise HTTPException(
@@ -76,15 +133,7 @@ async def submit_job(
         "training": request.training.model_dump(),
     }
 
-    # Build HF config if available
-    hf_config = None
-    if hf and hf.available and hf.repo_id:
-        # Do NOT pass tokens via job args: RQ logs job arguments, which would leak
-        # secrets into worker logs (including Modal logs).
-        hf_config = {"repo_id": hf.repo_id}
-
-    # Get MongoDB URI from config
-    from ..config import MONGODB_URI, RQ_JOB_TIMEOUT
+    from ..config import RQ_JOB_TIMEOUT
 
     try:
         from ..jobs import run_training_job
@@ -94,8 +143,6 @@ async def submit_job(
             job_params,
             user_id=x_user_id,
             name=request.name,
-            hf_config=hf_config,
-            mongo_uri=MONGODB_URI,
             job_timeout=RQ_JOB_TIMEOUT,
             result_ttl=3600,  # Keep results for 1 hour
         )
@@ -114,6 +161,7 @@ async def submit_job(
             "status": "queued",
             "message": "Job submitted successfully. Poll /api/jobs/{job_id} for status.",
             "queue_position": len(rq.queue),
+            "remote_worker_triggered": _maybe_trigger_modal_gpu_worker(rq),
         }
 
     except Exception as exc:
@@ -299,7 +347,6 @@ async def retry_job(job_id: str, http_request: Request):
     Requires the original job to have stored job_params in Redis meta.
     """
     rq = getattr(http_request.app.state, "rq", None)
-    hf = getattr(http_request.app.state, "hf", None)
 
     if not rq or not rq.available or not rq.redis or not rq.queue:
         raise HTTPException(status_code=503, detail="Job queue not available.")
@@ -334,14 +381,7 @@ async def retry_job(job_id: str, http_request: Request):
             )
 
         from ..jobs import run_training_job
-        from ..config import MONGODB_URI, RQ_JOB_TIMEOUT
-
-        # Build HF config if available (same behavior as submit)
-        hf_config = None
-        if hf and hf.available and hf.repo_id:
-            from ..config import HF_TOKEN
-
-            hf_config = {"token": HF_TOKEN, "repo_id": hf.repo_id}
+        from ..config import RQ_JOB_TIMEOUT
 
         # Preserve old user/name when possible, but don't require meta to exist.
         old_user_id = (
@@ -354,8 +394,6 @@ async def retry_job(job_id: str, http_request: Request):
             job_params,
             user_id=old_user_id,
             name=old_name,
-            hf_config=hf_config,
-            mongo_uri=MONGODB_URI,
             job_timeout=RQ_JOB_TIMEOUT,
             result_ttl=3600,
         )
@@ -373,6 +411,7 @@ async def retry_job(job_id: str, http_request: Request):
             "status": "queued",
             "message": f"Job retried from {job_id}. Poll /api/jobs/{new_job.id} for status.",
             "queue_position": len(rq.queue),
+            "remote_worker_triggered": _maybe_trigger_modal_gpu_worker(rq),
         }
     except HTTPException:
         raise

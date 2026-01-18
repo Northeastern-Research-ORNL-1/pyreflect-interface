@@ -108,3 +108,15 @@ def _get_bool_env(name: str, default: bool) -> bool:
 # Whether the API process should start a local RQ worker subprocess.
 # - Default: enabled for local dev, disabled for PRODUCTION (so you can use Modal workers).
 START_LOCAL_RQ_WORKER = _get_bool_env("START_LOCAL_RQ_WORKER", default=not IS_PRODUCTION)
+
+# =====================
+# Modal (Remote GPU Workers)
+# =====================
+
+# When using remote workers (START_LOCAL_RQ_WORKER=false), the backend can trigger
+# a Modal GPU worker immediately after enqueuing a job (removes the 1-minute cron
+# latency). If this fails, the Modal cron poller can still pick jobs up later.
+MODAL_INSTANT_SPAWN = _get_bool_env("MODAL_INSTANT_SPAWN", default=True)
+MODAL_APP_NAME = os.getenv("MODAL_APP_NAME", "pyreflect-worker")
+MODAL_FUNCTION_NAME = os.getenv("MODAL_FUNCTION_NAME", "run_rq_worker_burst")
+MODAL_SPAWN_LOCK_TTL_S = int(os.getenv("MODAL_SPAWN_LOCK_TTL_S", "900"))

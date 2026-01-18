@@ -37,8 +37,8 @@ def run_training_job(
         job_params: Training parameters (layers, generator, training config)
         user_id: Optional user ID for tracking
         name: Optional job name
-        hf_config: Optional HuggingFace config (token, repo_id)
-        mongo_uri: Optional MongoDB URI for saving results
+        hf_config: Optional HuggingFace config (repo_id). Prefer env vars (`HF_TOKEN`, `HF_REPO_ID`).
+        mongo_uri: Optional MongoDB URI for saving results (falls back to `MONGODB_URI` env var)
 
     Returns:
         Dict containing the training results
@@ -55,13 +55,42 @@ def run_training_job(
         WEIGHT_DECAY,
     )
     from ..integrations.huggingface import HuggingFaceIntegration, upload_model
-    from ..services.local_model_limit import delete_local_model, save_torch_state_dict_with_local_limit
+    from ..services.local_model_limit import save_torch_state_dict_with_local_limit
     from ..services.pyreflect_runtime import PYREFLECT
+
+    global _MONGO_CLIENT, _MONGO_URI
 
     job = get_current_job()
     logs: list[str] = []
 
-    def set_meta(fields: dict[str, Any]) -> None:
+    import os
+
+    meta_flush_interval_s = float(os.getenv("RQ_META_FLUSH_INTERVAL_S", "1.0"))
+    max_log_lines = int(os.getenv("RQ_MAX_LOG_LINES", "250"))
+    last_meta_flush = 0.0
+    pending_meta: dict[str, Any] = {}
+
+    def _flush_meta(*, force: bool = False) -> None:
+        nonlocal last_meta_flush, pending_meta
+        if not job:
+            return
+        now = time.monotonic()
+        if not force and (now - last_meta_flush) < meta_flush_interval_s:
+            return
+
+        try:
+            meta = job.get_meta(refresh=True) or {}
+        except Exception:
+            meta = job.meta or {}
+        meta.update(pending_meta)
+        meta["updated_at"] = datetime.now(timezone.utc).isoformat()
+        job.meta = meta
+        job.save_meta()
+
+        pending_meta = {}
+        last_meta_flush = now
+
+    def set_meta(fields: dict[str, Any], *, force: bool = False) -> None:
         """
         Safely update job meta without clobbering fields set by the API.
 
@@ -69,20 +98,14 @@ def run_training_job(
         the whole thing. Since the API can set flags like `stop_requested` while
         the worker is running, we always refresh meta from Redis, then merge.
         """
-        if not job:
-            return
-        try:
-            meta = job.get_meta(refresh=True) or {}
-        except Exception:
-            meta = job.meta or {}
-        meta.update(fields)
-        meta["updated_at"] = datetime.now(timezone.utc).isoformat()
-        job.meta = meta
-        job.save_meta()
+        pending_meta.update(fields)
+        _flush_meta(force=force)
 
     def log(message: str) -> None:
         """Add a log message and update job meta."""
         logs.append(message)
+        if max_log_lines > 0 and len(logs) > max_log_lines:
+            del logs[: len(logs) - max_log_lines]
         set_meta({"logs": logs})
 
     def update_progress(epoch: int, total: int, train_loss: float, val_loss: float) -> None:
@@ -108,7 +131,7 @@ def run_training_job(
         init_meta["user_id"] = user_id
     if name:
         init_meta["name"] = name
-    set_meta(init_meta)
+    set_meta(init_meta, force=True)
 
     if not PYREFLECT.available:
         raise RuntimeError("pyreflect not available. Please install pyreflect dependencies.")
@@ -135,6 +158,73 @@ def run_training_job(
             log(f"torch.cuda.is_available(): {torch.cuda.is_available()}")
     except Exception:
         pass
+
+    # =====================
+    # Remote Integration Preflight
+    # =====================
+    def _get_bool(name: str, default: bool = False) -> bool:
+        value = os.getenv(name)
+        if value is None:
+            return default
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    hf_repo_id = None
+    if isinstance(hf_config, dict):
+        hf_repo_id = hf_config.get("repo_id")
+    hf_repo_id = hf_repo_id or os.getenv("HF_REPO_ID")
+    hf_token = os.getenv("HF_TOKEN")
+
+    storage_mode = (os.getenv("MODEL_STORAGE") or "").strip().lower()
+    if not storage_mode:
+        storage_mode = "hf" if (hf_repo_id and hf_token) else "local"
+    if storage_mode in {"huggingface", "huggingface_only", "hf_only"}:
+        storage_mode = "hf"
+
+    log(f"Model storage: {storage_mode}")
+
+    hf: HuggingFaceIntegration | None = None
+    if hf_repo_id and hf_token:
+        try:
+            from huggingface_hub import HfApi
+
+            api = HfApi(token=hf_token)
+            # Pre-create repo so upload is only the file transfer.
+            try:
+                api.create_repo(repo_id=hf_repo_id, repo_type="dataset", exist_ok=True, private=False)
+            except Exception:
+                pass
+            hf = HuggingFaceIntegration(available=True, repo_id=hf_repo_id, api=api)
+            log(f"Hugging Face ready: {hf_repo_id}")
+        except Exception as exc:
+            log(f"Warning: Hugging Face preflight failed: {exc}")
+            hf = None
+
+    if storage_mode == "hf" and hf is None:
+        raise RuntimeError("MODEL_STORAGE=hf requires HF_REPO_ID + HF_TOKEN (and a valid Hugging Face auth).")
+
+    mongo_uri = (mongo_uri or os.getenv("MONGODB_URI") or "").strip() or None
+    require_mongo = _get_bool("REQUIRE_MONGO_SAVE", default=False)
+    if mongo_uri and (require_mongo or user_id):
+        try:
+            from pymongo.mongo_client import MongoClient
+            from pymongo.server_api import ServerApi
+
+            if _MONGO_CLIENT is None or _MONGO_URI != mongo_uri:
+                _MONGO_URI = mongo_uri
+                _MONGO_CLIENT = MongoClient(
+                    mongo_uri,
+                    server_api=ServerApi("1"),
+                    serverSelectionTimeoutMS=5000,
+                    connectTimeoutMS=5000,
+                    socketTimeoutMS=5000,
+                )
+            _MONGO_CLIENT.admin.command("ping")
+            log("MongoDB reachable")
+        except Exception as exc:
+            log(f"Warning: MongoDB preflight failed: {exc}")
+            if require_mongo:
+                raise RuntimeError(f"MongoDB not reachable: {exc}") from exc
+            mongo_uri = None
 
     # Extract parameters
     gen_params = job_params.get("generator", {})
@@ -265,106 +355,52 @@ def run_training_job(
         log(f"Warning: Failed to prepare CPU state_dict: {exc}")
         cpu_state_dict = model.state_dict()
 
+    import io
+
     model_id = str(uuid.uuid4())
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    model_path = MODELS_DIR / f"{model_id}.pth"
-    try:
-        waiting_marked = False
-        for msg in save_torch_state_dict_with_local_limit(
-            torch=torch,
-            state_dict=cpu_state_dict,
-            model_path=model_path,
-            models_dir=MODELS_DIR,
-            max_models=MAX_LOCAL_MODELS,
-            timeout_s=LOCAL_MODEL_WAIT_TIMEOUT_S,
-            poll_s=LOCAL_MODEL_WAIT_POLL_S,
-            user_id=user_id,
-        ):
-            if job and not waiting_marked:
-                set_meta({"status": "waiting_for_local_model_slot"})
-                waiting_marked = True
-            log(msg)
-    except TimeoutError as exc:
-        raise RuntimeError(str(exc)) from exc
-    model_size_mb = model_path.stat().st_size / (1024 * 1024)
-    log(f"Model saved locally: {model_id}.pth ({model_size_mb:.2f} MB)")
 
-    # Optional: upload the model artifact back to the backend so Modal workers
-    # don't retain large files on ephemeral disk.
-    import os
+    model_path: Path | None = None
+    model_size_mb: float | None = None
 
-    upload_url = os.getenv("MODEL_UPLOAD_URL")
-    upload_token = os.getenv("MODEL_UPLOAD_TOKEN")
-    want_backend_upload = bool(upload_url and upload_token)
-
-    # Upload to HuggingFace if configured.
-    # NOTE: Do not rely on tokens passed via job args (those get logged by RQ).
-    if hf_config and hf_config.get("repo_id"):
+    if storage_mode == "hf":
         set_meta({"status": "uploading"})
-        log("Uploading to Hugging Face...")
+        log("Uploading model to Hugging Face (no local storage)...")
         try:
-            import os
-            from huggingface_hub import HfApi
+            buffer = io.BytesIO()
+            torch.save(cpu_state_dict, buffer)
+            size_bytes = buffer.tell()
+            model_size_mb = size_bytes / (1024 * 1024)
+            buffer.seek(0)
 
-            hf_token = hf_config.get("token") or os.getenv("HF_TOKEN")
-            if not hf_token:
-                log("Warning: HF_TOKEN not set; skipping Hugging Face upload.")
-                hf_token = None
-
-            if not hf_token:
-                raise RuntimeError("Missing HF_TOKEN")
-
-            api = HfApi(token=hf_token)
-            hf = HuggingFaceIntegration(
-                available=True,
-                api=api,
-                repo_id=hf_config["repo_id"],
-            )
-            if upload_model(hf, model_path, model_id):
-                log("Model uploaded to Hugging Face Hub")
-                # Verify and cleanup
-                try:
-                    if api.file_exists(repo_id=hf.repo_id, filename=f"{model_id}.pth", repo_type="dataset"):
-                        if want_backend_upload:
-                            log("Verified on HF. Keeping local model temporarily for backend upload.")
-                        else:
-                            delete_local_model(models_dir=MODELS_DIR, model_id=model_id)
-                            log("Verified on HF. Local model file deleted (cleanup)")
-                except Exception:
-                    pass  # Keep local file if verification fails
-            else:
-                log("Warning: Model NOT uploaded to HF (Error occurred)")
+            if hf is None or not upload_model(hf, buffer, model_id):
+                raise RuntimeError("Hugging Face upload failed.")
+            log(f"Model uploaded to Hugging Face Hub: {model_id}.pth ({model_size_mb:.2f} MB)")
         except Exception as exc:
-            log(f"Warning: HuggingFace upload failed: {exc}")
-
-    if want_backend_upload and model_path.exists():
-        set_meta({"status": "uploading_to_backend"})
-        log("Uploading model artifact to backend...")
+            raise RuntimeError(f"Hugging Face upload failed: {exc}") from exc
+    else:
+        MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        model_path = MODELS_DIR / f"{model_id}.pth"
         try:
-            import requests
+            waiting_marked = False
+            for msg in save_torch_state_dict_with_local_limit(
+                torch=torch,
+                state_dict=cpu_state_dict,
+                model_path=model_path,
+                models_dir=MODELS_DIR,
+                max_models=MAX_LOCAL_MODELS,
+                timeout_s=LOCAL_MODEL_WAIT_TIMEOUT_S,
+                poll_s=LOCAL_MODEL_WAIT_POLL_S,
+                user_id=user_id,
+            ):
+                if job and not waiting_marked:
+                    set_meta({"status": "waiting_for_local_model_slot"})
+                    waiting_marked = True
+                log(msg)
+        except TimeoutError as exc:
+            raise RuntimeError(str(exc)) from exc
 
-            with model_path.open("rb") as f:
-                resp = requests.post(
-                    upload_url,  # type: ignore[arg-type]
-                    headers={"X-Model-Upload-Token": upload_token},  # type: ignore[arg-type]
-                    data={"model_id": model_id, "user_id": user_id or ""},
-                    files={"file": (f"{model_id}.pth", f, "application/octet-stream")},
-                    timeout=60 * 5,
-                )
-            if resp.ok:
-                try:
-                    payload = resp.json()
-                except Exception:
-                    payload = None
-                log(f"Model uploaded to backend (status={resp.status_code}).")
-                if payload and payload.get("evicted"):
-                    log(f"Backend evicted old models: {payload['evicted']}")
-                delete_local_model(models_dir=MODELS_DIR, model_id=model_id)
-                log("Deleted local model copy after backend upload (cleanup).")
-            else:
-                log(f"Warning: Backend model upload failed (status={resp.status_code}): {resp.text[:500]}")
-        except Exception as exc:
-            log(f"Warning: Backend model upload failed: {exc}")
+        model_size_mb = model_path.stat().st_size / (1024 * 1024)
+        log(f"Model saved locally: {model_id}.pth ({model_size_mb:.2f} MB)")
 
     # =====================
     # Inference
@@ -456,16 +492,23 @@ def run_training_job(
         log("Training complete - moving to history...")
         log("Saving to database...")
         try:
-            from pymongo import MongoClient
+            from pymongo.mongo_client import MongoClient
+            from pymongo.server_api import ServerApi
 
-            global _MONGO_CLIENT, _MONGO_URI
             if _MONGO_CLIENT is None or _MONGO_URI != mongo_uri:
                 _MONGO_URI = mongo_uri
-                _MONGO_CLIENT = MongoClient(mongo_uri)
+                _MONGO_CLIENT = MongoClient(
+                    mongo_uri,
+                    server_api=ServerApi("1"),
+                    serverSelectionTimeoutMS=5000,
+                    connectTimeoutMS=5000,
+                    socketTimeoutMS=5000,
+                )
 
             client = _MONGO_CLIENT
-            db = client.get_default_database()
-            generations = db.generations
+            client.admin.command("ping")
+            db = client["PyReflect"]
+            generations = db["generations"]
             doc = {
                 "user_id": runtime_user_id,
                 "name": runtime_name,
@@ -478,16 +521,16 @@ def run_training_job(
         except Exception as exc:
             log(f"Warning: Could not save to database: {exc}")
 
-    # Finalize job meta
+    log("Training complete!")
+    # Finalize job meta (force flush so UI sees completion immediately).
     set_meta(
         {
             "status": "completed",
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "logs": logs,
-        }
+        },
+        force=True,
     )
-
-    log("Training complete!")
     return result
 
 
