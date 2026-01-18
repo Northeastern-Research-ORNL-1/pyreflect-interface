@@ -244,6 +244,20 @@ def poll_queue():
                 existing = redis_conn.get(lock_key)
                 existing_str = existing.decode("utf-8") if existing is not None else "?"
                 print(f"⏳ Spawn lock held (ttl={ttl}s, value={existing_str}); will retry next tick.")
+
+                # Self-heal: if an older deployment left a very long TTL lock behind,
+                # clear it when no workers are running so we can spawn again.
+                if started == 0 and len(workers) == 0 and isinstance(ttl, int) and ttl > 20 * 60:
+                    print(f"🧹 Clearing stale spawn lock (ttl={ttl}s) and retrying spawn...")
+                    try:
+                        redis_conn.delete(lock_key)
+                    except Exception:
+                        pass
+                    retry_value = f"{uuid.uuid4()}:{int(time.time())}"
+                    retry_acquired = redis_conn.set(lock_key, retry_value, nx=True, ex=15 * 60)
+                    if retry_acquired:
+                        print(f"📋 {queued} jobs queued, spawning GPU worker...")
+                        run_rq_worker_burst.spawn(retry_value)
             except Exception:
                 print("⏳ Spawn lock held; will retry next tick.")
 
