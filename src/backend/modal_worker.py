@@ -127,7 +127,11 @@ def run_rq_worker_burst(lock_value: str):
             pass
 
 
-@app.function(image=image, schedule=modal.Cron("* * * * *"))  # Every minute
+@app.function(
+    image=image,
+    schedule=modal.Cron("* * * * *"),  # Every minute
+    secrets=[modal.Secret.from_name("pyreflect-redis")],
+)
 def poll_queue():
     """
     Cron job that checks the queue and spawns workers for pending jobs.
