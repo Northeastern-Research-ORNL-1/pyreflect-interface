@@ -1,16 +1,14 @@
 """
 PyReflect Interface - FastAPI Backend
 
-Entry point for uvicorn: `uvicorn main:app`.
-Application code lives under `service/`.
+This repository now uses the modular backend under `src/backend/service/`.
+This file is intentionally a thin uvicorn entrypoint wrapper so the common
+command still works:
+
+  uv run uvicorn main:app --reload --port 8000
 """
 
 from service import create_app
 
 app = create_app()
 
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
