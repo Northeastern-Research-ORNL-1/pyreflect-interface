@@ -354,6 +354,41 @@ async def retry_job(job_id: str, http_request: Request):
         raise HTTPException(status_code=500, detail=f"Failed to retry job: {exc}") from exc
 
 
+@router.post("/jobs/{job_id}/stop")
+async def stop_job(job_id: str, http_request: Request):
+    """
+    Request a running job to stop after the current epoch.
+
+    Sets a flag in job meta that the worker checks between epochs.
+    """
+    rq = getattr(http_request.app.state, "rq", None)
+
+    if not rq or not rq.available or not rq.redis:
+        raise HTTPException(status_code=503, detail="Job queue not available.")
+
+    try:
+        from rq.job import Job
+
+        job = Job.fetch(job_id, connection=rq.redis)
+        status = job.get_status()
+
+        if status != "started":
+            raise HTTPException(status_code=400, detail=f"Job is {status}, not running")
+
+        # Set stop flag in meta
+        meta = job.meta or {}
+        meta["stop_requested"] = True
+        job.meta = meta
+        job.save_meta()
+
+        return {"job_id": job_id, "status": "stop_requested", "message": "Stop requested. Job will stop after current epoch."}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to stop job: {exc}") from exc
+
+
 @router.delete("/jobs/{job_id}")
 async def cancel_job(job_id: str, http_request: Request):
     """
@@ -373,7 +408,7 @@ async def cancel_job(job_id: str, http_request: Request):
         status = job.get_status()
 
         if status == "started":
-            raise HTTPException(status_code=400, detail="Cannot cancel a running job")
+            raise HTTPException(status_code=400, detail="Cannot cancel a running job. Use /stop instead.")
 
         if status == "finished":
             raise HTTPException(status_code=400, detail="Job already completed")
