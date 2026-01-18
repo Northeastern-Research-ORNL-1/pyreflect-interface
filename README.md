@@ -353,7 +353,8 @@ uv run modal token set --token-id <token-id> --token-secret <token-secret>
 uv run modal secret create --force pyreflect-redis \
   REDIS_URL="redis://:PASSWORD@YOUR_PUBLIC_REDIS_HOST:6379" \
   MODEL_UPLOAD_URL="https://YOUR_PUBLIC_BACKEND_HOST:8000/api/models/upload" \
-  MODEL_UPLOAD_TOKEN="change-me"
+  MODEL_UPLOAD_TOKEN="change-me" \
+  HF_TOKEN="hf_..."  # Optional: enables Hugging Face upload from Modal
 
 # Deploy (cron polls Redis and spawns a GPU RQ worker only when jobs are pending)
 uv run modal deploy modal_worker.py
