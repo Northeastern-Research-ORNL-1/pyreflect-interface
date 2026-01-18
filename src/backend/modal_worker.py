@@ -190,11 +190,14 @@ def poll_queue():
     This ensures jobs are processed even when no worker is running.
     """
     import os
+    import time
     import uuid
     from urllib.parse import urlparse
 
     from redis import Redis
     from rq import Queue
+    from rq import Worker
+    from rq.registry import StartedJobRegistry
 
     redis_url = os.environ.get("REDIS_URL")
     if not redis_url:
@@ -202,25 +205,47 @@ def poll_queue():
         return
     redis_url = _normalize_redis_url(redis_url)
     parsed = urlparse(redis_url)
+    redis_scheme = parsed.scheme or "redis"
     redis_host = parsed.hostname or "unknown"
     redis_port = parsed.port or 6379
+    redis_db = 0
+    try:
+        if parsed.path and parsed.path != "/":
+            redis_db = int(parsed.path.lstrip("/"))
+    except Exception:
+        redis_db = 0
     if redis_host in {"localhost", "127.0.0.1", "::1"}:
         print("WARNING: REDIS_URL points to localhost; Modal cannot reach your local Redis.")
         return
 
     redis_conn = Redis.from_url(redis_url)
     queue = Queue("training", connection=redis_conn)
+    started_ids = StartedJobRegistry(queue=queue).get_job_ids()
+    workers = Worker.all(connection=redis_conn)
+    gpu_workers = [w for w in workers if (w.name or "").lower().startswith("gpu-")]
 
-    pending = len(queue)
-    print(f"Redis: {redis_host}:{redis_port} pending={pending}")
-    if pending > 0:
+    queued = len(queue)
+    started = len(started_ids)
+    print(
+        f"Redis: {redis_scheme}://{redis_host}:{redis_port} db={redis_db} "
+        f"queued={queued} started={started} workers={len(workers)} gpu_workers={len(gpu_workers)}"
+    )
+    if queued > 0 and len(gpu_workers) == 0:
         # Use a Redis lock to avoid spawning overlapping burst workers.
         lock_key = "pyreflect:modal_worker_lock"
-        lock_value = str(uuid.uuid4())
-        acquired = redis_conn.set(lock_key, lock_value, nx=True, ex=4 * 60 * 60)
+        lock_value = f"{uuid.uuid4()}:{int(time.time())}"
+        acquired = redis_conn.set(lock_key, lock_value, nx=True, ex=15 * 60)
         if acquired:
-            print(f"📋 {pending} jobs pending, spawning GPU worker...")
+            print(f"📋 {queued} jobs queued, spawning GPU worker...")
             run_rq_worker_burst.spawn(lock_value)
+        else:
+            try:
+                ttl = redis_conn.ttl(lock_key)
+                existing = redis_conn.get(lock_key)
+                existing_str = existing.decode("utf-8") if existing is not None else "?"
+                print(f"⏳ Spawn lock held (ttl={ttl}s, value={existing_str}); will retry next tick.")
+            except Exception:
+                print("⏳ Spawn lock held; will retry next tick.")
 
 
 # For local testing
