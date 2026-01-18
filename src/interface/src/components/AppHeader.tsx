@@ -42,6 +42,7 @@ export default function AppHeader({
   const [showJsonMenu, setShowJsonMenu] = useState(false);
   const [showJsonMenuMobile, setShowJsonMenuMobile] = useState(false);
   const [workers, setWorkers] = useState<WorkerInfo[]>([]);
+  const [backendOnline, setBackendOnline] = useState(true);
   const jsonMenuRef = useRef<HTMLDivElement>(null);
 
   // Poll for worker info
@@ -53,9 +54,15 @@ export default function AppHeader({
         if (res.ok) {
           const data = await res.json();
           setWorkers(data.workers || []);
+          setBackendOnline(true);
+        } else {
+          setWorkers([]);
+          setBackendOnline(false);
         }
       } catch {
-        // Queue not available
+        // Backend not available
+        setWorkers([]);
+        setBackendOnline(false);
       }
     };
     fetchWorkers();
@@ -74,14 +81,16 @@ export default function AppHeader({
   }, []);
 
   // Determine worker type: GPU (colab), CPU, or none
-  const hasGpuWorker = workers.some(w => w.name.toLowerCase().includes('colab') || w.name.toLowerCase().includes('gpu'));
-  const hasCpuWorker = workers.some(w => !w.name.toLowerCase().includes('colab') && !w.name.toLowerCase().includes('gpu'));
-  const workerDotColor = hasGpuWorker ? '#10b981' : hasCpuWorker ? '#3b82f6' : '#6b7280';
-  const workerTooltip = hasGpuWorker 
-    ? 'GPU worker connected (Colab)' 
-    : hasCpuWorker 
-      ? 'CPU worker connected' 
-      : 'No workers connected';
+  const hasGpuWorker = backendOnline && workers.some(w => w.name.toLowerCase().includes('colab') || w.name.toLowerCase().includes('gpu'));
+  const hasCpuWorker = backendOnline && workers.some(w => !w.name.toLowerCase().includes('colab') && !w.name.toLowerCase().includes('gpu'));
+  const workerDotColor = !backendOnline ? '#6b7280' : hasGpuWorker ? '#10b981' : hasCpuWorker ? '#3b82f6' : '#6b7280';
+  const workerTooltip = !backendOnline
+    ? 'Backend offline'
+    : hasGpuWorker 
+      ? 'GPU worker connected (Colab)' 
+      : hasCpuWorker 
+        ? 'CPU worker connected' 
+        : 'No workers connected';
 
   return (
     <header className="header">
@@ -118,11 +127,13 @@ export default function AppHeader({
               ? epochProgress
                 ? `Training... (${epochProgress.current}/${epochProgress.total})`
                 : 'Training...'
-              : hasGpuWorker
-                ? '(GPU) Ready'
-                : hasCpuWorker
-                  ? '(CPU) Ready'
-                  : 'No Workers'}
+              : !backendOnline
+                ? 'Offline'
+                : hasGpuWorker
+                  ? '(GPU) Ready'
+                  : hasCpuWorker
+                    ? '(CPU) Ready'
+                    : 'No Workers'}
           </span>
         </span>
       </div>
