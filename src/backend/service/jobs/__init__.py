@@ -171,6 +171,7 @@ def run_training_job(
     train_losses = []
     val_losses = []
 
+    stopped_early = False
     training_start = time.perf_counter()
     for epoch in range(epochs):
         model.train()
@@ -201,7 +202,17 @@ def run_training_job(
         update_progress(epoch + 1, epochs, train_loss, val_loss)
         log(f"   Epoch {epoch + 1}/{epochs} - Train: {train_loss:.6f}, Val: {val_loss:.6f}")
 
+        # Check for stop request after each epoch
+        if job:
+            job.refresh()  # Reload meta from Redis
+            if job.meta.get("stop_requested"):
+                log(f"⚠️ Stop requested - stopping after epoch {epoch + 1}")
+                stopped_early = True
+                break
+
     training_time = time.perf_counter() - training_start
+    if stopped_early:
+        log(f"Training stopped early after {len(epoch_list)} epochs")
 
     # =====================
     # Save Model

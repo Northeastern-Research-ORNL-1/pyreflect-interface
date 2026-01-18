@@ -490,3 +490,17 @@
   margin-top: 12px;
   align-items: center; /* Enforce vertical alignment */
 }
+
+.stoppingLabel {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  color: #f59e0b;
+  letter-spacing: 0.05em;
+  animation: blink 1s ease-in-out infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
