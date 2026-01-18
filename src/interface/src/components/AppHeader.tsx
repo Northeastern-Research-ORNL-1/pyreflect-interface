@@ -98,28 +98,32 @@ export default function AppHeader({
           className={`status ${isGenerating ? 'status--training' : 'status--active'}`}
           style={{ marginLeft: '12px' }}
         >
+          {!isGenerating && (
+            <span
+              className="worker-dot"
+              style={{
+                width: '6px',
+                height: '6px',
+                borderRadius: '50%',
+                backgroundColor: workerDotColor,
+                marginRight: '0px',
+                display: 'inline-block',
+              }}
+              title={workerTooltip}
+            />
+          )}
           <span className="status__dot"></span>
           <span className="header__status-text">
             {isGenerating
               ? epochProgress
                 ? `Training... (${epochProgress.current}/${epochProgress.total})`
                 : 'Training...'
-              : 'Ready'}
+              : hasGpuWorker
+                ? 'Ready (GPU)'
+                : hasCpuWorker
+                  ? 'Ready (CPU)'
+                  : 'No Workers'}
           </span>
-          {!isGenerating && (
-            <span
-              className="worker-dot"
-              style={{
-                width: '8px',
-                height: '8px',
-                borderRadius: '50%',
-                backgroundColor: workerDotColor,
-                marginLeft: '8px',
-                display: 'inline-block',
-              }}
-              title={workerTooltip}
-            />
-          )}
         </span>
       </div>
       <nav className="header__nav">
