@@ -97,3 +97,15 @@ LOCAL_MODEL_WAIT_POLL_S = float(os.getenv("LOCAL_MODEL_WAIT_POLL_S", "2.0"))
 
 # Training job timeout for RQ (supports strings like "30m", "2h", or seconds).
 RQ_JOB_TIMEOUT = os.getenv("RQ_JOB_TIMEOUT", "2h")
+
+
+def _get_bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+# Whether the API process should start a local RQ worker subprocess.
+# - Default: enabled for local dev, disabled for PRODUCTION (so you can use Modal workers).
+START_LOCAL_RQ_WORKER = _get_bool_env("START_LOCAL_RQ_WORKER", default=not IS_PRODUCTION)

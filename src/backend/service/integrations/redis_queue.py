@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from redis import Redis
@@ -36,6 +37,9 @@ def create_rq_integration() -> RQIntegration:
         RQIntegration instance with queue ready for use.
     """
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    parsed = urlparse(redis_url)
+    redis_host = parsed.hostname or "localhost"
+    redis_port = parsed.port or 6379
 
     try:
         from redis import Redis
@@ -47,7 +51,7 @@ def create_rq_integration() -> RQIntegration:
 
         queue = Queue("training", connection=redis_conn)
 
-        print(f"✓ RQ connected to Redis at {redis_url}")
+        print(f"✓ RQ connected to Redis at {redis_host}:{redis_port}")
         return RQIntegration(
             available=True,
             redis=redis_conn,
