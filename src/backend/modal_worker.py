@@ -57,10 +57,24 @@ def _normalize_redis_url(value: str) -> str:
     Users often set `REDIS_URL` to `host:6379` or `:password@host:6379`.
     Accept those by assuming `redis://`.
     """
+    value = value.strip()
+    if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+        value = value[1:-1].strip()
+
     if value.startswith(("redis://", "rediss://", "unix://")):
         return value
+
+    # Accept common aliases.
+    if value.startswith(("tcp://", "redis+tcp://")):
+        return "redis://" + value.split("://", 1)[1]
+    if value.startswith(("ssl://", "tls://", "redis+ssl://")):
+        return "rediss://" + value.split("://", 1)[1]
+
+    # Bare host:port or :password@host:port
     if "://" not in value:
         return f"redis://{value}"
+
+    # Unknown scheme (e.g. http://) -> keep as-is, but fail with clearer message upstream.
     return value
 
 
@@ -93,9 +107,13 @@ def run_rq_worker_burst(lock_value: str):
     redis_url = _normalize_redis_url(redis_url)
 
     parsed = urlparse(redis_url)
+    if parsed.scheme not in {"redis", "rediss", "unix"}:
+        raise RuntimeError(
+            f"Invalid REDIS_URL scheme '{parsed.scheme}'. Use redis:// or rediss:// (example: redis://:PASSWORD@HOST:6379)."
+        )
     redis_host = parsed.hostname or "unknown"
     redis_port = parsed.port or 6379
-    print(f"Redis: {redis_host}:{redis_port}")
+    print(f"Redis: {parsed.scheme}://{redis_host}:{redis_port}")
     if redis_host in {"localhost", "127.0.0.1", "::1"}:
         raise RuntimeError(
             "REDIS_URL points to localhost; Modal cannot reach Redis on your local machine. "
@@ -164,6 +182,10 @@ def poll_queue():
     redis_url = _normalize_redis_url(redis_url)
 
     parsed = urlparse(redis_url)
+    if parsed.scheme not in {"redis", "rediss", "unix"}:
+        raise RuntimeError(
+            f"Invalid REDIS_URL scheme '{parsed.scheme}'. Use redis:// or rediss:// (example: redis://:PASSWORD@HOST:6379)."
+        )
     redis_host = parsed.hostname or "unknown"
     redis_port = parsed.port or 6379
     if redis_host in {"localhost", "127.0.0.1", "::1"}:
