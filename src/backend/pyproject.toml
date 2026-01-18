@@ -16,7 +16,14 @@ dependencies = [
     "rq>=1.15.0",
     "pymongo>=4.6.0",
     "huggingface-hub>=0.20.0",
+    # Keep Modal available by default so `uv sync` always provides the `modal`
+    # CLI (used for GPU workers).
+    "modal>=0.64.0",
 ]
 
 [dependency-groups]
 dev = ["modal>=0.64.0"]
+
+[tool.uv]
+# Ensure the `dev` group is installed on a plain `uv sync`.
+default-groups = ["dev"]
