@@ -428,7 +428,14 @@ export default function HomePage() {
             addLog(`Job queued: ${queueData.job_id.slice(0, 8)}... (position: ${queueData.queue_position})`);
             addLog('Job will run in background. Check history when complete.');
           } else {
-            // Queue not available - user should use streaming mode manually
+            // Queue not available / misconfigured - show server error detail if present.
+            try {
+              const err = await queueRes.json();
+              const detail = typeof err?.detail === 'string' ? err.detail : '';
+              if (detail) addLog(`Queue submit failed: ${detail}`);
+            } catch {
+              // ignore parse errors
+            }
             addLog('Queue not available. Click again to use streaming mode.');
           }
         })

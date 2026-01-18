@@ -16,6 +16,53 @@ if TYPE_CHECKING:
     from rq import Queue
 
 
+def normalize_redis_url(value: str) -> str:
+    """
+    Normalize common REDIS_URL formats to a URL that `redis.Redis.from_url` accepts.
+
+    Handles:
+    - Missing scheme (e.g. `host:6379` or `:password@host:6379`)
+    - Netloc-only URLs (e.g. `//:password@host:6379`)
+    - Aliases like `tcp://` and `tls://`
+    - Accidental `REDIS_URL=...` prefix (common when copying `.env` lines)
+    - Extra/mismatched quotes
+    """
+    value = (value or "").strip()
+    if value.lower().startswith("redis_url="):
+        value = value.split("=", 1)[1].strip()
+
+    value = value.strip()
+    if value[:1] in {'"', "'"}:
+        value = value[1:]
+    if value[-1:] in {'"', "'"}:
+        value = value[:-1]
+    value = value.strip()
+
+    if not value:
+        return ""
+
+    # Normalize scheme casing (URL schemes are case-insensitive, but string checks aren't).
+    if "://" in value:
+        scheme, rest = value.split("://", 1)
+        value = f"{scheme.lower()}://{rest}"
+
+    if value.startswith(("redis://", "rediss://", "unix://")):
+        return value
+
+    if value.startswith("//"):
+        return "redis:" + value
+
+    if value.startswith(("tcp://", "redis+tcp://")):
+        return "redis://" + value.split("://", 1)[1]
+    if value.startswith(("ssl://", "tls://", "redis+ssl://")):
+        return "rediss://" + value.split("://", 1)[1]
+
+    if "://" not in value:
+        return f"redis://{value}"
+
+    return value
+
+
 @dataclass
 class RQIntegration:
     """Holds RQ connection and queue references."""
@@ -36,18 +83,9 @@ def create_rq_integration() -> RQIntegration:
     Returns:
         RQIntegration instance with queue ready for use.
     """
-    redis_url = (os.getenv("REDIS_URL", "redis://localhost:6379") or "").strip()
-    if (redis_url.startswith('"') and redis_url.endswith('"')) or (redis_url.startswith("'") and redis_url.endswith("'")):
-        redis_url = redis_url[1:-1].strip()
-    if redis_url and not redis_url.startswith(("redis://", "rediss://", "unix://")):
-        if redis_url.startswith(("tcp://", "redis+tcp://")):
-            redis_url = "redis://" + redis_url.split("://", 1)[1]
-        elif redis_url.startswith(("ssl://", "tls://", "redis+ssl://")):
-            redis_url = "rediss://" + redis_url.split("://", 1)[1]
-        elif redis_url.startswith("//"):
-            redis_url = "redis:" + redis_url
-        elif "://" not in redis_url:
-            redis_url = f"redis://{redis_url}"
+    redis_url = normalize_redis_url(os.getenv("REDIS_URL", "redis://localhost:6379"))
+    if not redis_url:
+        redis_url = "redis://localhost:6379"
     parsed = urlparse(redis_url)
     redis_host = parsed.hostname or "localhost"
     redis_port = parsed.port or 6379

@@ -42,7 +42,9 @@ def create_app() -> FastAPI:
         print(f"   MongoDB available: {mongo.available}")
         print(f"   Redis Queue available: {rq.available}")
         try:
-            redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+            from .integrations.redis_queue import normalize_redis_url
+
+            redis_url = normalize_redis_url(os.getenv("REDIS_URL", "redis://localhost:6379"))
             parsed = urlparse(redis_url)
             redis_host = parsed.hostname or "localhost"
             if not START_LOCAL_RQ_WORKER and redis_host in {"localhost", "127.0.0.1", "::1"}:

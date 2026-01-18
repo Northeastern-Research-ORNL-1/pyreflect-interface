@@ -14,7 +14,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from ..config import START_LOCAL_RQ_WORKER
-from ..integrations.redis_queue import get_job_status, get_queue_info
+from ..integrations.redis_queue import get_job_status, get_queue_info, normalize_redis_url
 from ..schemas import GenerateRequest, validate_limits
 
 router = APIRouter()
@@ -43,6 +43,28 @@ async def submit_job(
             status_code=503,
             detail="Job queue not available. Use /api/generate/stream for synchronous execution.",
         )
+
+    # Guardrail: if local workers are disabled, don't accept jobs that can never
+    # be consumed by remote workers (e.g. Modal cannot reach localhost Redis).
+    if not START_LOCAL_RQ_WORKER:
+        try:
+            redis_url = normalize_redis_url(os.getenv("REDIS_URL", "redis://localhost:6379"))
+            parsed = urlparse(redis_url)
+            redis_host = parsed.hostname or "localhost"
+            if redis_host in {"localhost", "127.0.0.1", "::1"}:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "START_LOCAL_RQ_WORKER=false but REDIS_URL points to localhost. "
+                        "Remote workers (Modal) cannot reach this queue. "
+                        "Point REDIS_URL at a public/managed Redis or set START_LOCAL_RQ_WORKER=true."
+                    ),
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            # Best-effort only; enqueue may still fail later with a clear error.
+            pass
 
     # Validate limits
     validate_limits(request.generator, request.training)
@@ -594,13 +616,20 @@ async def queue_status(
 
     info = get_queue_info(rq)
     try:
-        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+        redis_url = normalize_redis_url(os.getenv("REDIS_URL", "redis://localhost:6379"))
         parsed = urlparse(redis_url)
-        redis_host = parsed.hostname
+        redis_host = parsed.hostname or "localhost"
+        redis_db = 0
+        try:
+            if parsed.path and parsed.path != "/":
+                redis_db = int(parsed.path.lstrip("/"))
+        except Exception:
+            redis_db = 0
         info["redis"] = {
             "scheme": parsed.scheme,
             "host": redis_host,
             "port": parsed.port,
+            "db": redis_db,
         }
         info["remote_workers_compatible"] = redis_host not in {"localhost", "127.0.0.1", "::1"}
     except Exception:
