@@ -582,6 +582,40 @@ uv run rq worker training --path .                # Single worker
 uv run rq worker-pool training -n 2 --path .      # Worker pool
 ```
 
+### Google Colab GPU Worker
+
+Use `colab_gpu_worker.ipynb` to process training jobs on Colab's free GPU:
+
+1. Upload the notebook to [Google Colab](https://colab.research.google.com)
+2. Update `REDIS_URL` with your VPS credentials: `redis://:PASSWORD@YOUR_VPS_IP:6379`
+3. Enable GPU runtime: `Runtime > Change runtime type > T4 GPU`
+4. Run all cells — the worker will connect to your queue and process jobs
+
+**VPS Redis setup:**
+
+```bash
+# Edit redis.conf
+sudo nano /etc/redis/redis.conf
+
+# Add/uncomment these lines:
+bind 0.0.0.0
+requirepass YOUR_STRONG_PASSWORD
+
+# Restart Redis
+sudo systemctl restart redis
+
+# Open firewall (if needed)
+sudo ufw allow 6379
+```
+
+Update your backend `.env` to use the password:
+
+```env
+REDIS_URL=redis://:YOUR_PASSWORD@localhost:6379
+```
+
+> Note: Colab notebooks are private by default, so your Redis password is safe unless you share the notebook.
+
 ### Monitoring
 
 ```bash

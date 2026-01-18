@@ -7,6 +7,11 @@ import type { Session } from 'next-auth';
 
 type EpochProgress = { current: number; total: number } | null;
 
+type WorkerInfo = {
+  name: string;
+  state: string;
+};
+
 type AppHeaderProps = {
   appVersion: string;
   isProduction: boolean;
@@ -36,7 +41,27 @@ export default function AppHeader({
   const [showActionsMenu, setShowActionsMenu] = useState(false);
   const [showJsonMenu, setShowJsonMenu] = useState(false);
   const [showJsonMenuMobile, setShowJsonMenuMobile] = useState(false);
+  const [workers, setWorkers] = useState<WorkerInfo[]>([]);
   const jsonMenuRef = useRef<HTMLDivElement>(null);
+
+  // Poll for worker info
+  useEffect(() => {
+    const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    const fetchWorkers = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/queue`, { cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          setWorkers(data.workers || []);
+        }
+      } catch {
+        // Queue not available
+      }
+    };
+    fetchWorkers();
+    const interval = setInterval(fetchWorkers, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -47,6 +72,16 @@ export default function AppHeader({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Determine worker type: GPU (colab), CPU, or none
+  const hasGpuWorker = workers.some(w => w.name.toLowerCase().includes('colab') || w.name.toLowerCase().includes('gpu'));
+  const hasCpuWorker = workers.some(w => !w.name.toLowerCase().includes('colab') && !w.name.toLowerCase().includes('gpu'));
+  const workerDotColor = hasGpuWorker ? '#10b981' : hasCpuWorker ? '#3b82f6' : '#6b7280';
+  const workerTooltip = hasGpuWorker 
+    ? 'GPU worker connected (Colab)' 
+    : hasCpuWorker 
+      ? 'CPU worker connected' 
+      : 'No workers connected';
 
   return (
     <header className="header">
@@ -71,6 +106,20 @@ export default function AppHeader({
                 : 'Training...'
               : 'Ready'}
           </span>
+          {!isGenerating && (
+            <span
+              className="worker-dot"
+              style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                backgroundColor: workerDotColor,
+                marginLeft: '8px',
+                display: 'inline-block',
+              }}
+              title={workerTooltip}
+            />
+          )}
         </span>
       </div>
       <nav className="header__nav">
