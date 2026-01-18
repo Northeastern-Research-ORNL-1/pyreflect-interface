@@ -64,6 +64,10 @@ def _normalize_redis_url(value: str) -> str:
     if value.startswith(("redis://", "rediss://", "unix://")):
         return value
 
+    # Support netloc-only URLs like `//:password@host:6379` (scheme omitted).
+    if value.startswith("//"):
+        return "redis:" + value
+
     # Accept common aliases.
     if value.startswith(("tcp://", "redis+tcp://")):
         return "redis://" + value.split("://", 1)[1]
@@ -178,14 +182,22 @@ def poll_queue():
 
     redis_url = os.environ.get("REDIS_URL")
     if not redis_url:
+        print("REDIS_URL not set; poll_queue is idle.")
         return
     redis_url = _normalize_redis_url(redis_url)
+    print(
+        "REDIS_URL loaded. "
+        f"starts_redis={redis_url.startswith(('redis://','rediss://','unix://'))} "
+        f"starts_slashes={redis_url.startswith('//')}"
+    )
 
     parsed = urlparse(redis_url)
     if parsed.scheme not in {"redis", "rediss", "unix"}:
-        raise RuntimeError(
-            f"Invalid REDIS_URL scheme '{parsed.scheme}'. Use redis:// or rediss:// (example: redis://:PASSWORD@HOST:6379)."
+        print(
+            f"Invalid REDIS_URL scheme '{parsed.scheme}'. "
+            "Set Modal secret 'pyreflect-redis' with REDIS_URL=redis://:PASSWORD@HOST:6379 (no spaces around '=')."
         )
+        return
     redis_host = parsed.hostname or "unknown"
     redis_port = parsed.port or 6379
     if redis_host in {"localhost", "127.0.0.1", "::1"}:

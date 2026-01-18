@@ -44,6 +44,8 @@ def create_rq_integration() -> RQIntegration:
             redis_url = "redis://" + redis_url.split("://", 1)[1]
         elif redis_url.startswith(("ssl://", "tls://", "redis+ssl://")):
             redis_url = "rediss://" + redis_url.split("://", 1)[1]
+        elif redis_url.startswith("//"):
+            redis_url = "redis:" + redis_url
         elif "://" not in redis_url:
             redis_url = f"redis://{redis_url}"
     parsed = urlparse(redis_url)
