@@ -69,7 +69,11 @@ export default function AppHeader({
               ? epochProgress
                 ? `Training... (${epochProgress.current}/${epochProgress.total})`
                 : 'Training...'
-              : 'Ready'}
+              : hasGpuWorker
+                ? '(GPU) Ready'
+                : hasCpuWorker
+                  ? '(CPU) Ready'
+                  : 'No Workers'}
           </span>
         </span>
       </div>
