@@ -66,6 +66,11 @@ HF_REPO_ID = os.getenv("HF_REPO_ID")
 CORS_ORIGINS = os.getenv(
     "CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
 ).split(",")
+CORS_ORIGINS = [o.strip() for o in CORS_ORIGINS if o and o.strip()]
+
+# Optional: regex-based CORS allowlist (useful for subdomains like https://*.shlawg.com).
+# If set, FastAPI will use `allow_origin_regex` instead of `allow_origins`.
+CORS_ALLOW_ORIGIN_REGEX = (os.getenv("CORS_ALLOW_ORIGIN_REGEX") or "").strip() or None
 
 # =====================
 # Training Constants

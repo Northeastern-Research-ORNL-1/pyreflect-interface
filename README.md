@@ -464,6 +464,8 @@ PRODUCTION=true
 
 # CORS (comma-separated origins)
 CORS_ORIGINS=http://localhost:3000,https://your-app.vercel.app
+# Or use a regex allowlist (useful for multiple subdomains):
+#CORS_ALLOW_ORIGIN_REGEX=https://(pyreflect\\.shlawg\\.com|localhost:3000)$
 
 # Redis queue (required for background jobs in the UI)
 REDIS_URL=redis://localhost:6379
@@ -471,6 +473,8 @@ RQ_JOB_TIMEOUT=2h
 
 # Instant Modal worker spawn (removes cron latency)
 MODAL_INSTANT_SPAWN=true
+MODAL_POLL_URL=https://<your-modal-endpoint>/poll_queue_http
+MODAL_TRIGGER_TOKEN=change-me  # must match Modal secret MODAL_TRIGGER_TOKEN
 
 # Disable local worker if using Modal/remote GPU workers
 START_LOCAL_RQ_WORKER=false
