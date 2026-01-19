@@ -2,12 +2,19 @@
 
 A minimal, monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyreflect) neutron reflectivity analysis package.
 
-![Interface Preview](https://img.shields.io/badge/status-development-black)
+![Interface Preview](https://img.shields.io/badge/status-live-black)
 ![Version](https://img.shields.io/badge/version-v0.1.1-black)
 
 ## Version
 
 - **v0.1.1** — GitHub auth, explore/history sidebar, and download bundle support.
+
+## Live Deployment
+
+- App: `https://pyreflect.shlawg.com`
+- API: `https://api.shlawg.com`
+
+The hosted deployment runs with the full stack enabled: Redis job queue + Modal GPU burst workers, MongoDB history persistence, and Hugging Face model storage.
 
 ## Features
 
@@ -20,6 +27,9 @@ A minimal, monochrome web interface for the [pyreflect](https://github.com/willi
 - **Live Streaming Logs**: Real-time training progress streamed from backend via SSE
 - **Timing + Warnings**: Generation/training/inference timings and backend warnings streamed to console
 - **Data Upload**: Drag-and-drop upload for `.npy` datasets and `.pth` model weights
+- **Background Jobs**: Redis + RQ queue for non-blocking training runs
+- **GPU Training**: Modal T4 burst workers (spin up on demand, scale to zero)
+- **Cloud Storage**: Hugging Face model artifacts + MongoDB history persistence
 - **State Persistence**: Parameters and results persist across browser refreshes
 - **Reset + Collapse**: One-click reset to example defaults and per-layer collapse/expand controls
 
@@ -45,7 +55,7 @@ pyreflect-interface/
 
 ```mermaid
 flowchart TB
-    subgraph Browser["Browser (localhost:3000)"]
+    subgraph Browser["Browser (Next.js)"]
         UI[Next.js Frontend]
         Charts["Dual-line Charts<br/>GroundTruth vs Predicted"]
         LS[(localStorage)]
@@ -53,9 +63,9 @@ flowchart TB
         UI --> Charts
     end
 
-    subgraph Backend["FastAPI Backend (localhost:8000)"]
+    subgraph Backend["FastAPI Backend"]
         API[REST API]
-        SSE[SSE Stream]
+        SSE[SSE Stream (fallback)]
 
         subgraph Pipeline["ML Pipeline"]
             Train[Training Loop]
@@ -70,6 +80,20 @@ flowchart TB
         end
     end
 
+    subgraph Queue["Redis + RQ"]
+        RQ[(training queue)]
+    end
+
+    subgraph Modal["Modal (GPU burst workers)"]
+        Poller[poll_queue_http (CPU)]
+        Worker[run_rq_worker_burst (T4 GPU)]
+    end
+
+    subgraph Integrations["Integrations"]
+        Mongo[(MongoDB history)]
+        HF[(Hugging Face models)]
+    end
+
     subgraph PyReflect["pyreflect Package"]
         Gen[ReflectivityDataGenerator]
         CNN[CNN Model]
@@ -81,10 +105,23 @@ flowchart TB
         end
     end
 
+    UI -->|POST /api/jobs/submit| API
+    UI -->|GET /api/jobs/{job_id}| API
+    UI -->|GET /api/queue| API
     UI -->|POST /api/generate/stream| SSE
     UI -->|POST /api/upload| API
     UI -->|GET /api/status| API
+    UI -->|GET /api/history| API
     SSE -->|log, progress, result| UI
+
+    API -->|enqueue/poll| RQ
+    API -->|trigger| Poller
+    Poller -->|spawn| Worker
+    Worker -->|consume| RQ
+    Worker --> Mongo
+    Worker --> HF
+    API --> Mongo
+    API --> HF
 
     API --> DataStore
     API --> Gen
@@ -297,7 +334,8 @@ sequenceDiagram
 
 - [Bun](https://bun.sh) (frontend)
 - [uv](https://docs.astral.sh/uv/) (backend)
-- [Redis](https://redis.io/) (required for background job queue)
+- [Redis](https://redis.io/) (required for the job queue + `/api/jobs/*`)
+- Optional (production stack): MongoDB, Hugging Face, Modal
 
 ### 1. Backend Setup
 
@@ -325,7 +363,7 @@ bun dev
 
 Frontend runs at **http://localhost:3000**
 
-### 3. GPU Worker (Optional - Modal)
+### 3. GPU Worker (Modal, used in production)
 
 For GPU-accelerated training (serverless, pay-per-use), deploy the Modal worker.
 
@@ -336,6 +374,10 @@ Important:
 - `REDIS_URL` must include a scheme like `redis://` (e.g. `redis://:PASSWORD@HOST:6379`).
 - For instant spawn (no waiting for a periodic schedule), the backend process must have the `modal` package installed and be authenticated to Modal.
   If that fails, you can configure an HTTP fallback (`MODAL_POLL_URL`).
+
+Redis URL examples:
+- Password-only Redis: `redis://:<PASSWORD>@HOST:6379/0`
+- ACL Redis (common user is `default`): `redis://default:<PASSWORD>@HOST:6379/0`
 
 ```bash
 cd src/backend
@@ -440,6 +482,9 @@ uv run modal run modal_worker.py::poll_queue
 
 ### Troubleshooting
 
+If you see a Modal DNS error with `%0a` or spaces in the hostname, your `MODAL_POLL_URL` value contains whitespace/newlines.
+Set `MODAL_POLL_URL` as a single line URL (no line wrapping) and restart the backend.
+
 ```bash
 # Kill process on port 8000
 lsof -ti:8000 | xargs kill -9
@@ -481,13 +526,11 @@ MODAL_TRIGGER_TOKEN=change-me  # must match Modal secret MODAL_TRIGGER_TOKEN (se
 # Disable local worker if using Modal/remote GPU workers
 START_LOCAL_RQ_WORKER=false
 
-# Optional: enable history + model downloads
-#MONGODB_URI=mongodb+srv://...
-#HF_TOKEN=hf_...
-#HF_REPO_ID=your-username/pyreflect-models
-
-# Optional: store models on Hugging Face instead of locally
-#MODEL_STORAGE=hf
+# History + model storage (used in the hosted deployment)
+MONGODB_URI=mongodb+srv://...
+HF_TOKEN=hf_...
+HF_REPO_ID=your-username/pyreflect-models
+MODEL_STORAGE=hf
 
 # Optional: override individual limits
 MAX_CURVES=5000
@@ -591,7 +634,7 @@ CORS_ORIGINS=http://localhost:3000,https://your-app.vercel.app
    - Export individual graphs as CSV or all data as JSON
    - Charts show model predictions compared to ground truth after training
 
-### 4. Uploading Data Files (Optional)
+### 4. Uploading Data Files
 
 For pretrained models or existing datasets, use the **Data & Models** section:
 
