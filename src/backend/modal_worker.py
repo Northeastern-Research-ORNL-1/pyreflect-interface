@@ -192,14 +192,41 @@ def run_rq_worker_burst(lock_value: str):
 @app.function(
     image=poller_image,
     cpu=1.0,
-    schedule=modal.Cron("*/5 * * * *"),  # Fallback poll (backend triggers instant spawn)
     secrets=[modal.Secret.from_name("pyreflect-redis")],
 )
 def poll_queue():
     """
-    Cron job that checks the queue and spawns workers for pending jobs.
-    This ensures jobs are processed even when no worker is running.
+    On-demand poller that checks the queue and spawns GPU burst workers for pending jobs.
+
+    This is designed to be triggered immediately after enqueue (backend -> Modal),
+    without relying on a periodic cron schedule.
     """
+    return _poll_queue_impl()
+
+
+@app.function(
+    image=poller_image,
+    cpu=1.0,
+    secrets=[modal.Secret.from_name("pyreflect-redis")],
+)
+@modal.web_endpoint(method="POST")
+def poll_queue_http(token: str | None = None):
+    """
+    HTTP trigger for the poller (optional).
+
+    If `MODAL_TRIGGER_TOKEN` is set in the Modal secret, the caller must provide
+    `?token=...` to authorize. This endpoint is useful when the backend cannot
+    authenticate to Modal to call functions directly.
+    """
+    import os
+
+    expected = os.environ.get("MODAL_TRIGGER_TOKEN")
+    if expected and token != expected:
+        return {"ok": False, "error": "unauthorized"}
+    return _poll_queue_impl()
+
+
+def _poll_queue_impl() -> dict:
     import os
     import time
     import uuid
@@ -212,8 +239,7 @@ def poll_queue():
 
     redis_url = os.environ.get("REDIS_URL")
     if not redis_url:
-        print("REDIS_URL not set; poll_queue is idle.")
-        return
+        return {"ok": False, "error": "REDIS_URL not set"}
     redis_url = _normalize_redis_url(redis_url)
     parsed = urlparse(redis_url)
     redis_scheme = parsed.scheme or "redis"
@@ -226,8 +252,7 @@ def poll_queue():
     except Exception:
         redis_db = 0
     if redis_host in {"localhost", "127.0.0.1", "::1"}:
-        print("WARNING: REDIS_URL points to localhost; Modal cannot reach your local Redis.")
-        return
+        return {"ok": False, "error": "REDIS_URL points to localhost"}
 
     redis_conn = Redis.from_url(redis_url)
     queue = Queue("training", connection=redis_conn)
@@ -241,36 +266,40 @@ def poll_queue():
         f"Redis: {redis_scheme}://{redis_host}:{redis_port} db={redis_db} "
         f"queued={queued} started={started} workers={len(workers)} gpu_workers={len(gpu_workers)}"
     )
+
     if queued > 0 and len(gpu_workers) == 0:
-        # Use a Redis lock to avoid spawning overlapping burst workers.
         lock_key = "pyreflect:modal_worker_lock"
         lock_value = f"{uuid.uuid4()}:{int(time.time())}"
         acquired = redis_conn.set(lock_key, lock_value, nx=True, ex=15 * 60)
         if acquired:
             print(f"📋 {queued} jobs queued, spawning GPU worker...")
             run_rq_worker_burst.spawn(lock_value)
-        else:
-            try:
-                ttl = redis_conn.ttl(lock_key)
-                existing = redis_conn.get(lock_key)
-                existing_str = existing.decode("utf-8") if existing is not None else "?"
-                print(f"⏳ Spawn lock held (ttl={ttl}s, value={existing_str}); will retry next tick.")
+            return {"ok": True, "spawned": True, "queued": queued, "started": started}
 
-                # Self-heal: if an older deployment left a very long TTL lock behind,
-                # clear it when no workers are running so we can spawn again.
-                if started == 0 and len(workers) == 0 and isinstance(ttl, int) and ttl > 20 * 60:
-                    print(f"🧹 Clearing stale spawn lock (ttl={ttl}s) and retrying spawn...")
-                    try:
-                        redis_conn.delete(lock_key)
-                    except Exception:
-                        pass
-                    retry_value = f"{uuid.uuid4()}:{int(time.time())}"
-                    retry_acquired = redis_conn.set(lock_key, retry_value, nx=True, ex=15 * 60)
-                    if retry_acquired:
-                        print(f"📋 {queued} jobs queued, spawning GPU worker...")
-                        run_rq_worker_burst.spawn(retry_value)
-            except Exception:
-                print("⏳ Spawn lock held; will retry next tick.")
+        try:
+            ttl = redis_conn.ttl(lock_key)
+            existing = redis_conn.get(lock_key)
+            existing_str = existing.decode("utf-8") if existing is not None else "?"
+            print(f"⏳ Spawn lock held (ttl={ttl}s, value={existing_str}); will retry next tick.")
+
+            if started == 0 and len(workers) == 0 and isinstance(ttl, int) and ttl > 20 * 60:
+                print(f"🧹 Clearing stale spawn lock (ttl={ttl}s) and retrying spawn...")
+                try:
+                    redis_conn.delete(lock_key)
+                except Exception:
+                    pass
+                retry_value = f"{uuid.uuid4()}:{int(time.time())}"
+                retry_acquired = redis_conn.set(lock_key, retry_value, nx=True, ex=15 * 60)
+                if retry_acquired:
+                    print(f"📋 {queued} jobs queued, spawning GPU worker...")
+                    run_rq_worker_burst.spawn(retry_value)
+                    return {"ok": True, "spawned": True, "queued": queued, "started": started, "stale_lock_cleared": True}
+        except Exception:
+            pass
+
+        return {"ok": True, "spawned": False, "queued": queued, "started": started, "reason": "lock_held"}
+
+    return {"ok": True, "spawned": False, "queued": queued, "started": started}
 
 
 # For local testing

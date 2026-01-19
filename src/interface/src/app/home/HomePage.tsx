@@ -426,6 +426,13 @@ export default function HomePage() {
           if (queueRes.ok) {
             const queueData = await queueRes.json();
             addLog(`Job queued: ${queueData.job_id.slice(0, 8)}... (position: ${queueData.queue_position})`);
+            if (queueData.remote_worker) {
+              if (queueData.remote_worker.triggered) {
+                addLog('Remote GPU worker triggered (instant spawn)');
+              } else if (queueData.remote_worker.reason) {
+                addLog(`Remote GPU spawn skipped: ${queueData.remote_worker.reason}`);
+              }
+            }
             addLog('Job will run in background. Check history when complete.');
           } else {
             // Queue not available / misconfigured - show server error detail if present.

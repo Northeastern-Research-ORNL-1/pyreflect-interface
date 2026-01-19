@@ -118,5 +118,11 @@ START_LOCAL_RQ_WORKER = _get_bool_env("START_LOCAL_RQ_WORKER", default=not IS_PR
 # latency). If this fails, the Modal cron poller can still pick jobs up later.
 MODAL_INSTANT_SPAWN = _get_bool_env("MODAL_INSTANT_SPAWN", default=True)
 MODAL_APP_NAME = os.getenv("MODAL_APP_NAME", "pyreflect-worker")
-MODAL_FUNCTION_NAME = os.getenv("MODAL_FUNCTION_NAME", "run_rq_worker_burst")
+MODAL_FUNCTION_NAME = os.getenv("MODAL_FUNCTION_NAME", "poll_queue")
 MODAL_SPAWN_LOCK_TTL_S = int(os.getenv("MODAL_SPAWN_LOCK_TTL_S", "900"))
+
+# Optional: if you don't want the backend to depend on Modal auth, deploy the worker
+# and set this to the `poll_queue` web endpoint URL (Modal provides it on deploy).
+MODAL_POLL_URL = os.getenv("MODAL_POLL_URL")
+# Optional shared secret to protect the poll endpoint (send as X-Trigger-Token).
+MODAL_TRIGGER_TOKEN = os.getenv("MODAL_TRIGGER_TOKEN")
