@@ -65,7 +65,7 @@ flowchart TB
 
     subgraph Backend["FastAPI Backend"]
         API[REST API]
-        SSE[SSE Stream (fallback)]
+        SSE["SSE Stream (fallback)"]
 
         subgraph Pipeline["ML Pipeline"]
             Train[Training Loop]
@@ -368,6 +368,7 @@ Frontend runs at **http://localhost:3000**
 For GPU-accelerated training (serverless, pay-per-use), deploy the Modal worker.
 
 Important:
+
 - Your backend must enqueue to a Redis instance reachable from Modal (`REDIS_URL`).
 - Disable the backend's local worker so jobs aren't consumed on CPU (`START_LOCAL_RQ_WORKER=false`).
 - `REDIS_URL=redis://localhost:6379` will NOT work with Modal (localhost is inside the Modal container).
@@ -376,6 +377,7 @@ Important:
   If that fails, you can configure an HTTP fallback (`MODAL_POLL_URL`).
 
 Redis URL examples:
+
 - Password-only Redis: `redis://:<PASSWORD>@HOST:6379/0`
 - ACL Redis (common user is `default`): `redis://default:<PASSWORD>@HOST:6379/0`
 
@@ -467,6 +469,7 @@ If you see `reason: modal_spawn_failed`, the backend is not authenticated to Mod
 `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET` in the backend environment).
 
 If you see `reason: modal_spawn_failed` and want an auth-free backend, set these backend env vars:
+
 - `MODAL_POLL_URL`: the deployed `poll_queue_http` endpoint URL (from Modal deploy output)
 - `MODAL_TRIGGER_TOKEN`: must match the `MODAL_TRIGGER_TOKEN` stored in the Modal secret (sent as `?token=...`)
 
@@ -553,8 +556,8 @@ uv run uvicorn main:app --port 8000
 
 If you want the backend + Redis on your own machine (and Modal only for GPU), the minimum flow is:
 
-1) On the bare-metal host, run Redis and make it reachable from Modal (see “Bare-metal Redis” above).
-2) Point the backend to that same `REDIS_URL` and disable the local worker:
+1. On the bare-metal host, run Redis and make it reachable from Modal (see “Bare-metal Redis” above).
+2. Point the backend to that same `REDIS_URL` and disable the local worker:
 
 ```bash
 cd src/backend
@@ -566,7 +569,7 @@ uv sync
 uv run uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-3) Run the frontend either on the same host or locally, pointing it at your backend:
+3. Run the frontend either on the same host or locally, pointing it at your backend:
 
 ```bash
 cd src/interface
