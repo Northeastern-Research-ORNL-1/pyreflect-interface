@@ -19,7 +19,9 @@ from ..config import (
     MODAL_APP_NAME,
     MODAL_FUNCTION_NAME,
     MODAL_INSTANT_SPAWN,
+    MODAL_POLL_URL,
     MODAL_SPAWN_LOCK_TTL_S,
+    MODAL_TRIGGER_TOKEN,
     START_LOCAL_RQ_WORKER,
 )
 from ..integrations.redis_queue import get_job_status, get_queue_info, normalize_redis_url
@@ -31,16 +33,16 @@ class RenameJobRequest(BaseModel):
     name: str | None = None
 
 
-def _maybe_trigger_modal_gpu_worker(rq) -> bool:
+def _maybe_trigger_modal_gpu_worker(rq) -> dict[str, object]:
     """
     Best-effort: spawn a Modal GPU worker right after a job is enqueued.
 
     This removes the minute-level latency from the Modal cron poller.
     """
     if START_LOCAL_RQ_WORKER or not MODAL_INSTANT_SPAWN:
-        return False
+        return {"triggered": False, "reason": "disabled"}
     if not rq or not getattr(rq, "available", False) or not getattr(rq, "redis", None):
-        return False
+        return {"triggered": False, "reason": "rq_unavailable"}
 
     redis_conn = rq.redis
     lock_key = "pyreflect:modal_worker_lock"
@@ -51,7 +53,7 @@ def _maybe_trigger_modal_gpu_worker(rq) -> bool:
 
         workers = Worker.all(connection=redis_conn)
         if any((getattr(w, "name", "") or "").lower().startswith("gpu-") for w in workers):
-            return False
+            return {"triggered": False, "reason": "gpu_worker_exists"}
     except Exception:
         pass
 
@@ -59,18 +61,18 @@ def _maybe_trigger_modal_gpu_worker(rq) -> bool:
     try:
         acquired = redis_conn.set(lock_key, lock_value, nx=True, ex=max(int(MODAL_SPAWN_LOCK_TTL_S), 60))
     except Exception:
-        return False
+        return {"triggered": False, "reason": "redis_lock_error"}
     if not acquired:
-        return False
+        return {"triggered": False, "reason": "spawn_lock_held"}
 
     try:
         import modal
 
         fn = modal.Function.lookup(MODAL_APP_NAME, MODAL_FUNCTION_NAME)
-        fn.spawn(lock_value)
-        return True
+        fn.spawn()
+        return {"triggered": True}
     except Exception as exc:
-        print(f"Warning: Failed to trigger Modal worker spawn: {exc}")
+        print(f"Warning: Failed to trigger Modal worker spawn via Modal client: {exc}")
         # Release lock if we still own it so the cron poller can recover quickly.
         try:
             current = redis_conn.get(lock_key)
@@ -78,7 +80,33 @@ def _maybe_trigger_modal_gpu_worker(rq) -> bool:
                 redis_conn.delete(lock_key)
         except Exception:
             pass
-        return False
+
+        # Fallback: call a deployed `poll_queue` web endpoint, if configured.
+        if MODAL_POLL_URL:
+            try:
+                import requests
+
+                headers = {}
+                url = MODAL_POLL_URL
+                if MODAL_TRIGGER_TOKEN:
+                    sep = "&" if "?" in url else "?"
+                    url = f"{url}{sep}token={MODAL_TRIGGER_TOKEN}"
+                resp = requests.post(url, headers=headers, timeout=15)
+                if resp.ok:
+                    return {"triggered": True, "via": "http"}
+                return {
+                    "triggered": False,
+                    "reason": "modal_http_failed",
+                    "error": f"status={resp.status_code} body={resp.text[:200]}",
+                }
+            except Exception as http_exc:
+                return {
+                    "triggered": False,
+                    "reason": "modal_http_failed",
+                    "error": str(http_exc)[:400],
+                }
+
+        return {"triggered": False, "reason": "modal_spawn_failed", "error": str(exc)[:400]}
 
 
 @router.post("/jobs/submit")
@@ -161,7 +189,7 @@ async def submit_job(
             "status": "queued",
             "message": "Job submitted successfully. Poll /api/jobs/{job_id} for status.",
             "queue_position": len(rq.queue),
-            "remote_worker_triggered": _maybe_trigger_modal_gpu_worker(rq),
+            "remote_worker": _maybe_trigger_modal_gpu_worker(rq),
         }
 
     except Exception as exc:
@@ -411,7 +439,7 @@ async def retry_job(job_id: str, http_request: Request):
             "status": "queued",
             "message": f"Job retried from {job_id}. Poll /api/jobs/{new_job.id} for status.",
             "queue_position": len(rq.queue),
-            "remote_worker_triggered": _maybe_trigger_modal_gpu_worker(rq),
+            "remote_worker": _maybe_trigger_modal_gpu_worker(rq),
         }
     except HTTPException:
         raise
@@ -721,3 +749,17 @@ async def queue_status(
             info["workers"] = []
 
     return info
+
+
+@router.post("/queue/spawn")
+async def spawn_remote_worker(http_request: Request):
+    """
+    Debug endpoint: attempt to trigger a remote Modal worker spawn immediately.
+
+    Useful to diagnose why instant spawn isn't happening (e.g. Modal not installed
+    on backend, missing Modal auth, Redis lock held).
+    """
+    rq = getattr(http_request.app.state, "rq", None)
+    if not rq or not rq.available:
+        raise HTTPException(status_code=503, detail="Job queue not available.")
+    return {"remote_worker": _maybe_trigger_modal_gpu_worker(rq)}
