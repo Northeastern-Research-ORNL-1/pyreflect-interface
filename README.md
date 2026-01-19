@@ -610,14 +610,35 @@ Files from `pyreflect/datasets/` can be uploaded:
 
 ## API Endpoints
 
-| Endpoint               | Method | Description                             |
-| ---------------------- | ------ | --------------------------------------- |
-| `/api/health`          | GET    | Health check                            |
-| `/api/generate`        | POST   | Generate NR/SLD curves                  |
-| `/api/generate/stream` | POST   | Generate with real-time SSE log stream  |
-| `/api/defaults`        | GET    | Get default parameters                  |
-| `/api/status`          | GET    | Backend status and available data files |
-| `/api/upload`          | POST   | Upload dataset/model files              |
+| Endpoint                      | Method | Description                             |
+| ----------------------------- | ------ | --------------------------------------- |
+| `/api/health`                 | GET    | Health check                            |
+| `/api/limits`                 | GET    | Current limits and production flag      |
+| `/api/defaults`               | GET    | Default parameters                      |
+| `/api/generate`               | POST   | Generate NR/SLD curves (non-streaming)  |
+| `/api/generate/stream`        | POST   | Generate with SSE log stream            |
+| `/api/status`                 | GET    | Backend status and data files           |
+| `/api/upload`                 | POST   | Upload files (+ optional roles)         |
+| `/api/history`                | GET    | List saved generations                  |
+| `/api/history`                | POST   | Save a generation manually              |
+| `/api/history/{id}`           | GET    | Get full details of a save              |
+| `/api/history/{id}`           | PATCH  | Rename a saved generation               |
+| `/api/history/{id}`           | DELETE | Delete a saved generation and its model |
+| `/api/models/upload`          | POST   | Receive model upload from remote worker |
+| `/api/models/{model_id}`      | GET    | Download a saved model                  |
+| `/api/models/{model_id}`      | DELETE | Delete a local model file               |
+| `/api/models/{model_id}/info` | GET    | Get model size and source               |
+| `/api/jobs/submit`            | POST   | Submit job to queue (non-blocking)      |
+| `/api/jobs/{job_id}`          | GET    | Get job status, progress, and result    |
+| `/api/jobs/{job_id}`          | DELETE | Cancel a queued job                     |
+| `/api/jobs/{job_id}/name`     | PATCH  | Rename a queued job                     |
+| `/api/jobs/{job_id}/retry`    | POST   | Retry a failed/finished job             |
+| `/api/jobs/{job_id}/stop`     | POST   | Request a running job stop              |
+| `/api/jobs/{job_id}/delete`   | DELETE | Delete a job record (non-running only)  |
+| `/api/jobs/{job_id}/claim`    | POST   | Attach a job to a user (login mid-run)  |
+| `/api/jobs/purge`             | DELETE | Delete non-running jobs for a user      |
+| `/api/queue`                  | GET    | Queue status and worker info            |
+| `/api/queue/spawn`            | POST   | Trigger remote worker spawn (debug)     |
 
 ## Technology Stack
 

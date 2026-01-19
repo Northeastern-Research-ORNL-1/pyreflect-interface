@@ -24,13 +24,38 @@ from ..config import (
     MODAL_TRIGGER_TOKEN,
     START_LOCAL_RQ_WORKER,
 )
-from ..integrations.redis_queue import get_job_status, get_queue_info, normalize_redis_url
+from ..integrations.redis_queue import (
+    create_rq_integration,
+    get_job_status,
+    get_queue_info,
+    normalize_redis_url,
+)
 from ..schemas import GenerateRequest, validate_limits
 
 router = APIRouter()
 
 class RenameJobRequest(BaseModel):
     name: str | None = None
+
+
+def _get_rq_or_reconnect(http_request: Request):
+    rq = getattr(http_request.app.state, "rq", None)
+    if rq and getattr(rq, "available", False):
+        return rq
+
+    # Redis might come up after the API starts; retry occasionally so a restart isn't required.
+    now = time.monotonic()
+    last = float(getattr(http_request.app.state, "rq_reconnect_last", 0.0) or 0.0)
+    if (now - last) < 5.0:
+        return rq
+    http_request.app.state.rq_reconnect_last = now
+
+    try:
+        new_rq = create_rq_integration()
+        http_request.app.state.rq = new_rq
+        return new_rq
+    except Exception:
+        return rq
 
 
 def _maybe_trigger_modal_gpu_worker(rq) -> dict[str, object]:
@@ -121,12 +146,17 @@ async def submit_job(
     Returns immediately with a job_id that can be used to poll for status.
     If the queue is not available, falls back to synchronous execution.
     """
-    rq = getattr(http_request.app.state, "rq", None)
+    rq = _get_rq_or_reconnect(http_request)
 
     if not rq or not rq.available:
+        reason = getattr(rq, "error", None) if rq else None
         raise HTTPException(
             status_code=503,
-            detail="Job queue not available. Use /api/generate/stream for synchronous execution.",
+            detail=(
+                "Job queue not available."
+                + (f" ({reason})" if reason else "")
+                + " Check REDIS_URL / Redis connectivity, or use /api/generate/stream for synchronous execution."
+            ),
         )
 
     # Guardrail: if local workers are disabled, don't accept jobs that can never
@@ -206,7 +236,7 @@ async def get_job(job_id: str, http_request: Request):
 
     Returns job status, progress, logs, and result (if completed).
     """
-    rq = getattr(http_request.app.state, "rq", None)
+    rq = _get_rq_or_reconnect(http_request)
 
     if not rq or not rq.available:
         raise HTTPException(status_code=503, detail="Job queue not available.")
@@ -251,7 +281,7 @@ async def rename_job(
 
     Also claims the job for the user if it isn't claimed yet.
     """
-    rq = getattr(http_request.app.state, "rq", None)
+    rq = _get_rq_or_reconnect(http_request)
 
     if not rq or not rq.available or not rq.redis:
         raise HTTPException(status_code=503, detail="Job queue not available.")
@@ -294,7 +324,7 @@ async def claim_job(job_id: str, http_request: Request, x_user_id: str | None = 
 
     This sets job.meta.user_id so the worker can save results to history when complete.
     """
-    rq = getattr(http_request.app.state, "rq", None)
+    rq = _get_rq_or_reconnect(http_request)
 
     if not rq or not rq.available or not rq.redis:
         raise HTTPException(status_code=503, detail="Job queue not available.")
@@ -377,7 +407,7 @@ async def retry_job(job_id: str, http_request: Request):
 
     Requires the original job to have stored job_params in Redis meta.
     """
-    rq = getattr(http_request.app.state, "rq", None)
+    rq = _get_rq_or_reconnect(http_request)
 
     if not rq or not rq.available or not rq.redis or not rq.queue:
         raise HTTPException(status_code=503, detail="Job queue not available.")
@@ -457,7 +487,7 @@ async def stop_job(job_id: str, http_request: Request):
 
     Sets a flag in job meta that the worker checks between epochs.
     """
-    rq = getattr(http_request.app.state, "rq", None)
+    rq = _get_rq_or_reconnect(http_request)
 
     if not rq or not rq.available or not rq.redis:
         raise HTTPException(status_code=503, detail="Job queue not available.")
@@ -492,7 +522,7 @@ async def cancel_job(job_id: str, http_request: Request):
 
     Only works for jobs that haven't started yet.
     """
-    rq = getattr(http_request.app.state, "rq", None)
+    rq = _get_rq_or_reconnect(http_request)
 
     if not rq or not rq.available:
         raise HTTPException(status_code=503, detail="Job queue not available.")
@@ -525,7 +555,7 @@ async def delete_job(job_id: str, http_request: Request):
 
     Refuses to delete running jobs.
     """
-    rq = getattr(http_request.app.state, "rq", None)
+    rq = _get_rq_or_reconnect(http_request)
 
     if not rq or not rq.available or not rq.redis or not rq.queue:
         raise HTTPException(status_code=503, detail="Job queue not available.")
@@ -587,7 +617,7 @@ async def purge_user_jobs(
     - Default: deletes finished/failed/etc jobs, but keeps queued jobs.
     - Set include_queued=true to also delete queued jobs.
     """
-    rq = getattr(http_request.app.state, "rq", None)
+    rq = _get_rq_or_reconnect(http_request)
 
     if not rq or not rq.available or not rq.redis or not rq.queue:
         raise HTTPException(status_code=503, detail="Job queue not available.")
@@ -680,12 +710,18 @@ async def queue_status(
     Jobs are filtered by user - only returns jobs belonging to the authenticated user,
     or jobs with no user_id set (unclaimed jobs that can be claimed on login).
     """
-    rq = getattr(http_request.app.state, "rq", None)
+    rq = _get_rq_or_reconnect(http_request)
 
     if not rq:
         return {"available": False, "message": "Queue integration not configured"}
 
     info = get_queue_info(rq)
+    if not info.get("available"):
+        # Bubble up the last-known queue init error (safe: does not include REDIS_URL creds).
+        reason = getattr(rq, "error", None)
+        if reason and not info.get("error"):
+            info["error"] = reason
+
     try:
         redis_url = normalize_redis_url(os.getenv("REDIS_URL", "redis://localhost:6379"))
         parsed = urlparse(redis_url)
@@ -792,7 +828,7 @@ async def spawn_remote_worker(http_request: Request):
     Useful to diagnose why instant spawn isn't happening (e.g. Modal not installed
     on backend, missing Modal auth, Redis lock held).
     """
-    rq = getattr(http_request.app.state, "rq", None)
+    rq = _get_rq_or_reconnect(http_request)
     if not rq or not rq.available:
         raise HTTPException(status_code=503, detail="Job queue not available.")
     return {"remote_worker": _maybe_trigger_modal_gpu_worker(rq)}
