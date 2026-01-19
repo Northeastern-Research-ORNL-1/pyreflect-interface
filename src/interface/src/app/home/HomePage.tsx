@@ -431,6 +431,9 @@ export default function HomePage() {
                 addLog('Remote GPU worker triggered (instant spawn)');
               } else if (queueData.remote_worker.reason) {
                 addLog(`Remote GPU spawn skipped: ${queueData.remote_worker.reason}`);
+                if (queueData.remote_worker.error) {
+                  addLog(`Remote GPU spawn error: ${queueData.remote_worker.error}`);
+                }
               }
             }
             addLog('Job will run in background. Check history when complete.');
