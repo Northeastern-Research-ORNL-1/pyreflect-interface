@@ -4,7 +4,7 @@ PyReflect Modal GPU Worker
 This app runs an RQ worker on a Modal GPU to process queued training jobs.
 
 Design:
-- A lightweight cron polls Redis for pending jobs.
+- A lightweight poller checks Redis for pending jobs.
 - When jobs are present, it spawns a GPU container that runs an `rq` worker in
   burst mode (process jobs, then exit).
 - This keeps costs low: no GPU container runs while the queue is empty.
@@ -200,7 +200,7 @@ def poll_queue():
     On-demand poller that checks the queue and spawns GPU burst workers for pending jobs.
 
     This is designed to be triggered immediately after enqueue (backend -> Modal),
-    without relying on a periodic cron schedule.
+    without relying on a periodic schedule.
     """
     return _poll_queue_impl()
 
@@ -220,10 +220,11 @@ def poll_queue_http(token: str | None = None):
     authenticate to Modal to call functions directly.
     """
     import os
+    from fastapi import HTTPException
 
     expected = os.environ.get("MODAL_TRIGGER_TOKEN")
     if expected and token != expected:
-        return {"ok": False, "error": "unauthorized"}
+        raise HTTPException(status_code=401, detail="unauthorized")
     return _poll_queue_impl()
 
 
@@ -271,7 +272,9 @@ def _poll_queue_impl() -> dict:
     if queued > 0 and len(gpu_workers) == 0:
         lock_key = "pyreflect:modal_worker_lock"
         lock_value = f"{uuid.uuid4()}:{int(time.time())}"
-        acquired = redis_conn.set(lock_key, lock_value, nx=True, ex=15 * 60)
+        lock_ttl_s = int(os.environ.get("MODAL_SPAWN_LOCK_TTL_S", "900"))
+        lock_ttl_s = max(lock_ttl_s, 60)
+        acquired = redis_conn.set(lock_key, lock_value, nx=True, ex=lock_ttl_s)
         if acquired:
             print(f"📋 {queued} jobs queued, spawning GPU worker...")
             run_rq_worker_burst.spawn(lock_value)
@@ -283,18 +286,38 @@ def _poll_queue_impl() -> dict:
             existing_str = existing.decode("utf-8") if existing is not None else "?"
             print(f"⏳ Spawn lock held (ttl={ttl}s, value={existing_str}); will retry next tick.")
 
-            if started == 0 and len(workers) == 0 and isinstance(ttl, int) and ttl > 20 * 60:
-                print(f"🧹 Clearing stale spawn lock (ttl={ttl}s) and retrying spawn...")
+            if started == 0 and len(workers) == 0:
+                existing_ts: int | None = None
                 try:
-                    redis_conn.delete(lock_key)
+                    existing_ts = int(existing_str.split(":")[-1])
                 except Exception:
-                    pass
-                retry_value = f"{uuid.uuid4()}:{int(time.time())}"
-                retry_acquired = redis_conn.set(lock_key, retry_value, nx=True, ex=15 * 60)
-                if retry_acquired:
-                    print(f"📋 {queued} jobs queued, spawning GPU worker...")
-                    run_rq_worker_burst.spawn(retry_value)
-                    return {"ok": True, "spawned": True, "queued": queued, "started": started, "stale_lock_cleared": True}
+                    existing_ts = None
+
+                stale_after_s = max(lock_ttl_s, 120)
+                is_stale = False
+                if existing_ts is not None:
+                    is_stale = (time.time() - existing_ts) > stale_after_s
+                elif isinstance(ttl, int) and ttl > stale_after_s:
+                    is_stale = True
+
+                if is_stale:
+                    print(f"🧹 Clearing stale spawn lock (ttl={ttl}s) and retrying spawn...")
+                    try:
+                        redis_conn.delete(lock_key)
+                    except Exception:
+                        pass
+                    retry_value = f"{uuid.uuid4()}:{int(time.time())}"
+                    retry_acquired = redis_conn.set(lock_key, retry_value, nx=True, ex=lock_ttl_s)
+                    if retry_acquired:
+                        print(f"📋 {queued} jobs queued, spawning GPU worker...")
+                        run_rq_worker_burst.spawn(retry_value)
+                        return {
+                            "ok": True,
+                            "spawned": True,
+                            "queued": queued,
+                            "started": started,
+                            "stale_lock_cleared": True,
+                        }
         except Exception:
             pass
 

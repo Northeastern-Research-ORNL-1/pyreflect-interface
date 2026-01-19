@@ -69,12 +69,13 @@ HF_REPO_ID = os.getenv("HF_REPO_ID")
 # =====================
 
 CORS_ORIGINS = os.getenv(
-    "CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
+    "CORS_ORIGINS",
+    "http://localhost:3000,http://127.0.0.1:3000,https://pyreflect.shlawg.com",
 ).split(",")
 CORS_ORIGINS = [o.strip() for o in CORS_ORIGINS if o and o.strip()]
 
 # Optional: regex-based CORS allowlist (useful for subdomains like https://*.shlawg.com).
-# If set, FastAPI will use `allow_origin_regex` instead of `allow_origins`.
+# If set, FastAPI will allow origins matching the regex in addition to `CORS_ORIGINS`.
 CORS_ALLOW_ORIGIN_REGEX = (os.getenv("CORS_ALLOW_ORIGIN_REGEX") or "").strip() or None
 
 # =====================
@@ -124,8 +125,7 @@ START_LOCAL_RQ_WORKER = _get_bool_env("START_LOCAL_RQ_WORKER", default=not IS_PR
 # =====================
 
 # When using remote workers (START_LOCAL_RQ_WORKER=false), the backend can trigger
-# a Modal GPU worker immediately after enqueuing a job (removes the 1-minute cron
-# latency). If this fails, the Modal cron poller can still pick jobs up later.
+# a Modal worker immediately after enqueuing a job (on-demand, no schedule required).
 MODAL_INSTANT_SPAWN = _get_bool_env("MODAL_INSTANT_SPAWN", default=True)
 MODAL_APP_NAME = os.getenv("MODAL_APP_NAME", "pyreflect-worker")
 MODAL_FUNCTION_NAME = os.getenv("MODAL_FUNCTION_NAME", "poll_queue")
@@ -134,5 +134,5 @@ MODAL_SPAWN_LOCK_TTL_S = int(os.getenv("MODAL_SPAWN_LOCK_TTL_S", "900"))
 # Optional: if you don't want the backend to depend on Modal auth, deploy the worker
 # and set this to the `poll_queue` web endpoint URL (Modal provides it on deploy).
 MODAL_POLL_URL = os.getenv("MODAL_POLL_URL")
-# Optional shared secret to protect the poll endpoint (send as X-Trigger-Token).
+# Optional shared secret to protect the poll endpoint (send as `?token=...`).
 MODAL_TRIGGER_TOKEN = os.getenv("MODAL_TRIGGER_TOKEN")

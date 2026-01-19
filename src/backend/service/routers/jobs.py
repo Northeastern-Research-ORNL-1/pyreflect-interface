@@ -37,7 +37,7 @@ def _maybe_trigger_modal_gpu_worker(rq) -> dict[str, object]:
     """
     Best-effort: spawn a Modal GPU worker right after a job is enqueued.
 
-    This removes the minute-level latency from the Modal cron poller.
+    This is on-demand (no schedule required).
     """
     if START_LOCAL_RQ_WORKER or not MODAL_INSTANT_SPAWN:
         return {"triggered": False, "reason": "disabled"}
@@ -52,6 +52,27 @@ def _maybe_trigger_modal_gpu_worker(rq) -> dict[str, object]:
     lock_key = "pyreflect:modal_worker_lock"
     lock_value = f"{uuid.uuid4()}:{int(time.time())}" if not calls_poller else None
 
+    # Prefer HTTP trigger when configured: doesn't require Modal auth on the backend.
+    if MODAL_POLL_URL:
+        try:
+            import requests
+
+            params = {"token": MODAL_TRIGGER_TOKEN} if MODAL_TRIGGER_TOKEN else None
+            resp = requests.post(MODAL_POLL_URL, params=params, timeout=10)
+            if resp.ok:
+                return {"triggered": True, "via": "http", "target": "poll_queue_http"}
+            return {
+                "triggered": False,
+                "reason": "modal_http_failed",
+                "error": f"status={resp.status_code} body={resp.text[:200]}",
+            }
+        except Exception as http_exc:
+            return {
+                "triggered": False,
+                "reason": "modal_http_failed",
+                "error": str(http_exc)[:400],
+            }
+
     try:
         import modal
 
@@ -64,7 +85,9 @@ def _maybe_trigger_modal_gpu_worker(rq) -> dict[str, object]:
         if lock_value is None:
             return {"triggered": False, "reason": "invalid_config"}
         try:
-            acquired = redis_conn.set(lock_key, lock_value, nx=True, ex=max(int(MODAL_SPAWN_LOCK_TTL_S), 60))
+            acquired = redis_conn.set(
+                lock_key, lock_value, nx=True, ex=max(int(MODAL_SPAWN_LOCK_TTL_S), 60)
+            )
         except Exception:
             return {"triggered": False, "reason": "redis_lock_error"}
         if not acquired:
@@ -82,31 +105,6 @@ def _maybe_trigger_modal_gpu_worker(rq) -> dict[str, object]:
                     redis_conn.delete(lock_key)
             except Exception:
                 pass
-
-        # Fallback: call a deployed `poll_queue` web endpoint, if configured.
-        if MODAL_POLL_URL:
-            try:
-                import requests
-
-                headers = {}
-                url = MODAL_POLL_URL
-                if MODAL_TRIGGER_TOKEN:
-                    sep = "&" if "?" in url else "?"
-                    url = f"{url}{sep}token={MODAL_TRIGGER_TOKEN}"
-                resp = requests.post(url, headers=headers, timeout=15)
-                if resp.ok:
-                    return {"triggered": True, "via": "http", "target": "poll_queue_http"}
-                return {
-                    "triggered": False,
-                    "reason": "modal_http_failed",
-                    "error": f"status={resp.status_code} body={resp.text[:200]}",
-                }
-            except Exception as http_exc:
-                return {
-                    "triggered": False,
-                    "reason": "modal_http_failed",
-                    "error": str(http_exc)[:400],
-                }
 
         return {"triggered": False, "reason": "modal_spawn_failed", "error": str(exc)[:400]}
 
@@ -186,12 +184,15 @@ async def submit_job(
         except Exception:
             pass
 
+        import asyncio
+
+        remote_worker = await asyncio.to_thread(_maybe_trigger_modal_gpu_worker, rq)
         return {
             "job_id": job.id,
             "status": "queued",
             "message": "Job submitted successfully. Poll /api/jobs/{job_id} for status.",
             "queue_position": len(rq.queue),
-            "remote_worker": _maybe_trigger_modal_gpu_worker(rq),
+            "remote_worker": remote_worker,
         }
 
     except Exception as exc:
@@ -749,6 +750,36 @@ async def queue_status(
             ]
         except Exception:
             info["workers"] = []
+
+    # Opportunistic on-demand spawn: if there are queued jobs and no workers are running,
+    # try to trigger a remote worker. This makes the system "self-healing" even if the
+    # initial trigger after enqueue failed.
+    try:
+        if (
+            info.get("available")
+            and not START_LOCAL_RQ_WORKER
+            and info.get("remote_workers_compatible")
+            and int(info.get("queued_jobs") or 0) > 0
+            and int(info.get("started_jobs") or 0) == 0
+            and len(info.get("workers") or []) == 0
+        ):
+            import asyncio
+            import time
+
+            # Throttle spawn attempts so UI polling doesn't spam Modal.
+            should_attempt = True
+            try:
+                if rq.redis:
+                    should_attempt = bool(
+                        rq.redis.set("pyreflect:modal_spawn_attempt", str(int(time.time())), nx=True, ex=5)
+                    )
+            except Exception:
+                should_attempt = True
+
+            if should_attempt:
+                info["remote_worker"] = await asyncio.to_thread(_maybe_trigger_modal_gpu_worker, rq)
+    except Exception:
+        pass
 
     return info
 
