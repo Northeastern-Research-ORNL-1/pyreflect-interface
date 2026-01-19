@@ -446,11 +446,11 @@ export default function HomePage() {
             } catch {
               // ignore parse errors
             }
-            addLog('Queue not available. Click again to use streaming mode.');
+            addLog('Queue not available. Start Redis / fix REDIS_URL on the backend (check GET /api/queue).');
           }
         })
         .catch(() => {
-          addLog('Queue not reachable. Click again to use streaming mode.');
+          addLog('Queue request failed (network/CORS). Check NEXT_PUBLIC_API_URL and backend CORS_ORIGINS.');
         });
 
       // Fire-and-forget - return immediately so user can submit more jobs

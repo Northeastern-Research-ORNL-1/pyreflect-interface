@@ -71,6 +71,7 @@ class RQIntegration:
     redis: "Redis | None"
     queue: "Queue | None"
     queue_name: str = "training"
+    error: str | None = None
 
 
 def create_rq_integration() -> RQIntegration:
@@ -106,14 +107,17 @@ def create_rq_integration() -> RQIntegration:
             redis=redis_conn,
             queue=queue,
             queue_name="training",
+            error=None,
         )
     except ImportError as exc:
-        print(f"Warning: RQ not available (missing dependency): {exc}")
-        return RQIntegration(available=False, redis=None, queue=None)
+        msg = f"Missing dependency for queue: {exc}"
+        print(f"Warning: RQ not available ({msg})")
+        return RQIntegration(available=False, redis=None, queue=None, error=msg)
     except Exception as exc:
-        print(f"Warning: Could not connect to Redis: {exc}")
+        msg = f"Could not connect to Redis at {redis_host}:{redis_port}: {exc}"
+        print(f"Warning: {msg}")
         print("  Jobs will run synchronously (no queuing).")
-        return RQIntegration(available=False, redis=None, queue=None)
+        return RQIntegration(available=False, redis=None, queue=None, error=msg)
 
 
 def get_job_status(rq: RQIntegration, job_id: str) -> dict:
@@ -169,7 +173,10 @@ def get_job_status(rq: RQIntegration, job_id: str) -> dict:
 def get_queue_info(rq: RQIntegration) -> dict:
     """Get information about the queue status."""
     if not rq.available or not rq.queue:
-        return {"available": False}
+        info: dict[str, object] = {"available": False}
+        if rq.error:
+            info["error"] = rq.error
+        return info
 
     try:
         from rq.registry import StartedJobRegistry, FinishedJobRegistry, FailedJobRegistry
