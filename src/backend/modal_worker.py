@@ -28,6 +28,12 @@ _SERVICE_DIR = _HERE / "service"
 #
 # NOTE: If `torch.cuda.is_available()` is false at runtime, you likely installed a
 # CPU-only PyTorch wheel. Use a CUDA-enabled torch build for Modal GPUs.
+poller_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    # Keep the fallback poller lightweight: it only needs Redis + RQ to check the queue.
+    .pip_install("redis", "rq")
+)
+
 image = (
     modal.Image.debian_slim(python_version="3.11")
     # Torch 2.2.x is not compatible with NumPy 2.x at runtime (breaks torch<->numpy
@@ -184,8 +190,9 @@ def run_rq_worker_burst(lock_value: str):
 
 
 @app.function(
-    image=image,
-    schedule=modal.Cron("*/5 * * * *"),  # Fallback poll (backend can trigger instant spawn)
+    image=poller_image,
+    cpu=1.0,
+    schedule=modal.Cron("*/5 * * * *"),  # Fallback poll (backend triggers instant spawn)
     secrets=[modal.Secret.from_name("pyreflect-redis")],
 )
 def poll_queue():
