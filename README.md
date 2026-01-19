@@ -409,6 +409,9 @@ No. `uv run modal deploy ...` deploys the Modal app to Modal’s infra and runs 
 `modal deploy` registers your functions + schedule. By default, the backend will try to trigger a GPU worker immediately
 after enqueuing a job (`MODAL_INSTANT_SPAWN=true`). A cron-based `poll_queue` still runs as a fallback (every 5 minutes).
 
+Note on cost: the fallback `poll_queue` does not “keep a container warm” 24/7. Modal bills for compute time used by each
+invocation; the poller is intentionally lightweight (1 vCPU, minimal deps) and exits quickly when the queue is empty.
+
 To start immediately (for testing), run the poller once:
 
 ```bash
