@@ -31,7 +31,8 @@ _SERVICE_DIR = _HERE / "service"
 poller_image = (
     modal.Image.debian_slim(python_version="3.11")
     # Keep the fallback poller lightweight: it only needs Redis + RQ to check the queue.
-    .pip_install("redis", "rq")
+    # Modal HTTP endpoints now require FastAPI to be installed explicitly.
+    .pip_install("fastapi", "redis", "rq")
 )
 
 image = (
@@ -209,7 +210,7 @@ def poll_queue():
     cpu=1.0,
     secrets=[modal.Secret.from_name("pyreflect-redis")],
 )
-@modal.web_endpoint(method="POST")
+@modal.fastapi_endpoint(method="POST")
 def poll_queue_http(token: str | None = None):
     """
     HTTP trigger for the poller (optional).
