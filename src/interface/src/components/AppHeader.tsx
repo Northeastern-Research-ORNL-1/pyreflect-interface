@@ -12,6 +12,14 @@ type WorkerInfo = {
   state: string;
 };
 
+type QueueStatus = {
+  workers?: WorkerInfo[];
+  queued_jobs?: number;
+  started_jobs?: number;
+  remote_workers_compatible?: boolean;
+  local_worker_enabled?: boolean;
+};
+
 type AppHeaderProps = {
   appVersion: string;
   isProduction: boolean;
@@ -42,6 +50,7 @@ export default function AppHeader({
   const [showJsonMenu, setShowJsonMenu] = useState(false);
   const [showJsonMenuMobile, setShowJsonMenuMobile] = useState(false);
   const [workers, setWorkers] = useState<WorkerInfo[]>([]);
+  const [queueStatus, setQueueStatus] = useState<QueueStatus | null>(null);
   const [backendOnline, setBackendOnline] = useState(true);
   const jsonMenuRef = useRef<HTMLDivElement>(null);
   const userLabel = session?.user?.name ?? session?.user?.email ?? 'User';
@@ -54,16 +63,19 @@ export default function AppHeader({
       try {
         const res = await fetch(`${API_URL}/api/queue`, { cache: 'no-store' });
         if (res.ok) {
-          const data = await res.json();
+          const data = (await res.json()) as QueueStatus;
+          setQueueStatus(data);
           setWorkers(data.workers || []);
           setBackendOnline(true);
         } else {
           setWorkers([]);
+          setQueueStatus(null);
           setBackendOnline(false);
         }
       } catch {
         // Backend not available
         setWorkers([]);
+        setQueueStatus(null);
         setBackendOnline(false);
       }
     };
@@ -82,17 +94,38 @@ export default function AppHeader({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Determine worker type: GPU (colab), CPU, or none
-  const hasGpuWorker = backendOnline && workers.some(w => w.name.toLowerCase().includes('colab') || w.name.toLowerCase().includes('gpu'));
-  const hasCpuWorker = backendOnline && workers.some(w => !w.name.toLowerCase().includes('colab') && !w.name.toLowerCase().includes('gpu'));
-  const workerDotColor = !backendOnline ? '#6b7280' : hasGpuWorker ? '#10b981' : hasCpuWorker ? '#3b82f6' : '#6b7280';
+  const hasGpuWorker = backendOnline && workers.some((w) => (w.name || '').toLowerCase().includes('gpu'));
+  const hasCpuWorker = backendOnline && workers.some((w) => !(w.name || '').toLowerCase().includes('gpu'));
+
+  // Modal uses burst GPU workers: most of the time there are 0 live workers even when GPU mode is configured.
+  const remoteGpuEnabled =
+    backendOnline && Boolean(queueStatus?.remote_workers_compatible) && queueStatus?.local_worker_enabled === false;
+  const queuedJobs = queueStatus?.queued_jobs ?? 0;
+  const isSpawning = backendOnline && remoteGpuEnabled && queuedJobs > 0 && workers.length === 0;
+
+  const workerDotColor = !backendOnline
+    ? '#6b7280'
+    : hasGpuWorker
+      ? '#10b981'
+      : isSpawning
+        ? '#f59e0b'
+        : remoteGpuEnabled
+          ? '#10b981'
+          : hasCpuWorker
+            ? '#3b82f6'
+            : '#6b7280';
+
   const workerTooltip = !backendOnline
     ? 'Backend offline'
-    : hasGpuWorker 
-      ? 'GPU worker connected (Colab)' 
-      : hasCpuWorker 
-        ? 'CPU worker connected' 
-        : 'No workers connected';
+    : hasGpuWorker
+      ? 'GPU worker connected'
+      : isSpawning
+        ? `Spawning GPU worker (queued: ${queuedJobs})`
+        : remoteGpuEnabled
+          ? 'Remote GPU mode enabled (Modal)'
+          : hasCpuWorker
+            ? 'CPU worker connected'
+            : 'No workers connected';
 
   return (
     <header className="header">
@@ -133,6 +166,10 @@ export default function AppHeader({
                 ? 'Offline'
                 : hasGpuWorker
                   ? '(GPU) Ready'
+                  : isSpawning
+                    ? 'Spawning GPU...'
+                    : remoteGpuEnabled
+                      ? '(GPU) Idle'
                   : hasCpuWorker
                     ? '(CPU) Ready'
                     : 'No Workers'}
