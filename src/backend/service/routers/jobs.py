@@ -45,41 +45,43 @@ def _maybe_trigger_modal_gpu_worker(rq) -> dict[str, object]:
         return {"triggered": False, "reason": "rq_unavailable"}
 
     redis_conn = rq.redis
+
+    # If we're calling the poller, do NOT acquire the spawn lock here.
+    # The poller itself owns the lock and will spawn the GPU burst worker if needed.
+    calls_poller = MODAL_FUNCTION_NAME in {"poll_queue", "poll_queue_http"}
     lock_key = "pyreflect:modal_worker_lock"
-
-    # Avoid spawning if a GPU worker already exists.
-    try:
-        from rq import Worker
-
-        workers = Worker.all(connection=redis_conn)
-        if any((getattr(w, "name", "") or "").lower().startswith("gpu-") for w in workers):
-            return {"triggered": False, "reason": "gpu_worker_exists"}
-    except Exception:
-        pass
-
-    lock_value = f"{uuid.uuid4()}:{int(time.time())}"
-    try:
-        acquired = redis_conn.set(lock_key, lock_value, nx=True, ex=max(int(MODAL_SPAWN_LOCK_TTL_S), 60))
-    except Exception:
-        return {"triggered": False, "reason": "redis_lock_error"}
-    if not acquired:
-        return {"triggered": False, "reason": "spawn_lock_held"}
+    lock_value = f"{uuid.uuid4()}:{int(time.time())}" if not calls_poller else None
 
     try:
         import modal
 
         fn = modal.Function.lookup(MODAL_APP_NAME, MODAL_FUNCTION_NAME)
-        fn.spawn()
-        return {"triggered": True}
+        if calls_poller:
+            fn.spawn()
+            return {"triggered": True, "via": "modal_client", "target": MODAL_FUNCTION_NAME}
+
+        # Direct burst worker spawn: acquire lock and pass lock_value so the worker can release it.
+        if lock_value is None:
+            return {"triggered": False, "reason": "invalid_config"}
+        try:
+            acquired = redis_conn.set(lock_key, lock_value, nx=True, ex=max(int(MODAL_SPAWN_LOCK_TTL_S), 60))
+        except Exception:
+            return {"triggered": False, "reason": "redis_lock_error"}
+        if not acquired:
+            return {"triggered": False, "reason": "spawn_lock_held"}
+
+        fn.spawn(lock_value)
+        return {"triggered": True, "via": "modal_client", "target": MODAL_FUNCTION_NAME}
     except Exception as exc:
         print(f"Warning: Failed to trigger Modal worker spawn via Modal client: {exc}")
-        # Release lock if we still own it so the cron poller can recover quickly.
-        try:
-            current = redis_conn.get(lock_key)
-            if current is not None and current.decode("utf-8") == lock_value:
-                redis_conn.delete(lock_key)
-        except Exception:
-            pass
+        if lock_value is not None:
+            # Release lock if we still own it so an alternate trigger can recover quickly.
+            try:
+                current = redis_conn.get(lock_key)
+                if current is not None and current.decode("utf-8") == lock_value:
+                    redis_conn.delete(lock_key)
+            except Exception:
+                pass
 
         # Fallback: call a deployed `poll_queue` web endpoint, if configured.
         if MODAL_POLL_URL:
@@ -93,7 +95,7 @@ def _maybe_trigger_modal_gpu_worker(rq) -> dict[str, object]:
                     url = f"{url}{sep}token={MODAL_TRIGGER_TOKEN}"
                 resp = requests.post(url, headers=headers, timeout=15)
                 if resp.ok:
-                    return {"triggered": True, "via": "http"}
+                    return {"triggered": True, "via": "http", "target": "poll_queue_http"}
                 return {
                     "triggered": False,
                     "reason": "modal_http_failed",
