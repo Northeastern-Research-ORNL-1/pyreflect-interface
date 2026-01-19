@@ -116,6 +116,27 @@ def _get_bool_env(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _get_str_env(name: str) -> str | None:
+    value = os.getenv(name)
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _squash_whitespace(value: str | None) -> str | None:
+    """
+    Remove any whitespace characters from a string.
+
+    This hardens `.env` copy/paste issues where values get wrapped across lines
+    (e.g. Modal endpoint URLs).
+    """
+    if not value:
+        return None
+    cleaned = "".join(value.split())
+    return cleaned or None
+
+
 # Whether the API process should start a local RQ worker subprocess.
 # - Default: enabled for local dev, disabled for PRODUCTION (so you can use Modal workers).
 START_LOCAL_RQ_WORKER = _get_bool_env("START_LOCAL_RQ_WORKER", default=not IS_PRODUCTION)
@@ -133,6 +154,6 @@ MODAL_SPAWN_LOCK_TTL_S = int(os.getenv("MODAL_SPAWN_LOCK_TTL_S", "900"))
 
 # Optional: if you don't want the backend to depend on Modal auth, deploy the worker
 # and set this to the `poll_queue` web endpoint URL (Modal provides it on deploy).
-MODAL_POLL_URL = os.getenv("MODAL_POLL_URL")
-# Optional shared secret to protect the poll endpoint (send as `?token=...`).
-MODAL_TRIGGER_TOKEN = os.getenv("MODAL_TRIGGER_TOKEN")
+MODAL_POLL_URL = _squash_whitespace(_get_str_env("MODAL_POLL_URL"))
+# Optional shared secret to protect the poll endpoint (sent as `?token=...`).
+MODAL_TRIGGER_TOKEN = _get_str_env("MODAL_TRIGGER_TOKEN")
