@@ -6,7 +6,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .config import BACKEND_ROOT, CORS_ALLOW_ORIGIN_REGEX, CORS_ORIGINS, HF_REPO_ID, HF_TOKEN, MONGODB_URI
+from .config import (
+    BACKEND_ROOT,
+    CORS_ALLOW_ORIGIN_REGEX,
+    CORS_ORIGINS,
+    HF_REPO_ID,
+    HF_TOKEN,
+    MONGODB_URI,
+)
 from .config import START_LOCAL_RQ_WORKER
 from .integrations.huggingface import init_huggingface
 from .integrations.mongo import init_mongo, mongo_keepalive
@@ -113,7 +120,9 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=CORS_ORIGINS if not CORS_ALLOW_ORIGIN_REGEX else [],
+        # Keep explicit origins even when a regex is set so a misconfigured regex
+        # doesn't silently break CORS in production.
+        allow_origins=CORS_ORIGINS,
         allow_origin_regex=CORS_ALLOW_ORIGIN_REGEX,
         allow_credentials=True,
         allow_methods=["*"],

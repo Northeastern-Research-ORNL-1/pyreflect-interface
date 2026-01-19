@@ -334,7 +334,7 @@ Important:
 - Disable the backend's local worker so jobs aren't consumed on CPU (`START_LOCAL_RQ_WORKER=false`).
 - `REDIS_URL=redis://localhost:6379` will NOT work with Modal (localhost is inside the Modal container).
 - `REDIS_URL` must include a scheme like `redis://` (e.g. `redis://:PASSWORD@HOST:6379`).
-- For instant spawn (no waiting for cron), the backend process must have the `modal` package installed and be authenticated to Modal.
+- For instant spawn (no waiting for a periodic schedule), the backend process must have the `modal` package installed and be authenticated to Modal.
   If that fails, you can configure an HTTP fallback (`MODAL_POLL_URL`).
 
 ```bash
@@ -409,7 +409,7 @@ No. `uv run modal deploy ...` deploys the Modal app to Modal’s infra and runs 
 
 #### Why doesn’t it “auto-spawn” a GPU on deploy?
 
-`modal deploy` registers your functions + schedule. By default, the backend will try to trigger a GPU worker immediately
+`modal deploy` registers your functions. By default, the backend will try to trigger a GPU worker immediately
 after enqueuing a job (`MODAL_INSTANT_SPAWN=true`). The Modal worker also exposes an optional HTTP trigger (`poll_queue_http`)
 so you can trigger spawns without relying on the backend being authenticated to Modal.
 
@@ -419,14 +419,16 @@ To debug instant spawn from the backend, call:
 curl -s -X POST http://localhost:8000/api/queue/spawn | jq
 ```
 
+The backend also opportunistically triggers a spawn from `GET /api/queue` when it sees queued jobs and no workers.
+
 If you see `reason: modal_spawn_failed`, the backend is not authenticated to Modal. Run `uv run modal setup` (or set
 `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET` in the backend environment).
 
 If you see `reason: modal_spawn_failed` and want an auth-free backend, set these backend env vars:
 - `MODAL_POLL_URL`: the deployed `poll_queue_http` endpoint URL (from Modal deploy output)
-- `MODAL_TRIGGER_TOKEN`: must match the `MODAL_TRIGGER_TOKEN` stored in the Modal secret
+- `MODAL_TRIGGER_TOKEN`: must match the `MODAL_TRIGGER_TOKEN` stored in the Modal secret (sent as `?token=...`)
 
-Note on cost: the fallback `poll_queue` does not “keep a container warm” 24/7. Modal bills for compute time used by each
+Note on cost: the on-demand `poll_queue` does not “keep a container warm” 24/7. Modal bills for compute time used by each
 invocation; the poller is intentionally lightweight (1 vCPU, minimal deps) and exits quickly when the queue is empty.
 
 To start immediately (for testing), run the poller once:
@@ -465,16 +467,16 @@ PRODUCTION=true
 # CORS (comma-separated origins)
 CORS_ORIGINS=http://localhost:3000,https://your-app.vercel.app
 # Or use a regex allowlist (useful for multiple subdomains):
-#CORS_ALLOW_ORIGIN_REGEX=https://(pyreflect\\.shlawg\\.com|localhost:3000)$
+#CORS_ALLOW_ORIGIN_REGEX=https://(pyreflect\.shlawg\.com|localhost:3000)$
 
 # Redis queue (required for background jobs in the UI)
 REDIS_URL=redis://localhost:6379
 RQ_JOB_TIMEOUT=2h
 
-# Instant Modal worker spawn (removes cron latency)
+# Instant Modal worker spawn (on-demand, no schedule)
 MODAL_INSTANT_SPAWN=true
 MODAL_POLL_URL=https://<your-modal-endpoint>/poll_queue_http
-MODAL_TRIGGER_TOKEN=change-me  # must match Modal secret MODAL_TRIGGER_TOKEN
+MODAL_TRIGGER_TOKEN=change-me  # must match Modal secret MODAL_TRIGGER_TOKEN (sent as ?token=...)
 
 # Disable local worker if using Modal/remote GPU workers
 START_LOCAL_RQ_WORKER=false
