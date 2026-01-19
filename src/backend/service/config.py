@@ -5,13 +5,18 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
-
 # =====================
 # Paths
 # =====================
 
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
+
+# Load env from the backend directory regardless of current working directory.
+# (Starting `uvicorn` from a different CWD would otherwise skip `src/backend/.env`.)
+load_dotenv(dotenv_path=BACKEND_ROOT / ".env")
+# Optional fallback to CWD `.env` (won't override existing env vars).
+load_dotenv()
+
 DATA_DIR = BACKEND_ROOT / "data"
 CURVES_DIR = DATA_DIR / "curves"
 MODELS_DIR = DATA_DIR / "models"
