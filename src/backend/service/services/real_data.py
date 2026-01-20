@@ -21,7 +21,7 @@ from ..settings_store import (
     save_settings,
     validate_npy_payload,
 )
-from .pyreflect_runtime import PYREFLECT
+from .pyreflect_runtime import PYREFLECT, resolve_torch_device
 
 
 def generate_with_real_data_streaming(
@@ -70,9 +70,14 @@ def _real_nr_sld_train_core(
     reflectivity_pipeline = PYREFLECT.reflectivity_pipeline
     DataProcessor = PYREFLECT.DataProcessor
     CNN = PYREFLECT.CNN
-    DEVICE = PYREFLECT.DEVICE
+    runtime_device = PYREFLECT.DEVICE
     torch = PYREFLECT.torch
     compute_nr_from_sld = PYREFLECT.compute_nr_from_sld
+
+    device, device_reason = resolve_torch_device(torch, runtime_device=runtime_device, prefer_cuda=True)
+    if device_reason:
+        yield emit("log", f"Warning: {device_reason}")
+    yield emit("log", f"Device selected: {device!s}")
 
     if NRSLDDataProcessor is None or reflectivity_pipeline is None or DataProcessor is None:
         yield emit("error", "NR->SLD workflow not available. Check pyreflect install.")
@@ -128,7 +133,7 @@ def _real_nr_sld_train_core(
         "log",
         f"Training CNN model ({request.training.epochs} epochs, batch size {request.training.batchSize})...",
     )
-    model = CNN(layers=request.training.layers, dropout_prob=request.training.dropout).to(DEVICE)
+    model = CNN(layers=request.training.layers, dropout_prob=request.training.dropout).to(device)
     model.train()
 
     list_arrays = DataProcessor.split_arrays(reshaped_nr, normalized_sld, size_split=SPLIT_RATIO)
@@ -148,7 +153,7 @@ def _real_nr_sld_train_core(
         model.train()
         running_loss = 0.0
         for X_batch, y_batch in train_loader:
-            X_batch, y_batch = X_batch.to(DEVICE), y_batch.to(DEVICE)
+            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
             optimizer.zero_grad()
             outputs = model(X_batch)
             loss = loss_fn(outputs, y_batch)
@@ -161,7 +166,7 @@ def _real_nr_sld_train_core(
         val_running_loss = 0.0
         with torch.no_grad():
             for X_batch, y_batch in valid_loader:
-                X_batch, y_batch = X_batch.to(DEVICE), y_batch.to(DEVICE)
+                X_batch, y_batch = X_batch.to(device), y_batch.to(device)
                 outputs = model(X_batch)
                 val_running_loss += loss_fn(outputs, y_batch).item()
         val_loss = val_running_loss / len(valid_loader)
@@ -201,7 +206,7 @@ def _real_nr_sld_train_core(
     model.eval()
     with torch.no_grad():
         test_nr_normalized = reshaped_nr[test_idx : test_idx + 1, :, :]
-        test_input = torch.tensor(test_nr_normalized, dtype=torch.float32).to(DEVICE)
+        test_input = torch.tensor(test_nr_normalized, dtype=torch.float32).to(device)
         pred_sld_normalized = model(test_input).cpu().numpy()
 
     pred_sld_denorm = DataProcessor.denormalize_xy_curves(
@@ -535,4 +540,3 @@ def _run_sld_chi_workflow(
             yield emit("log", "Results saved to database.")
         except Exception as exc:
             yield emit("log", f"Warning: Could not save to database: {exc}")
-

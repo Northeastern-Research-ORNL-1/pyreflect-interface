@@ -31,7 +31,7 @@ from ..schemas import (
     TrainingData,
     TrainingParams,
 )
-from .pyreflect_runtime import PYREFLECT
+from .pyreflect_runtime import PYREFLECT, resolve_torch_device
 from .local_model_limit import (
     save_torch_state_dict_with_local_limit,
     wait_for_local_model_slot,
@@ -67,9 +67,14 @@ def generate_with_pyreflect_streaming(
     ReflectivityDataGenerator = PYREFLECT.ReflectivityDataGenerator
     DataProcessor = PYREFLECT.DataProcessor
     CNN = PYREFLECT.CNN
-    DEVICE = PYREFLECT.DEVICE
+    runtime_device = PYREFLECT.DEVICE
     torch = PYREFLECT.torch
     compute_nr_from_sld = PYREFLECT.compute_nr_from_sld
+
+    device, device_reason = resolve_torch_device(torch, runtime_device=runtime_device, prefer_cuda=True)
+    if device_reason:
+        yield emit("log", f"Warning: {device_reason}")
+    yield emit("log", f"Device selected: {device!s}")
 
     total_start = time.perf_counter()
 
@@ -211,7 +216,7 @@ def generate_with_pyreflect_streaming(
         "log",
         f"Training CNN model ({train_params.epochs} epochs, batch size {train_params.batchSize})...",
     )
-    model = CNN(layers=train_params.layers, dropout_prob=train_params.dropout).to(DEVICE)
+    model = CNN(layers=train_params.layers, dropout_prob=train_params.dropout).to(device)
     model.train()
 
     list_arrays = DataProcessor.split_arrays(reshaped_nr, normalized_sld, size_split=SPLIT_RATIO)
@@ -232,7 +237,7 @@ def generate_with_pyreflect_streaming(
         model.train()
         running_loss = 0.0
         for X_batch, y_batch in train_loader:
-            X_batch, y_batch = X_batch.to(DEVICE), y_batch.to(DEVICE)
+            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
             optimizer.zero_grad()
             outputs = model(X_batch)
             loss = loss_fn(outputs, y_batch)
@@ -245,7 +250,7 @@ def generate_with_pyreflect_streaming(
         val_running_loss = 0.0
         with torch.no_grad():
             for X_batch, y_batch in valid_loader:
-                X_batch, y_batch = X_batch.to(DEVICE), y_batch.to(DEVICE)
+                X_batch, y_batch = X_batch.to(device), y_batch.to(device)
                 outputs = model(X_batch)
                 val_running_loss += loss_fn(outputs, y_batch).item()
         val_loss = val_running_loss / len(valid_loader)
@@ -347,7 +352,7 @@ def generate_with_pyreflect_streaming(
     model.eval()
     with torch.no_grad():
         test_nr_normalized = normalized_nr[test_idx : test_idx + 1, 1:2, :]
-        test_input = torch.tensor(test_nr_normalized, dtype=torch.float32).to(DEVICE)
+        test_input = torch.tensor(test_nr_normalized, dtype=torch.float32).to(device)
         pred_sld_normalized = model(test_input).cpu().numpy()
 
     pred_sld_denorm = DataProcessor.denormalize_xy_curves(
@@ -441,9 +446,14 @@ def generate_with_pyreflect(
     ReflectivityDataGenerator = PYREFLECT.ReflectivityDataGenerator
     DataProcessor = PYREFLECT.DataProcessor
     CNN = PYREFLECT.CNN
-    DEVICE = PYREFLECT.DEVICE
+    runtime_device = PYREFLECT.DEVICE
     torch = PYREFLECT.torch
     compute_nr_from_sld = PYREFLECT.compute_nr_from_sld
+
+    device, device_reason = resolve_torch_device(torch, runtime_device=runtime_device, prefer_cuda=True)
+    if device_reason:
+        print(f"Warning: {device_reason}")
+    print(f"Device selected: {device!s}")
 
     print(
         f"Generating {gen_params.numCurves} synthetic curves with {gen_params.numFilmLayers} film layers..."
@@ -471,7 +481,7 @@ def generate_with_pyreflect(
     print(
         f"Training CNN model ({train_params.epochs} epochs, batch size {train_params.batchSize})..."
     )
-    model = CNN(layers=train_params.layers, dropout_prob=train_params.dropout).to(DEVICE)
+    model = CNN(layers=train_params.layers, dropout_prob=train_params.dropout).to(device)
     model.train()
 
     list_arrays = DataProcessor.split_arrays(reshaped_nr, normalized_sld, size_split=SPLIT_RATIO)
@@ -491,7 +501,7 @@ def generate_with_pyreflect(
         model.train()
         running_loss = 0.0
         for X_batch, y_batch in train_loader:
-            X_batch, y_batch = X_batch.to(DEVICE), y_batch.to(DEVICE)
+            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
             optimizer.zero_grad()
             outputs = model(X_batch)
             loss = loss_fn(outputs, y_batch)
@@ -504,7 +514,7 @@ def generate_with_pyreflect(
         val_running_loss = 0.0
         with torch.no_grad():
             for X_batch, y_batch in valid_loader:
-                X_batch, y_batch = X_batch.to(DEVICE), y_batch.to(DEVICE)
+                X_batch, y_batch = X_batch.to(device), y_batch.to(device)
                 outputs = model(X_batch)
                 val_running_loss += loss_fn(outputs, y_batch).item()
         val_loss = val_running_loss / len(valid_loader)
@@ -559,7 +569,7 @@ def generate_with_pyreflect(
     model.eval()
     with torch.no_grad():
         test_nr_normalized = normalized_nr[test_idx : test_idx + 1, 1:2, :]
-        test_input = torch.tensor(test_nr_normalized, dtype=torch.float32).to(DEVICE)
+        test_input = torch.tensor(test_nr_normalized, dtype=torch.float32).to(device)
         pred_sld_normalized = model(test_input).cpu().numpy()
 
     pred_sld_denorm = DataProcessor.denormalize_xy_curves(

@@ -57,7 +57,7 @@ def run_training_job(
     )
     from ..integrations.huggingface import HuggingFaceIntegration, upload_model
     from ..services.local_model_limit import save_torch_state_dict_with_local_limit
-    from ..services.pyreflect_runtime import PYREFLECT
+    from ..services.pyreflect_runtime import PYREFLECT, resolve_torch_device
 
     global _MONGO_CLIENT, _MONGO_URI
 
@@ -148,12 +148,9 @@ def run_training_job(
 
     # Prefer CUDA when available (e.g. Modal GPU workers), regardless of what the
     # upstream `pyreflect.config.runtime.DEVICE` defaulted to.
-    device = runtime_device
-    try:
-        if torch is not None and getattr(torch, "cuda", None) and torch.cuda.is_available():
-            device = torch.device("cuda")
-    except Exception:
-        device = runtime_device
+    device, device_reason = resolve_torch_device(torch, runtime_device=runtime_device, prefer_cuda=True)
+    if device_reason:
+        log(f"Warning: {device_reason}")
 
     log(f"Device selected: {device!s}")
     try:
