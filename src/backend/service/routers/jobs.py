@@ -197,6 +197,7 @@ async def submit_job(
         "layers": [layer.model_dump() for layer in request.layers],
         "generator": request.generator.model_dump(),
         "training": request.training.model_dump(),
+        "gpu": request.gpu,  # GPU tier for Modal worker selection
     }
 
     from ..config import RQ_JOB_TIMEOUT
