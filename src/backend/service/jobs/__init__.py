@@ -87,6 +87,12 @@ def run_training_job(
             super().__init__(f"Stop requested during {phase}")
             self.phase = phase
 
+    class PauseRequested(RuntimeError):
+        def __init__(self, phase: str, epoch: int):
+            super().__init__(f"Pause requested during {phase} at epoch {epoch}")
+            self.phase = phase
+            self.epoch = epoch
+
     def _flush_meta(*, force: bool = False) -> None:
         nonlocal last_meta_flush, pending_meta
         if not job:
@@ -124,6 +130,16 @@ def run_training_job(
         cached_stop_requested = bool(meta.get("stop_requested"))
         last_stop_poll = now
         return cached_stop_requested
+
+    def _get_pause_requested() -> bool:
+        """Check if pause was requested (save checkpoint and stop)."""
+        if not job:
+            return False
+        try:
+            meta = job.get_meta(refresh=True) or {}
+        except Exception:
+            meta = job.meta or {}
+        return bool(meta.get("pause_requested"))
 
     def _raise_if_stopped(phase: str) -> None:
         if _get_stop_requested():
@@ -451,6 +467,9 @@ def run_training_job(
             for X_batch, y_batch in batch_pbar:
                 # Check stop frequently so /stop can interrupt mid-epoch.
                 if _get_stop_requested():
+                    # Check if this is a pause request (save checkpoint before stopping)
+                    if _get_pause_requested():
+                        raise PauseRequested("training", epoch)
                     raise StopRequested("training")
                 X_batch, y_batch = X_batch.to(device), y_batch.to(device)
                 optimizer.zero_grad()
@@ -469,6 +488,8 @@ def run_training_job(
             with torch.no_grad():
                 for X_batch, y_batch in valid_loader:
                     if _get_stop_requested():
+                        if _get_pause_requested():
+                            raise PauseRequested("validation", epoch)
                         raise StopRequested("training")
                     X_batch, y_batch = X_batch.to(device), y_batch.to(device)
                     outputs = model(X_batch)
@@ -548,6 +569,50 @@ def run_training_job(
             force=True,
         )
         return {"stopped": True, "phase": exc.phase}
+
+    except PauseRequested as exc:
+        log(str(exc))
+        log("Saving checkpoint before pausing...")
+
+        # Save checkpoint so training can be resumed
+        if hf and hf.api and job:
+            try:
+                cpu_state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
+                opt_state = optimizer.state_dict()
+                for state in opt_state.get("state", {}).values():
+                    for k, v in state.items():
+                        if hasattr(v, "cpu"):
+                            state[k] = v.cpu()
+
+                ckpt = Checkpoint(
+                    job_id=job.id,
+                    epoch=exc.epoch,  # Save at the epoch we paused at
+                    model_state_dict=cpu_state,
+                    optimizer_state_dict=opt_state,
+                    train_losses=train_losses.copy(),
+                    val_losses=val_losses.copy(),
+                    epoch_list=epoch_list.copy(),
+                    best_val_loss=best_val_loss,
+                    saved_at=datetime.now(timezone.utc).isoformat(),
+                    nr_stats=nr_stats,
+                    sld_stats=sld_stats,
+                )
+                save_checkpoint(hf.api, torch, ckpt, log_fn=log)
+                log(f"Checkpoint saved at epoch {exc.epoch}")
+            except Exception as ckpt_exc:
+                log(f"Warning: Failed to save checkpoint on pause: {ckpt_exc}")
+
+        set_meta(
+            {
+                "status": "paused",
+                "paused_phase": exc.phase,
+                "paused_at_epoch": exc.epoch,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "logs": logs,
+            },
+            force=True,
+        )
+        return {"paused": True, "phase": exc.phase, "epoch": exc.epoch}
 
     # =====================
     # Save Model

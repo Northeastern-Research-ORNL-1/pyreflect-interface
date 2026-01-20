@@ -689,6 +689,66 @@ async def stop_job(
         ) from exc
 
 
+@router.post("/jobs/{job_id}/pause")
+async def pause_job(
+    job_id: str,
+    http_request: Request,
+    x_user_id: str | None = Header(default=None),
+):
+    """
+    Pause a running job - saves checkpoint immediately and stops.
+
+    Unlike stop, pause will:
+    1. Save a checkpoint at the current epoch (even mid-epoch)
+    2. Stop the job so it can be resumed later
+
+    The job can be resumed from the checkpoint using POST /checkpoints/{job_id}/resume
+    """
+    rq = _get_rq_or_reconnect(http_request)
+
+    if not rq or not rq.available or not rq.redis:
+        raise HTTPException(status_code=503, detail="Job queue not available.")
+
+    require_user_id(is_production=IS_PRODUCTION, x_user_id=x_user_id)
+
+    try:
+        from rq.job import Job
+
+        job = Job.fetch(job_id, connection=rq.redis)
+        status = job.get_status()
+
+        if status != "started":
+            raise HTTPException(status_code=400, detail=f"Job is {status}, not running")
+
+        meta = job.meta or {}
+
+        # Ownership check
+        job_user_id = meta.get("user_id")
+        if job_user_id and x_user_id and job_user_id != x_user_id:
+            raise HTTPException(status_code=403, detail="Job belongs to another user")
+
+        # Set pause flag - worker will save checkpoint and stop
+        meta["pause_requested"] = True
+        meta["stop_requested"] = True  # Also set stop so it exits
+        if meta.get("status") not in {"completed", "failed", "stopped", "paused"}:
+            meta["status"] = "pausing"
+        job.meta = meta
+        job.save_meta()
+
+        return {
+            "job_id": job_id,
+            "status": "pause_requested",
+            "message": "Pause requested. Job will save checkpoint and stop.",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to pause job: {exc}"
+        ) from exc
+
+
 @router.delete("/jobs/purge")
 async def purge_user_jobs(
     http_request: Request,
