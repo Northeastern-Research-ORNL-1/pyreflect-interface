@@ -524,6 +524,103 @@ async def stop_job(job_id: str, http_request: Request):
         raise HTTPException(status_code=500, detail=f"Failed to stop job: {exc}") from exc
 
 
+@router.delete("/jobs/purge")
+async def purge_user_jobs(
+    http_request: Request,
+    x_user_id: str | None = Header(default=None),
+    include_queued: bool = False,
+):
+    """
+    Delete non-running job records associated with the current user from Redis/RQ.
+
+    NOTE: This route must be declared before the catch-all `/jobs/{job_id}` routes.
+    Starlette matches routes in registration order; otherwise `/jobs/purge` will be
+    interpreted as `job_id='purge'`.
+
+    - Default: deletes finished/failed/etc jobs, but keeps queued jobs.
+    - Set include_queued=true to also delete queued jobs.
+    """
+    rq = _get_rq_or_reconnect(http_request)
+
+    if not rq or not rq.available or not rq.redis or not rq.queue:
+        raise HTTPException(status_code=503, detail="Job queue not available.")
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        from rq.job import Job
+        from rq.registry import FailedJobRegistry, FinishedJobRegistry, StartedJobRegistry
+
+        started_registry = StartedJobRegistry(queue=rq.queue)
+        finished_registry = FinishedJobRegistry(queue=rq.queue)
+        failed_registry = FailedJobRegistry(queue=rq.queue)
+
+        candidate_ids = set(rq.queue.job_ids)
+        candidate_ids.update(started_registry.get_job_ids())
+        candidate_ids.update(finished_registry.get_job_ids())
+        candidate_ids.update(failed_registry.get_job_ids())
+
+        deleted = 0
+        skipped_running = 0
+        skipped_unowned = 0
+        skipped_queued = 0
+        missing = 0
+
+        for job_id in candidate_ids:
+            try:
+                job = Job.fetch(job_id, connection=rq.redis)
+            except Exception:
+                missing += 1
+                continue
+
+            meta = job.meta or {}
+            if meta.get("user_id") != x_user_id:
+                skipped_unowned += 1
+                continue
+
+            status = job.get_status()
+            if status == "started":
+                skipped_running += 1
+                continue
+            if status == "queued" and not include_queued:
+                skipped_queued += 1
+                continue
+
+            # Best-effort removal from queue/registries, then delete job key.
+            try:
+                rq.queue.remove(job_id)
+            except Exception:
+                pass
+            for registry in (started_registry, finished_registry, failed_registry):
+                try:
+                    registry.remove(job_id, delete_job=False)
+                except Exception:
+                    pass
+            try:
+                job.delete()
+            except Exception:
+                try:
+                    rq.redis.delete(job.key)
+                except Exception:
+                    pass
+
+            deleted += 1
+
+        return {
+            "user_id": x_user_id,
+            "deleted": deleted,
+            "skipped_running": skipped_running,
+            "skipped_queued": skipped_queued,
+            "skipped_unowned": skipped_unowned,
+            "missing": missing,
+            "include_queued": include_queued,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to purge jobs: {exc}") from exc
+
+
 @router.delete("/jobs/{job_id}")
 async def cancel_job(job_id: str, http_request: Request):
     """
@@ -612,99 +709,6 @@ async def delete_job(job_id: str, http_request: Request):
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to delete job: {exc}") from exc
-
-
-@router.delete("/jobs/purge")
-async def purge_user_jobs(
-    http_request: Request,
-    x_user_id: str | None = Header(default=None),
-    include_queued: bool = False,
-):
-    """
-    Delete non-running job records associated with the current user from Redis/RQ.
-
-    - Default: deletes finished/failed/etc jobs, but keeps queued jobs.
-    - Set include_queued=true to also delete queued jobs.
-    """
-    rq = _get_rq_or_reconnect(http_request)
-
-    if not rq or not rq.available or not rq.redis or not rq.queue:
-        raise HTTPException(status_code=503, detail="Job queue not available.")
-    if not x_user_id:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
-    try:
-        from rq.job import Job
-        from rq.registry import FailedJobRegistry, FinishedJobRegistry, StartedJobRegistry
-
-        started_registry = StartedJobRegistry(queue=rq.queue)
-        finished_registry = FinishedJobRegistry(queue=rq.queue)
-        failed_registry = FailedJobRegistry(queue=rq.queue)
-
-        candidate_ids = set(rq.queue.job_ids)
-        candidate_ids.update(started_registry.get_job_ids())
-        candidate_ids.update(finished_registry.get_job_ids())
-        candidate_ids.update(failed_registry.get_job_ids())
-
-        deleted = 0
-        skipped_running = 0
-        skipped_unowned = 0
-        skipped_queued = 0
-        missing = 0
-
-        for job_id in candidate_ids:
-            try:
-                job = Job.fetch(job_id, connection=rq.redis)
-            except Exception:
-                missing += 1
-                continue
-
-            meta = job.meta or {}
-            if meta.get("user_id") != x_user_id:
-                skipped_unowned += 1
-                continue
-
-            status = job.get_status()
-            if status == "started":
-                skipped_running += 1
-                continue
-            if status == "queued" and not include_queued:
-                skipped_queued += 1
-                continue
-
-            # Best-effort removal from queue/registries, then delete job key.
-            try:
-                rq.queue.remove(job_id)
-            except Exception:
-                pass
-            for registry in (started_registry, finished_registry, failed_registry):
-                try:
-                    registry.remove(job_id, delete_job=False)
-                except Exception:
-                    pass
-            try:
-                job.delete()
-            except Exception:
-                try:
-                    rq.redis.delete(job.key)
-                except Exception:
-                    pass
-
-            deleted += 1
-
-        return {
-            "user_id": x_user_id,
-            "deleted": deleted,
-            "skipped_running": skipped_running,
-            "skipped_queued": skipped_queued,
-            "skipped_unowned": skipped_unowned,
-            "missing": missing,
-            "include_queued": include_queued,
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to purge jobs: {exc}") from exc
 
 
 @router.get("/queue")
