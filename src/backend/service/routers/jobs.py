@@ -494,15 +494,21 @@ async def retry_job(job_id: str, http_request: Request):
 
 
 @router.post("/jobs/{job_id}/stop")
-async def stop_job(job_id: str, http_request: Request):
+async def stop_job(
+    job_id: str,
+    http_request: Request,
+    hard: bool = False,
+):
     """
     Request a running job to stop.
 
     Sets a flag in job meta that the worker checks between phases/epochs.
 
-    For phases that may take a very long time (e.g. reflectivity generation), we also
-    send an RQ `stop-job` command to kill the current workhorse. This is the only
-    reliable way to stop code that doesn't yield back to Python for long periods.
+    For phases that may take a very long time (or can hang in a C/IO call), we can
+    also send an RQ `stop-job` command to kill the current workhorse.
+
+    - Default: only hard-stop for non-training phases.
+    - hard=true: always send a hard-stop command (useful if training is stuck mid-epoch).
     """
     rq = _get_rq_or_reconnect(http_request)
 
@@ -529,7 +535,7 @@ async def stop_job(job_id: str, http_request: Request):
 
         # If we aren't in the training loop yet, prefer a hard stop.
         worker_phase = meta.get("status")
-        should_hard_stop = worker_phase not in {"training"}
+        should_hard_stop = bool(hard) or worker_phase not in {"training"}
         hard_stop_sent = False
         hard_stop_error: str | None = None
         if should_hard_stop:
