@@ -365,6 +365,52 @@ def run_rq_worker_b200(lock_value: str):
     _run_rq_worker_impl(lock_value, "B200")
 
 
+@app.function(
+    image=image_b200,
+    gpu="B200",
+    timeout=10 * 60,
+)
+def torch_diagnostics_b200():
+    """Sanity-check torch build/runtime on a B200 container."""
+    import subprocess
+
+    import torch
+
+    out: dict[str, object] = {
+        "torch.__version__": getattr(torch, "__version__", None),
+        "torch.version.cuda": getattr(getattr(torch, "version", None), "cuda", None),
+    }
+    try:
+        out["torch.cuda.get_arch_list"] = (
+            list(torch.cuda.get_arch_list()) if getattr(torch.cuda, "get_arch_list", None) else None
+        )
+    except Exception as exc:
+        out["torch.cuda.get_arch_list"] = f"error: {exc}"
+
+    try:
+        out["torch.cuda.is_available"] = bool(torch.cuda.is_available())
+    except Exception as exc:
+        out["torch.cuda.is_available"] = f"error: {exc}"
+
+    try:
+        out["torch.cuda.get_device_capability"] = tuple(torch.cuda.get_device_capability())
+    except Exception as exc:
+        out["torch.cuda.get_device_capability"] = f"error: {exc}"
+
+    try:
+        out["torch.cuda.get_device_name"] = str(torch.cuda.get_device_name(0))
+    except Exception as exc:
+        out["torch.cuda.get_device_name"] = f"error: {exc}"
+
+    try:
+        out["nvidia-smi"] = subprocess.check_output(["nvidia-smi"], text=True, stderr=subprocess.STDOUT)
+    except Exception as exc:
+        out["nvidia-smi"] = f"error: {exc}"
+
+    print(out)
+    return out
+
+
 # Backwards compatibility alias
 def run_rq_worker_burst(lock_value: str):
     """Deprecated: Use run_rq_worker_t4 instead."""
