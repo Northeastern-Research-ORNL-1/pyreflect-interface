@@ -114,7 +114,7 @@ export default function ParameterPanel({
   const settingsPaths = backendStatus?.settings_paths;
   const settingsStatus = backendStatus?.settings_status;
   const stripKnownExtension = (path: string): string =>
-    path.replace(/\.(npy|pth|pt|yml|yaml)$/i, '');
+    path.replace(/\.(npy|npz|json|pth|pt|yml|yaml)$/i, '');
   const stripLabelSuffix = (label: string): string => label.replace(/\s*\([^)]*\)\s*$/, '');
   const getSettingPath = (role: UploadRole): string | undefined => {
     if (!settingsPaths) return undefined;
@@ -169,7 +169,7 @@ export default function ParameterPanel({
     nr_train: 'NR Train (.npy)',
     sld_train: 'SLD Train (.npy)',
     experimental_nr: 'Experimental NR (.npy)',
-    normalization_stats: 'Normalization Stats (.npy)',
+    normalization_stats: 'Normalization Stats (.npz/.json)',
     nr_sld_model: 'NR→SLD Model (.pth/.pt)',
     sld_chi_experimental_profile: 'SLD→Chi Experimental (.npy)',
     sld_chi_model_sld_file: 'SLD→Chi SLD Train (.npy)',
@@ -243,7 +243,7 @@ export default function ParameterPanel({
     nr_train: '.npy',
     sld_train: '.npy',
     experimental_nr: '.npy',
-    normalization_stats: '.npy',
+    normalization_stats: '.npz,.json',
     nr_sld_model: '.pth,.pt',
     sld_chi_experimental_profile: '.npy',
     sld_chi_model_sld_file: '.npy',
