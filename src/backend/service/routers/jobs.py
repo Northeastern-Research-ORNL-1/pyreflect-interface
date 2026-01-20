@@ -492,9 +492,9 @@ async def retry_job(job_id: str, http_request: Request):
 @router.post("/jobs/{job_id}/stop")
 async def stop_job(job_id: str, http_request: Request):
     """
-    Request a running job to stop after the current epoch.
+    Request a running job to stop.
 
-    Sets a flag in job meta that the worker checks between epochs.
+    Sets a flag in job meta that the worker checks between phases/epochs.
     """
     rq = _get_rq_or_reconnect(http_request)
 
@@ -516,7 +516,11 @@ async def stop_job(job_id: str, http_request: Request):
         job.meta = meta
         job.save_meta()
 
-        return {"job_id": job_id, "status": "stop_requested", "message": "Stop requested. Job will stop after current epoch."}
+        return {
+            "job_id": job_id,
+            "status": "stop_requested",
+            "message": "Stop requested. Job will stop after the current generation chunk or epoch.",
+        }
 
     except HTTPException:
         raise

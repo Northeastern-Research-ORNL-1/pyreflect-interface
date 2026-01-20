@@ -68,8 +68,16 @@ def run_training_job(
 
     meta_flush_interval_s = float(os.getenv("RQ_META_FLUSH_INTERVAL_S", "1.0"))
     max_log_lines = int(os.getenv("RQ_MAX_LOG_LINES", "250"))
+    stop_poll_interval_s = float(os.getenv("RQ_STOP_POLL_INTERVAL_S", "1.0"))
     last_meta_flush = 0.0
     pending_meta: dict[str, Any] = {}
+    last_stop_poll = 0.0
+    cached_stop_requested = False
+
+    class StopRequested(RuntimeError):
+        def __init__(self, phase: str):
+            super().__init__(f"Stop requested during {phase}")
+            self.phase = phase
 
     def _flush_meta(*, force: bool = False) -> None:
         nonlocal last_meta_flush, pending_meta
@@ -90,6 +98,28 @@ def run_training_job(
 
         pending_meta = {}
         last_meta_flush = now
+
+    def _get_stop_requested() -> bool:
+        """Refresh job meta periodically and read stop_requested flag."""
+        nonlocal last_stop_poll, cached_stop_requested
+        if not job:
+            return False
+
+        now = time.monotonic()
+        if (now - last_stop_poll) < stop_poll_interval_s:
+            return cached_stop_requested
+
+        try:
+            meta = job.get_meta(refresh=True) or {}
+        except Exception:
+            meta = job.meta or {}
+        cached_stop_requested = bool(meta.get("stop_requested"))
+        last_stop_poll = now
+        return cached_stop_requested
+
+    def _raise_if_stopped(phase: str) -> None:
+        if _get_stop_requested():
+            raise StopRequested(phase)
 
     def set_meta(fields: dict[str, Any], *, force: bool = False) -> None:
         """
@@ -239,116 +269,174 @@ def run_training_job(
 
     total_start = time.perf_counter()
 
-    # =====================
-    # Data Generation
-    # =====================
-    log(f"Generating {num_curves} synthetic curves with {num_film_layers} film layers...")
-    set_meta({"status": "generating"})
+    try:
+        # =====================
+        # Data Generation
+        # =====================
+        log(f"Generating {num_curves} synthetic curves with {num_film_layers} film layers...")
+        set_meta({"status": "generating"})
 
-    gen_start = time.perf_counter()
-    data_generator = ReflectivityDataGenerator(num_layers=num_film_layers)
-    nr_curves, sld_curves = data_generator.generate(num_curves)
-    gen_time = time.perf_counter() - gen_start
+        gen_start = time.perf_counter()
+        data_generator = ReflectivityDataGenerator(num_layers=num_film_layers)
 
-    log(f"   Generated NR shape: {nr_curves.shape}, SLD shape: {sld_curves.shape}")
-    log(f"Generation took {gen_time:.2f}s")
+        # Generation can be extremely slow (refl1d loops). Generate in chunks so we
+        # can honor stop requests and provide basic progress.
+        generation_chunk_size = int(os.getenv("RQ_GENERATION_CHUNK_SIZE", "50"))
+        if generation_chunk_size <= 0:
+            generation_chunk_size = num_curves
 
-    # =====================
-    # Preprocessing
-    # =====================
-    log("Preprocessing data...")
-    set_meta({"status": "preprocessing"})
+        _raise_if_stopped("generation")
+        first_n = min(num_curves, max(1, generation_chunk_size))
+        nr0, sld0 = data_generator.generate(first_n)
 
-    nr_log = np.array(nr_curves, copy=True)
-    nr_log[:, 1, :] = np.log10(np.clip(nr_log[:, 1, :], 1e-8, None))
-    nr_stats = _compute_norm_stats(nr_log)
-    normalized_nr = DataProcessor.normalize_xy_curves(nr_curves, apply_log=True, min_max_stats=nr_stats)
+        # Pre-allocate full arrays to avoid holding many chunk objects.
+        nr_curves = np.empty((num_curves,) + tuple(nr0.shape[1:]), dtype=nr0.dtype)
+        sld_curves = np.empty((num_curves,) + tuple(sld0.shape[1:]), dtype=sld0.dtype)
+        nr_curves[:first_n] = nr0
+        sld_curves[:first_n] = sld0
+        generated = first_n
 
-    sld_stats = _compute_norm_stats(sld_curves)
-    normalized_sld = DataProcessor.normalize_xy_curves(sld_curves, apply_log=False, min_max_stats=sld_stats)
+        set_meta({"generation": {"done": generated, "total": num_curves}})
+        if generated < num_curves:
+            log(f"   Generated {generated}/{num_curves} curves...")
 
-    reshaped_nr = normalized_nr[:, 1:2, :]
+        while generated < num_curves:
+            _raise_if_stopped("generation")
+            n = min(generation_chunk_size, num_curves - generated)
+            nr_chunk, sld_chunk = data_generator.generate(n)
+            nr_curves[generated : generated + n] = nr_chunk
+            sld_curves[generated : generated + n] = sld_chunk
+            generated += n
+            set_meta({"generation": {"done": generated, "total": num_curves}})
+            log(f"   Generated {generated}/{num_curves} curves...")
 
-    # =====================
-    # Training
-    # =====================
-    log(f"Training CNN model ({epochs} epochs, batch size {batch_size})...")
-    set_meta({"status": "training"})
+        gen_time = time.perf_counter() - gen_start
 
-    model = CNN(layers=layers, dropout_prob=dropout).to(device)
-    model.train()
+        log(f"   Generated NR shape: {nr_curves.shape}, SLD shape: {sld_curves.shape}")
+        log(f"Generation took {gen_time:.2f}s")
 
-    list_arrays = DataProcessor.split_arrays(reshaped_nr, normalized_sld, size_split=SPLIT_RATIO)
-    tensor_arrays = DataProcessor.convert_tensors(list_arrays)
-    _, _, _, train_loader, valid_loader, _ = DataProcessor.get_dataloaders(*tensor_arrays, batch_size=batch_size)
+        _raise_if_stopped("post_generation")
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
-    loss_fn = torch.nn.MSELoss()
+        # =====================
+        # Preprocessing
+        # =====================
+        log("Preprocessing data...")
+        set_meta({"status": "preprocessing"})
 
-    epoch_list = []
-    train_losses = []
-    val_losses = []
-
-    stopped_early = False
-    training_start = time.perf_counter()
-    
-    for epoch in range(epochs):
-        model.train()
-        running_loss = 0.0
-        
-        # Progress bar for each epoch showing batch progress
-        batch_pbar = tqdm(
-            train_loader,
-            desc=f"Epoch {epoch + 1}/{epochs}",
-            unit="batch",
-            dynamic_ncols=True,
-            leave=True,
+        _raise_if_stopped("preprocessing")
+        nr_log = np.array(nr_curves, copy=True)
+        nr_log[:, 1, :] = np.log10(np.clip(nr_log[:, 1, :], 1e-8, None))
+        nr_stats = _compute_norm_stats(nr_log)
+        normalized_nr = DataProcessor.normalize_xy_curves(
+            nr_curves,
+            apply_log=True,
+            min_max_stats=nr_stats,
         )
-        for X_batch, y_batch in batch_pbar:
-            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
-            optimizer.zero_grad()
-            outputs = model(X_batch)
-            loss = loss_fn(outputs, y_batch)
-            loss.backward()
-            optimizer.step()
-            running_loss += loss.item()
-            # Show running average loss
-            batch_pbar.set_postfix(loss=f"{running_loss / (batch_pbar.n + 1):.4f}")
-        
-        train_loss = running_loss / len(train_loader)
 
-        model.eval()
-        val_running_loss = 0.0
-        with torch.no_grad():
-            for X_batch, y_batch in valid_loader:
+        _raise_if_stopped("preprocessing")
+        sld_stats = _compute_norm_stats(sld_curves)
+        normalized_sld = DataProcessor.normalize_xy_curves(
+            sld_curves,
+            apply_log=False,
+            min_max_stats=sld_stats,
+        )
+
+        reshaped_nr = normalized_nr[:, 1:2, :]
+
+        _raise_if_stopped("post_preprocessing")
+
+        # =====================
+        # Training
+        # =====================
+        log(f"Training CNN model ({epochs} epochs, batch size {batch_size})...")
+        set_meta({"status": "training"})
+
+        model = CNN(layers=layers, dropout_prob=dropout).to(device)
+        model.train()
+
+        list_arrays = DataProcessor.split_arrays(reshaped_nr, normalized_sld, size_split=SPLIT_RATIO)
+        tensor_arrays = DataProcessor.convert_tensors(list_arrays)
+        _, _, _, train_loader, valid_loader, _ = DataProcessor.get_dataloaders(
+            *tensor_arrays,
+            batch_size=batch_size,
+        )
+
+        optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+        loss_fn = torch.nn.MSELoss()
+
+        epoch_list = []
+        train_losses = []
+        val_losses = []
+
+        stopped_early = False
+        training_start = time.perf_counter()
+
+        for epoch in range(epochs):
+            model.train()
+            running_loss = 0.0
+
+            # Progress bar for each epoch showing batch progress
+            batch_pbar = tqdm(
+                train_loader,
+                desc=f"Epoch {epoch + 1}/{epochs}",
+                unit="batch",
+                dynamic_ncols=True,
+                leave=True,
+            )
+            for X_batch, y_batch in batch_pbar:
                 X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+                optimizer.zero_grad()
                 outputs = model(X_batch)
-                val_running_loss += loss_fn(outputs, y_batch).item()
-        val_loss = val_running_loss / len(valid_loader)
+                loss = loss_fn(outputs, y_batch)
+                loss.backward()
+                optimizer.step()
+                running_loss += loss.item()
+                # Show running average loss
+                batch_pbar.set_postfix(loss=f"{running_loss / (batch_pbar.n + 1):.4f}")
 
-        epoch_list.append(epoch + 1)
-        train_losses.append(train_loss)
-        val_losses.append(val_loss)
+            train_loss = running_loss / len(train_loader)
 
-        # Log final epoch stats after progress bar completes
-        print(f"  → Train: {train_loss:.6f}, Val: {val_loss:.6f}", flush=True)
-        
-        update_progress(epoch + 1, epochs, train_loss, val_loss)
+            model.eval()
+            val_running_loss = 0.0
+            with torch.no_grad():
+                for X_batch, y_batch in valid_loader:
+                    X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+                    outputs = model(X_batch)
+                    val_running_loss += loss_fn(outputs, y_batch).item()
+            val_loss = val_running_loss / len(valid_loader)
 
-        # Check for stop request after each epoch
-        if job:
-            try:
-                meta = job.get_meta(refresh=True) or {}
-            except Exception:
-                meta = job.meta or {}
-            if meta.get("stop_requested"):
-                log(f"⚠️ Stop requested - stopping after epoch {epoch + 1}")
+            epoch_list.append(epoch + 1)
+            train_losses.append(train_loss)
+            val_losses.append(val_loss)
+
+            # Log final epoch stats after progress bar completes
+            print(f"  -> Train: {train_loss:.6f}, Val: {val_loss:.6f}", flush=True)
+
+            update_progress(epoch + 1, epochs, train_loss, val_loss)
+
+            # Check for stop request after each epoch
+            if _get_stop_requested():
+                log(f"Stop requested - stopping after epoch {epoch + 1}")
                 stopped_early = True
                 break
 
-    training_time = time.perf_counter() - training_start
-    if stopped_early:
-        log(f"Training stopped early after {len(epoch_list)} epochs")
+        training_time = time.perf_counter() - training_start
+        if stopped_early:
+            set_meta({"stopped_early": True})
+            log(f"Training stopped early after {len(epoch_list)} epochs")
+
+    except StopRequested as exc:
+        log(str(exc))
+        set_meta(
+            {
+                "status": "stopped",
+                "stopped_phase": exc.phase,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "logs": logs,
+            },
+            force=True,
+        )
+        return {"stopped": True, "phase": exc.phase}
 
     # =====================
     # Save Model
@@ -444,7 +532,7 @@ def run_training_job(
 
     # Compute NR from predicted SLD
     computed_nr = gt_nr[1].tolist()
-    if PYREFLECT.compute_nr_available and compute_nr_from_sld is not None:
+    if PYREFLECT.compute_nr_available and compute_nr_from_sld is not None and not _get_stop_requested():
         log("Computing NR from predicted SLD...")
         try:
             pred_sld_profile = (pred_sld_z, pred_sld_y)
@@ -453,7 +541,10 @@ def run_training_job(
         except Exception as exc:
             log(f"Warning: Could not compute NR from predicted SLD: {exc}")
     else:
-        log("Warning: compute_nr_from_sld not available; using ground truth NR.")
+        if _get_stop_requested():
+            log("Stop requested - skipping compute_nr_from_sld; using ground truth NR.")
+        else:
+            log("Warning: compute_nr_from_sld not available; using ground truth NR.")
 
     # Calculate metrics
     sample_indices = np.linspace(0, len(pred_sld_y) - 1, 50, dtype=int)
