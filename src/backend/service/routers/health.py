@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header
 
-from ..config import IS_PRODUCTION, LIMITS
+from ..config import IS_PRODUCTION
 from ..schemas import FilmLayer, GeneratorParams, TrainingParams
+from ..services.limits_access import get_effective_limits
 from ..services.pyreflect_runtime import PYREFLECT
 
 router = APIRouter()
@@ -15,8 +16,16 @@ async def health_check():
 
 
 @router.get("/limits")
-async def get_limits():
-    return {"production": IS_PRODUCTION, "limits": LIMITS}
+async def get_limits(
+    x_user_id: str | None = Header(default=None),
+):
+    limits, access_granted, limit_source = get_effective_limits(user_id=x_user_id)
+    return {
+        "production": IS_PRODUCTION,
+        "limits": limits,
+        "access_granted": access_granted,
+        "limit_source": limit_source,
+    }
 
 
 @router.get("/defaults")
@@ -32,4 +41,3 @@ async def get_defaults():
         "generator": GeneratorParams(),
         "training": TrainingParams(),
     }
-

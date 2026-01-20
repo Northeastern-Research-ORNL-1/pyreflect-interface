@@ -16,6 +16,8 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from ..config import (
+    ADMIN_TOKEN,
+    IS_PRODUCTION,
     MODAL_APP_NAME,
     MODAL_FUNCTION_NAME,
     MODAL_INSTANT_SPAWN,
@@ -31,6 +33,9 @@ from ..integrations.redis_queue import (
     normalize_redis_url,
 )
 from ..schemas import GenerateRequest, validate_limits
+from ..services.limits_access import get_effective_limits
+from ..services.guards import require_admin_token
+from ..services.rate_limit import limit_jobs_submit
 
 router = APIRouter()
 
@@ -146,6 +151,8 @@ async def submit_job(
     Returns immediately with a job_id that can be used to poll for status.
     If the queue is not available, falls back to synchronous execution.
     """
+    limit_jobs_submit(http_request, x_user_id)
+
     rq = _get_rq_or_reconnect(http_request)
 
     if not rq or not rq.available:
@@ -181,8 +188,9 @@ async def submit_job(
             # Best-effort only; enqueue may still fail later with a clear error.
             pass
 
-    # Validate limits
-    validate_limits(request.generator, request.training)
+    # Validate limits (may be unlocked for whitelisted users)
+    effective_limits, _, _ = get_effective_limits(user_id=x_user_id)
+    validate_limits(request.generator, request.training, limits=effective_limits)
 
     # Build job parameters
     job_params = {
@@ -821,13 +829,22 @@ async def queue_status(
 
 
 @router.post("/queue/spawn")
-async def spawn_remote_worker(http_request: Request):
+async def spawn_remote_worker(
+    http_request: Request,
+    x_admin_token: str | None = Header(default=None),
+):
     """
     Debug endpoint: attempt to trigger a remote Modal worker spawn immediately.
 
     Useful to diagnose why instant spawn isn't happening (e.g. Modal not installed
     on backend, missing Modal auth, Redis lock held).
     """
+    require_admin_token(
+        is_production=IS_PRODUCTION,
+        admin_token=ADMIN_TOKEN,
+        x_admin_token=x_admin_token,
+    )
+
     rq = _get_rq_or_reconnect(http_request)
     if not rq or not rq.available:
         raise HTTPException(status_code=503, detail="Job queue not available.")

@@ -200,7 +200,9 @@ export function useDownloadBundle({
       let modelSource: string | null = null;
       if (bundleSelection.includeModel && bundlePayload.result.model_id) {
         try {
-          const res = await fetch(`${apiUrl}/api/models/${bundlePayload.result.model_id}/info`);
+          const res = await fetch(`${apiUrl}/api/models/${bundlePayload.result.model_id}/info`, {
+            headers: userId ? { 'X-User-ID': userId } : undefined,
+          });
           if (res.ok) {
             const data = await res.json();
             if (typeof data.size_mb === 'number') {
@@ -233,7 +235,7 @@ export function useDownloadBundle({
     return () => {
       cancelled = true;
     };
-  }, [showBundleConfirm, bundlePayload, exportPngs, bundleSelection, apiUrl]);
+  }, [showBundleConfirm, bundlePayload, exportPngs, bundleSelection, apiUrl, userId]);
 
   const handleExportAll = useCallback(async () => {
     if (!graphData) return;
@@ -375,12 +377,18 @@ export function useDownloadBundle({
         }
 
         if (bundleSelection.includeModel && resolvedResult.model_id) {
-          const modelRes = await fetch(`${apiUrl}/api/models/${resolvedResult.model_id}`);
+          if (!userId) {
+            addLog('Sign in to download model file.');
+          } else {
+            const modelRes = await fetch(`${apiUrl}/api/models/${resolvedResult.model_id}`, {
+              headers: { 'X-User-ID': userId },
+            });
           if (modelRes.ok) {
             const modelBuffer = await modelRes.arrayBuffer();
             files[`model_${resolvedResult.model_id}.pth`] = new Uint8Array(modelBuffer);
           } else {
             addLog('Model file not found for this run.');
+          }
           }
         } else if (bundleSelection.includeModel && !resolvedResult.model_id) {
           addLog('No model file associated with this run.');
@@ -407,7 +415,7 @@ export function useDownloadBundle({
         addLog(`Download error: ${errorMsg}`);
       }
     },
-    [graphData, currentParams, exportPngs, bundleSelection, addLog, apiUrl]
+    [graphData, currentParams, exportPngs, bundleSelection, addLog, apiUrl, userId]
   );
 
   const handleDownloadBundleClick = useCallback(() => {

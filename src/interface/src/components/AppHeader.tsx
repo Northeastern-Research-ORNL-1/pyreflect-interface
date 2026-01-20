@@ -27,6 +27,8 @@ type AppHeaderProps = {
   epochProgress: EpochProgress;
   hasGraphData: boolean;
   session: Session | null;
+  limitsAccessGranted: boolean;
+  onOpenLimitsAccess: () => void;
   onOpenHistory: () => void;
   onImportJson: () => void;
   onExportJson: () => void;
@@ -40,6 +42,8 @@ export default function AppHeader({
   epochProgress,
   hasGraphData,
   session,
+  limitsAccessGranted,
+  onOpenLimitsAccess,
   onOpenHistory,
   onImportJson,
   onExportJson,
@@ -123,9 +127,15 @@ export default function AppHeader({
         ? `Spawning GPU worker (queued: ${queuedJobs})`
         : remoteGpuEnabled
           ? 'Remote GPU mode enabled (Modal)'
-          : hasCpuWorker
-            ? 'CPU worker connected'
-            : 'No workers connected';
+    : hasCpuWorker
+      ? 'CPU worker connected'
+      : 'No workers connected';
+
+  const limitsTooltip = !session
+    ? 'Sign in to check limits'
+    : limitsAccessGranted
+      ? 'Limits unlocked'
+      : 'Limits locked';
 
   return (
     <header className="header">
@@ -178,6 +188,49 @@ export default function AppHeader({
       </div>
       <nav className="header__nav">
         <div className="header__actions-desktop">
+          <button
+            className="header__export-btn"
+            onClick={onOpenLimitsAccess}
+            title={limitsTooltip}
+            aria-label="Limits access"
+            style={
+              limitsAccessGranted
+                ? { borderColor: '#10b981', color: '#10b981' }
+                : undefined
+            }
+          >
+            {limitsAccessGranted ? (
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M7 11V7a5 5 0 0 1 9.9-1" />
+                <rect x="5" y="11" width="14" height="10" rx="2" />
+              </svg>
+            ) : (
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="5" y="11" width="14" height="10" rx="2" />
+                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+              </svg>
+            )}
+          </button>
           <a
             className="header__export-btn"
             href="https://github.com/Northeastern-Research-ORNL-1/pyreflect-interface"
@@ -270,6 +323,48 @@ export default function AppHeader({
           </button>
           {showActionsMenu && (
             <div className="header__dropdown">
+              <button
+                className="header__dropdown-item"
+                onClick={() => {
+                  onOpenLimitsAccess();
+                  setShowActionsMenu(false);
+                  setShowJsonMenuMobile(false);
+                }}
+                title={limitsTooltip}
+              >
+                {limitsAccessGranted ? (
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M7 11V7a5 5 0 0 1 9.9-1" />
+                    <rect x="5" y="11" width="14" height="10" rx="2" />
+                  </svg>
+                ) : (
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <rect x="5" y="11" width="14" height="10" rx="2" />
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                  </svg>
+                )}
+                <span>Limits</span>
+              </button>
               <a
                 className="header__dropdown-item"
                 href="https://github.com/Northeastern-Research-ORNL-1/pyreflect-interface"

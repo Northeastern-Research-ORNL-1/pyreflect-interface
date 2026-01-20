@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -8,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi import File, Form, Header, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 
-from ..config import HF_REPO_ID, MAX_LOCAL_MODELS, MODELS_DIR
+from ..config import HF_REPO_ID, IS_PRODUCTION, MAX_LOCAL_MODELS, MODELS_DIR
 from ..integrations.huggingface import get_remote_model_info
 from ..services.local_model_limit import (
     delete_local_model,
@@ -16,8 +17,38 @@ from ..services.local_model_limit import (
     models_dir_lock,
     write_model_meta,
 )
+from ..services.guards import require_user_id
 
 router = APIRouter()
+
+
+def _require_user_id(x_user_id: str | None) -> None:
+    require_user_id(is_production=IS_PRODUCTION, x_user_id=x_user_id)
+
+
+def _model_meta_user_id(model_id: str) -> str | None:
+    meta_path = MODELS_DIR / f"{model_id}.meta.json"
+    if not meta_path.exists():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    user_id = meta.get("user_id") if isinstance(meta, dict) else None
+    return user_id if isinstance(user_id, str) else None
+
+
+def _require_model_access(model_id: str, x_user_id: str | None) -> None:
+    _require_user_id(x_user_id)
+    owner = _model_meta_user_id(model_id)
+
+    # In production, deny access to models without owner metadata
+    if IS_PRODUCTION and owner is None:
+        raise HTTPException(status_code=403, detail="Model access denied (no owner metadata)")
+
+    # Deny if owner exists and doesn't match the requesting user
+    if owner and owner != x_user_id:
+        raise HTTPException(status_code=403, detail="Model access denied")
 
 def _require_upload_token(x_model_upload_token: str | None) -> None:
     expected = os.getenv("MODEL_UPLOAD_TOKEN")
@@ -96,9 +127,14 @@ async def upload_model(
 
 
 @router.get("/models/{model_id}")
-async def download_model(model_id: str):
+async def download_model(
+    model_id: str,
+    x_user_id: str | None = Header(default=None),
+):
     if not model_id or "/" in model_id or "\\" in model_id:
         raise HTTPException(status_code=400, detail="Invalid model ID")
+
+    _require_model_access(model_id, x_user_id)
 
     file_path = MODELS_DIR / f"{model_id}.pth"
     if file_path.exists():
@@ -116,9 +152,14 @@ async def download_model(model_id: str):
 
 
 @router.delete("/models/{model_id}")
-async def delete_model(model_id: str):
+async def delete_model(
+    model_id: str,
+    x_user_id: str | None = Header(default=None),
+):
     if not model_id or "/" in model_id or "\\" in model_id:
         raise HTTPException(status_code=400, detail="Invalid model ID")
+
+    _require_model_access(model_id, x_user_id)
 
     file_path = MODELS_DIR / f"{model_id}.pth"
     if not file_path.exists():
@@ -132,7 +173,15 @@ async def delete_model(model_id: str):
 
 
 @router.get("/models/{model_id}/info")
-async def get_model_info(model_id: str, http_request: Request):
+async def get_model_info(
+    model_id: str,
+    http_request: Request,
+    x_user_id: str | None = Header(default=None),
+):
+    if not model_id or "/" in model_id or "\\" in model_id:
+        raise HTTPException(status_code=400, detail="Invalid model ID")
+
+    _require_model_access(model_id, x_user_id)
     local_path = MODELS_DIR / f"{model_id}.pth"
     if local_path.exists():
         size_mb = local_path.stat().st_size / (1024 * 1024)

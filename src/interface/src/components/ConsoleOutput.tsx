@@ -15,15 +15,12 @@ export default function ConsoleOutput({ logs, isGenerating, startTimeMs }: Conso
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (startTimeMs === null) {
-      setElapsedMs(0);
-      return;
-    }
+    if (startTimeMs === null) return;
     const update = () => setElapsedMs(Date.now() - startTimeMs);
     update();
     const interval = setInterval(update, 500);
     return () => clearInterval(interval);
-  }, [isGenerating, startTimeMs]);
+  }, [startTimeMs]);
 
   useEffect(() => {
     if (scrollRef.current && isExpanded) {

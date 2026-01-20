@@ -42,19 +42,38 @@ _DEFAULT_LIMITS: dict[str, tuple[int | float, int | float]] = {
 }
 
 
-def _get_limit(key: str, local_val: int | float, prod_val: int | float) -> int | float:
-    if not IS_PRODUCTION:
-        return local_val
-    env_key = key.upper()
+def _parse_typed_env(env_key: str, default: int | float) -> int | float:
     env_val = os.getenv(env_key)
-    if env_val is not None:
-        return float(env_val) if isinstance(prod_val, float) else int(env_val)
-    return prod_val
+    if env_val is None:
+        return default
+    return float(env_val) if isinstance(default, float) else int(env_val)
 
 
-LIMITS: dict[str, int | float] = {
-    key: _get_limit(key, local, prod) for key, (local, prod) in _DEFAULT_LIMITS.items()
+# Always-available limit tables.
+LOCAL_LIMITS: dict[str, int | float] = {k: local for k, (local, _prod) in _DEFAULT_LIMITS.items()}
+PRODUCTION_LIMITS: dict[str, int | float] = {
+    k: _parse_typed_env(k.upper(), prod) for k, (_local, prod) in _DEFAULT_LIMITS.items()
 }
+
+
+# Effective limits for the current environment.
+LIMITS: dict[str, int | float] = PRODUCTION_LIMITS if IS_PRODUCTION else LOCAL_LIMITS
+
+
+def _parse_csv_env(name: str) -> list[str]:
+    raw = os.getenv(name) or ""
+    parts = [p.strip() for p in raw.split(",")]
+    return [p for p in parts if p]
+
+
+# Comma-separated list of user IDs that should receive local (unlocked) limits
+# even in production.
+#
+# NOTE: This is only as trustworthy as the `X-User-ID` header provided to the
+# backend. In a production deployment, ensure that the backend is not directly
+# reachable by untrusted clients (or add a proper auth layer), otherwise the
+# header can be spoofed.
+LIMITS_WHITELIST_USER_IDS: list[str] = _parse_csv_env("LIMITS_WHITELIST_USER_IDS")
 
 # =====================
 # Integrations
@@ -157,3 +176,6 @@ MODAL_SPAWN_LOCK_TTL_S = int(os.getenv("MODAL_SPAWN_LOCK_TTL_S", "900"))
 MODAL_POLL_URL = _squash_whitespace(_get_str_env("MODAL_POLL_URL"))
 # Optional shared secret to protect the poll endpoint (sent as `?token=...`).
 MODAL_TRIGGER_TOKEN = _get_str_env("MODAL_TRIGGER_TOKEN")
+
+# Optional admin token for debug endpoints.
+ADMIN_TOKEN = _get_str_env("ADMIN_TOKEN")
