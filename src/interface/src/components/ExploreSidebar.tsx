@@ -406,7 +406,6 @@ export default function ExploreSidebar({
 
       const data = await res.json();
       setHistory(data);
-      setHistoryLoadedOnce(true);
       return data as SavedGeneration[];
     } catch (err) {
       if (!opts?.silent) {
@@ -414,6 +413,9 @@ export default function ExploreSidebar({
       }
       return null;
     } finally {
+      // Mark that we've attempted at least one history fetch so the sidebar
+      // doesn't briefly show the empty state before the first request runs.
+      setHistoryLoadedOnce(true);
       if (!opts?.silent) {
         setLoading(false);
       }
@@ -903,7 +905,7 @@ export default function ExploreSidebar({
                 History not saved, please log in
               </div>
             </>
-          ) : loading && !historyLoadedOnce ? (
+          ) : !historyLoadedOnce ? (
             <div className={styles.emptyState}>Loading...</div>
           ) : error ? (
             <div className={styles.emptyState}>Error: {error}</div>

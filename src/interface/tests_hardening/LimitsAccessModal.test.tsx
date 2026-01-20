@@ -77,6 +77,11 @@ describe('LimitsAccessModal', () => {
     expect(screen.getByRole('button', { name: 'REFRESH' })).toBeDisabled();
   });
 
+  it('does not render a clear button', () => {
+    renderModal({ hasSession: true });
+    expect(screen.queryByRole('button', { name: 'CLEAR' })).toBeNull();
+  });
+
   it('hides generate button when not admin', () => {
     renderModal({ isAdmin: false });
     expect(screen.queryByRole('button', { name: 'GET MY CODE' })).toBeNull();
