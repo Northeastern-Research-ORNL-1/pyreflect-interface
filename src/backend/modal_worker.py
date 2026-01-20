@@ -35,36 +35,44 @@ poller_image = (
     .pip_install("fastapi", "redis", "rq")
 )
 
-TORCH_VERSION = "2.5.1+cu124"
 TORCH_INDEX_URL = "https://download.pytorch.org/whl/cu124"
 
-image = (
-    modal.Image.debian_slim(python_version="3.11")
-    # Align with backend requirements (NumPy 2.x) and keep Torch interop compatible.
-    .pip_install("numpy>=2.1.0")
-    # IMPORTANT: PyPI `torch` is often CPU-only. Install a CUDA wheel explicitly so
-    # the Modal GPU is actually used.
-    # NOTE: B200 (Blackwell, sm_100) requires CUDA 12.4+ builds, so we pin cu124.
-    # The CUDA wheels use a local version tag (e.g. `2.5.1+cu124`), so pin it
-    # explicitly to avoid accidentally pulling the CPU-only wheel from PyPI.
-    .pip_install(f"torch=={TORCH_VERSION}", index_url=TORCH_INDEX_URL)
-    .pip_install(
-        "redis",
-        "rq",
-        "scipy",
-        "scikit-learn",
-        "python-dotenv",
-        "requests",
-        "pymongo",
-        "huggingface_hub",
-        # Install the same pyreflect build as the backend (the PyPI `pyreflect`
-        # package is a different project and is missing required modules).
-        "pyreflect @ https://github.com/williamQyq/pyreflect/archive/refs/heads/main.zip",
+# B200 (Blackwell, sm_100) needs a torch wheel built with sm_100 support.
+# Older stable CUDA 12.4 wheels often top out at sm_90, which produces:
+#   "sm_100 is not compatible with the current PyTorch installation"
+# We use a newer CUDA runtime wheel for B200 to ensure sm_100 cubins are present.
+TORCH_INDEX_URL_B200 = "https://download.pytorch.org/whl/cu126"
+
+
+def _build_worker_image(*, torch_index_url: str) -> modal.Image:
+    return (
+        modal.Image.debian_slim(python_version="3.11")
+        # Align with backend requirements (NumPy 2.x) and keep Torch interop compatible.
+        .pip_install("numpy>=2.1.0")
+        # IMPORTANT: PyPI `torch` is often CPU-only. Install a CUDA wheel explicitly so
+        # the Modal GPU is actually used.
+        .pip_install("torch", index_url=torch_index_url)
+        .pip_install(
+            "redis",
+            "rq",
+            "scipy",
+            "scikit-learn",
+            "python-dotenv",
+            "requests",
+            "pymongo",
+            "huggingface_hub",
+            # Install the same pyreflect build as the backend (the PyPI `pyreflect`
+            # package is a different project and is missing required modules).
+            "pyreflect @ https://github.com/williamQyq/pyreflect/archive/refs/heads/main.zip",
+        )
+        # Bundle only the backend service package so the RQ worker can import
+        # `service.jobs.run_training_job` without pulling in unrelated repo files.
+        .add_local_dir(_SERVICE_DIR, remote_path="/root/backend/service")
     )
-    # Bundle only the backend service package so the RQ worker can import
-    # `service.jobs.run_training_job` without pulling in unrelated repo files.
-    .add_local_dir(_SERVICE_DIR, remote_path="/root/backend/service")
-)
+
+
+image = _build_worker_image(torch_index_url=TORCH_INDEX_URL)
+image_b200 = _build_worker_image(torch_index_url=TORCH_INDEX_URL_B200)
 
 def _normalize_redis_url(value: str) -> str:
     """
@@ -324,7 +332,7 @@ def run_rq_worker_h200(lock_value: str):
 
 
 @app.function(
-    image=image,
+    image=image_b200,
     gpu="B200",
     timeout=4 * 60 * 60,
     secrets=[modal.Secret.from_name("pyreflect-redis")],
