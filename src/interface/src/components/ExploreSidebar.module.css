@@ -244,6 +244,15 @@
   background: rgba(16, 185, 129, 0.1);
 }
 
+.jobActionPause {
+  border-color: #f59e0b;
+  color: #f59e0b;
+}
+
+.jobActionPause:hover {
+  background: rgba(245, 158, 11, 0.1);
+}
+
 .itemSubDate {
   font-size: 10px;
   color: var(--text-muted);
@@ -441,6 +450,16 @@
 
 .popupBtnResume:hover {
   background: #059669;
+}
+
+.popupBtnPause {
+  background: #f59e0b;
+  border-color: #f59e0b;
+  color: white;
+}
+
+.popupBtnPause:hover {
+  background: #d97706;
 }
 
 @media (max-width: 640px) {

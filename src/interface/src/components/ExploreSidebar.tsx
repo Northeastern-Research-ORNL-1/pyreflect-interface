@@ -138,6 +138,7 @@ export default function ExploreSidebar({
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [cancelJobId, setCancelJobId] = useState<string | null>(null);
   const [stopJobId, setStopJobId] = useState<string | null>(null);
+  const [pauseJobId, setPauseJobId] = useState<string | null>(null);
   const [retryJobId, setRetryJobId] = useState<string | null>(null);
   const [deleteJobId, setDeleteJobId] = useState<string | null>(null);
   const [purgeJobsOpen, setPurgeJobsOpen] = useState(false);
@@ -172,6 +173,11 @@ export default function ExploreSidebar({
   const requestStopJob = (e: React.MouseEvent, jobId: string) => {
     e.stopPropagation();
     setStopJobId(jobId);
+  };
+
+  const requestPauseJob = (e: React.MouseEvent, jobId: string) => {
+    e.stopPropagation();
+    setPauseJobId(jobId);
   };
 
   const requestRetryJob = (e: React.MouseEvent, jobId: string) => {
@@ -283,6 +289,25 @@ export default function ExploreSidebar({
     } catch (err) {
       console.error(err);
       alert('Failed to stop job');
+    }
+  };
+
+  const confirmPauseJob = async () => {
+    if (!pauseJobId) return;
+    const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    try {
+      const res = await fetch(`${API_URL}/api/jobs/${pauseJobId}/pause`, {
+        method: 'POST',
+        headers: userId ? { 'X-User-ID': userId } : undefined,
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw new Error(detail || 'Failed to pause job');
+      }
+      setPauseJobId(null);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to pause job');
     }
   };
 
@@ -680,12 +705,30 @@ export default function ExploreSidebar({
                 Stop running job?
                 <strong>{stopJobId.slice(0, 8)}</strong>
                 <span style={{ display: 'block', marginTop: '6px', fontSize: '12px', color: 'var(--text-muted)' }}>
-                  Training will stop after the current epoch completes.
+                  Training will stop without saving a checkpoint.
                 </span>
               </p>
               <div className={styles.popupActions}>
                 <button className={`${styles.popupBtn} ${styles.popupBtnCancel}`} onClick={() => setStopJobId(null)}>KEEP RUNNING</button>
                 <button className={`${styles.popupBtn} ${styles.popupBtnDelete}`} onClick={confirmStopJob}>STOP</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {pauseJobId && (
+          <div className={styles.deletePopupOverlay}>
+            <div className={styles.deletePopupContent}>
+              <p className={styles.popupText}>
+                Pause training?
+                <strong>{pauseJobId.slice(0, 8)}</strong>
+                <span style={{ display: 'block', marginTop: '6px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                  Saves checkpoint immediately and stops. You can resume later.
+                </span>
+              </p>
+              <div className={styles.popupActions}>
+                <button className={`${styles.popupBtn} ${styles.popupBtnCancel}`} onClick={() => setPauseJobId(null)}>KEEP RUNNING</button>
+                <button className={`${styles.popupBtn} ${styles.popupBtnPause}`} onClick={confirmPauseJob}>PAUSE</button>
               </div>
             </div>
           </div>
@@ -917,13 +960,22 @@ export default function ExploreSidebar({
                         </button>
                       )}
                       {job.status === 'started' && !job.meta?.stop_requested && (
-                        <button
-                          className={`${styles.jobActionBtn} ${styles.jobActionDanger}`}
-                          onClick={(e) => requestStopJob(e, job.job_id)}
-                          title="Stop training after current epoch"
-                        >
-                          Stop
-                        </button>
+                        <>
+                          <button
+                            className={`${styles.jobActionBtn} ${styles.jobActionPause}`}
+                            onClick={(e) => requestPauseJob(e, job.job_id)}
+                            title="Pause training (saves checkpoint for resume)"
+                          >
+                            Pause
+                          </button>
+                          <button
+                            className={`${styles.jobActionBtn} ${styles.jobActionDanger}`}
+                            onClick={(e) => requestStopJob(e, job.job_id)}
+                            title="Stop training (no checkpoint)"
+                          >
+                            Stop
+                          </button>
+                        </>
                       )}
                       {job.status === 'started' && job.meta?.stop_requested && (
                         <span className={styles.stoppingLabel}>Stopping...</span>
