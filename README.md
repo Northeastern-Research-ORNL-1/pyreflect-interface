@@ -8,7 +8,7 @@ A minimal, monochrome web interface for the [pyreflect](https://github.com/willi
 ## Version
 
 - **v0.1.2** — Production hardening + whitelist-only higher limits.
-- **v0.1.1** — GitHub auth, explore/history sidebar, and download bundle support.
+- **v0.1.1** — GitHub auth, explore/history sidebar, download bundle support, and GPU compute.
 
 ## Live Deployment
 
@@ -37,7 +37,7 @@ The hosted deployment runs with the full stack enabled: Redis job queue + Modal 
 ### Limits
 
 | Parameter     | Local   | Production |
-| ------------- | ------- | ---------- |
+|---------------|---------|------------|
 | Curves        | 100,000 | 5,000      |
 | Epochs        | 1,000   | 50         |
 | Batch Size    | 512     | 64         |
@@ -194,7 +194,7 @@ flowchart TB
 #### Data Sources
 
 | Field             | Source | Description                                              |
-| ----------------- | ------ | -------------------------------------------------------- |
+|-------------------|--------|----------------------------------------------------------|
 | `nr.groundTruth`  | refl1d | True reflectivity from physics simulation                |
 | `nr.computed`     | refl1d | Same as groundTruth (future: compute from predicted SLD) |
 | `sld.groundTruth` | refl1d | True SLD profile from physics simulation                 |
@@ -613,7 +613,7 @@ vercel
 ### 2. Set environment variable in Vercel dashboard
 
 | Variable              | Value                                                              |
-| --------------------- | ------------------------------------------------------------------ |
+|-----------------------|--------------------------------------------------------------------|
 | `NEXT_PUBLIC_API_URL` | `https://your-backend.railway.app` (or wherever backend is hosted) |
 
 ### 3. Configure backend CORS
@@ -667,7 +667,7 @@ Files from `pyreflect/datasets/` can be uploaded:
 ## API Endpoints
 
 | Endpoint                      | Method | Description                             |
-| ----------------------------- | ------ | --------------------------------------- |
+|-------------------------------|--------|-----------------------------------------|
 | `/api/health`                 | GET    | Health check                            |
 | `/api/limits`                 | GET    | Current limits + access status          |
 | `/api/defaults`               | GET    | Default parameters                      |
