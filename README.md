@@ -33,6 +33,18 @@ The hosted deployment runs with the full stack enabled: Redis job queue + Modal 
 - **State Persistence**: Parameters and results persist across browser refreshes
 - **Reset + Collapse**: One-click reset to example defaults and per-layer collapse/expand controls
 
+### Limits
+
+| Parameter     | Local   | Production |
+| ------------- | ------- | ---------- |
+| Curves        | 100,000 | 5,000      |
+| Epochs        | 1,000   | 50         |
+| Batch Size    | 512     | 64         |
+| CNN Layers    | 20      | 12         |
+| Dropout       | 0.9     | 0.5        |
+| Latent Dim    | 128     | 32         |
+| AE/MLP Epochs | 500     | 100        |
+
 ## Project Structure
 
 ```
@@ -53,85 +65,73 @@ pyreflect-interface/
 
 ### System Overview
 
+#### Frontend Layer
+
 ```mermaid
-flowchart TB
-    subgraph Browser["Browser (Next.js)"]
+flowchart LR
+    subgraph Browser["Browser"]
         UI[Next.js Frontend]
-        Charts["Dual-line Charts<br/>GroundTruth vs Predicted"]
+        Charts["Dual-line Charts"]
         LS[(localStorage)]
-        UI <--> LS
-        UI --> Charts
     end
 
+    UI <--> LS
+    UI --> Charts
+    UI -->|REST + SSE| API[FastAPI Backend]
+    API -->|groundTruth + predicted| Charts
+```
+
+#### Backend & Queue Layer
+
+```mermaid
+flowchart LR
     subgraph Backend["FastAPI Backend"]
         API[REST API]
-        SSE["SSE Stream (fallback)"]
-
-        subgraph Pipeline["ML Pipeline"]
-            Train[Training Loop]
-            Infer[Inference]
-            Denorm[Denormalize]
-        end
-
-        subgraph DataStore["Data Store"]
-            Config[settings.yml]
-            Models[(*.pth models)]
-            Curves[(*.npy curves)]
-        end
+        SSE[SSE Stream]
+        Pipeline[ML Pipeline]
+        DataStore[(Data Store)]
     end
 
     subgraph Queue["Redis + RQ"]
         RQ[(training queue)]
     end
 
-    subgraph Modal["Modal (GPU burst workers)"]
-        Poller[poll_queue_http (CPU)]
-        Worker[run_rq_worker_burst (T4 GPU)]
+    subgraph Modal["Modal GPU"]
+        Poller[poll_queue]
+        Worker[T4 GPU Worker]
     end
 
-    subgraph Integrations["Integrations"]
-        Mongo[(MongoDB history)]
-        HF[(Hugging Face models)]
-    end
-
-    subgraph PyReflect["pyreflect Package"]
-        Gen[ReflectivityDataGenerator]
-        CNN[CNN Model]
-        DP[DataProcessor]
-
-        subgraph Physics["refl1d / refnx"]
-            Refl[Reflectivity Calculator]
-            SLD[SLD Profile Generator]
-        end
-    end
-
-    UI -->|POST /api/jobs/submit| API
-    UI -->|GET /api/jobs/{job_id}| API
-    UI -->|GET /api/queue| API
-    UI -->|POST /api/generate/stream| SSE
-    UI -->|POST /api/upload| API
-    UI -->|GET /api/status| API
-    UI -->|GET /api/history| API
-    SSE -->|log, progress, result| UI
-
-    API -->|enqueue/poll| RQ
+    API --> RQ
     API -->|trigger| Poller
     Poller -->|spawn| Worker
     Worker -->|consume| RQ
+    API --> Pipeline
+    API --> DataStore
+```
+
+#### External Services
+
+```mermaid
+flowchart LR
+    Backend[FastAPI Backend]
+    Worker[Modal GPU Worker]
+
+    subgraph Storage["Integrations"]
+        Mongo[(MongoDB)]
+        HF[(Hugging Face)]
+    end
+
+    subgraph PyReflect["pyreflect"]
+        Gen[DataGenerator]
+        CNN[CNN Model]
+        Physics[refl1d / refnx]
+    end
+
+    Backend --> Mongo
+    Backend --> HF
     Worker --> Mongo
     Worker --> HF
-    API --> Mongo
-    API --> HF
-
-    API --> DataStore
-    API --> Gen
-    Gen --> Physics
-    Train --> CNN
-    CNN --> Infer
-    Infer --> Denorm
-    Denorm --> DP
-
-    SSE -->|groundTruth + predicted| Charts
+    Backend --> PyReflect
 ```
 
 ### Data Flow
@@ -195,74 +195,26 @@ flowchart TB
 
 ### Component Architecture
 
+#### Frontend Components
+
 ```mermaid
-flowchart TB
-    subgraph Frontend["Next.js Frontend"]
-        subgraph Pages["App Router"]
-            Page[page.tsx<br/>Main Layout]
-        end
-
-        subgraph Components["React Components"]
-            PP[ParameterPanel<br/>Sliders & Inputs]
-            EV[EditableValue<br/>Click-to-edit]
-            GD[GraphDisplay<br/>Dual-line Charts]
-            CO[ConsoleOutput<br/>Log Stream]
-        end
-
-        subgraph State["State Management"]
-            Layers2[filmLayers]
-            GenP[generatorParams]
-            TrainP[trainingParams]
-            GraphData[graphData]
-            Logs[consoleLogs]
-        end
-
-        subgraph Types["TypeScript Types"]
-            NRType["NRData {q, groundTruth, computed}"]
-            SLDType["SLDData {z, groundTruth, predicted}"]
-            GenResp[GenerateResponse]
-        end
+flowchart LR
+    subgraph Pages["App Router"]
+        Page[page.tsx]
     end
 
-    subgraph Backend2["FastAPI Backend"]
-        subgraph Endpoints["API Endpoints"]
-            Health[GET /health]
-            Generate[POST /generate]
-            Stream[POST /generate/stream]
-            Status[GET /status]
-            Upload[POST /upload]
-            Defaults[GET /defaults]
-        end
-
-        subgraph Models["Pydantic Models"]
-            NRModel["NRData {groundTruth, computed}"]
-            SLDModel["SLDData {groundTruth, predicted}"]
-            GR[GenerateResponse]
-        end
-
-        subgraph Core["Core Functions"]
-            GenPR[generate_with_pyreflect]
-            GenStream[generate_with_pyreflect_streaming]
-            Inference[CNN Inference + Denormalize]
-        end
+    subgraph Components["React Components"]
+        PP[ParameterPanel]
+        EV[EditableValue]
+        GD[GraphDisplay]
+        CO[ConsoleOutput]
     end
 
-    subgraph PyReflect2["pyreflect Package"]
-        subgraph InputMod["input/"]
-            DataGen[ReflectivityDataGenerator]
-            DataProc["DataProcessor<br/>normalize, denormalize"]
-        end
-
-        subgraph ModelsMod["models/"]
-            CNNMod[CNN]
-            AEMod[Autoencoder]
-            MLPMod[MLP]
-        end
-
-        subgraph ConfigMod["config/"]
-            LoadCfg[load_config]
-            Runtime[DEVICE]
-        end
+    subgraph State["State"]
+        Layers[filmLayers]
+        Params[params]
+        GraphData[graphData]
+        Logs[logs]
     end
 
     Page --> PP & GD & CO
@@ -270,13 +222,59 @@ flowchart TB
     PP --> State
     GD --> GraphData
     CO --> Logs
+```
 
-    Page -->|fetch| Endpoints
-    Stream -->|SSE| CO
+#### Backend Components
+
+```mermaid
+flowchart LR
+    subgraph Endpoints["API Endpoints"]
+        Health["health"]
+        Generate["generate"]
+        Stream["generate/stream"]
+        Jobs["jobs/*"]
+    end
+
+    subgraph Models["Pydantic Models"]
+        NRModel[NRData]
+        SLDModel[SLDData]
+        GR[GenerateResponse]
+    end
+
+    subgraph Core["Core Functions"]
+        GenPR[generate_with_pyreflect]
+        Inference[CNN Inference]
+    end
+
     Endpoints --> Core
-    Core --> Inference
-    Inference --> DataProc
-    Core --> PyReflect2
+    Core --> Models
+```
+
+#### pyreflect Package
+
+```mermaid
+flowchart TB
+    subgraph Generation["Data Generation"]
+        RDG["ReflectivityDataGenerator"]
+        Refl1d["refl1d/refnx physics"]
+    end
+
+    subgraph Training["Model Training"]
+        CNN["CNN"]
+        AE["Autoencoder"]
+        MLP["MLP"]
+    end
+
+    subgraph Processing["Data Processing"]
+        Norm["normalize"]
+        Denorm["denormalize"]
+    end
+
+    RDG -->|"generate NR+SLD curves"| Refl1d
+    Refl1d -->|"raw data"| Norm
+    Norm -->|"normalized"| CNN
+    CNN -->|"predictions"| Denorm
+    Denorm -->|"final SLD"| Output["Output"]
 ```
 
 ### Training Pipeline
@@ -328,7 +326,7 @@ sequenceDiagram
     F->>F: Render: solid=groundTruth, dashed=predicted
 ```
 
-## Quick Start
+## Local Setup
 
 ### Prerequisites
 
@@ -447,6 +445,8 @@ Minimum checklist (Redis host):
 
 If you can’t safely expose Redis publicly, use a managed Redis (Upstash / Redis Cloud) and point both the backend and Modal at it.
 
+### Troubleshooting
+
 #### Does `modal deploy` run when I start `uvicorn`?
 
 No. `uv run modal deploy ...` deploys the Modal app to Modal’s infra and runs independently. Starting `uvicorn` only starts the API server.
@@ -483,10 +483,12 @@ cd src/backend
 uv run modal run modal_worker.py::poll_queue
 ```
 
-### Troubleshooting
+#### Modal DNS error with `%0a` or spaces in hostname
 
 If you see a Modal DNS error with `%0a` or spaces in the hostname, your `MODAL_POLL_URL` value contains whitespace/newlines.
 Set `MODAL_POLL_URL` as a single line URL (no line wrapping) and restart the backend.
+
+#### Kill stuck processes
 
 ```bash
 # Kill process on port 8000
@@ -601,19 +603,6 @@ In your backend `.env`, add your Vercel URL:
 CORS_ORIGINS=http://localhost:3000,https://your-app.vercel.app
 ```
 
----
-
-**Production limits:**
-| Parameter | Local | Production |
-|-----------|-------|------------|
-| Curves | 100,000 | 5,000 |
-| Epochs | 1,000 | 50 |
-| Batch Size | 512 | 64 |
-| CNN Layers | 20 | 12 |
-| Dropout | 0.9 | 0.5 |
-| Latent Dim | 128 | 32 |
-| AE/MLP Epochs | 500 | 100 |
-
 ### 3. Using the Interface
 
 1. Adjust parameters in the left sidebar:
@@ -691,22 +680,6 @@ Files from `pyreflect/datasets/` can be uploaded:
 - **Frontend**: Next.js 16, React 19, TypeScript, Recharts
 - **Backend**: FastAPI, Pydantic, NumPy
 - **ML Package**: pyreflect (PyTorch, refl1d, refnx)
-
-## Development
-
-```bash
-# Frontend development
-cd src/interface
-bun dev
-
-# Backend development
-cd src/backend
-uv run uvicorn main:app --reload
-
-# Build for production
-cd src/interface
-bun run build
-```
 
 ## Credits
 
