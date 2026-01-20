@@ -35,35 +35,43 @@ class TrainingParams(BaseModel):
     mlpEpochs: int = Field(ge=1, le=500, default=50)
 
 
-def validate_limits(gen_params: GeneratorParams, train_params: TrainingParams) -> None:
+def validate_limits(
+    gen_params: GeneratorParams,
+    train_params: TrainingParams,
+    *,
+    limits: dict[str, int | float] | None = None,
+) -> None:
+    effective_limits = limits or LIMITS
     errors: list[str] = []
-    if gen_params.numCurves > LIMITS["max_curves"]:
-        errors.append(f"numCurves ({gen_params.numCurves}) exceeds limit ({LIMITS['max_curves']})")
-    if gen_params.numFilmLayers > LIMITS["max_film_layers"]:
+    if gen_params.numCurves > effective_limits["max_curves"]:
         errors.append(
-            f"numFilmLayers ({gen_params.numFilmLayers}) exceeds limit ({LIMITS['max_film_layers']})"
+            f"numCurves ({gen_params.numCurves}) exceeds limit ({effective_limits['max_curves']})"
         )
-    if train_params.batchSize > LIMITS["max_batch_size"]:
+    if gen_params.numFilmLayers > effective_limits["max_film_layers"]:
         errors.append(
-            f"batchSize ({train_params.batchSize}) exceeds limit ({LIMITS['max_batch_size']})"
+            f"numFilmLayers ({gen_params.numFilmLayers}) exceeds limit ({effective_limits['max_film_layers']})"
         )
-    if train_params.epochs > LIMITS["max_epochs"]:
-        errors.append(f"epochs ({train_params.epochs}) exceeds limit ({LIMITS['max_epochs']})")
-    if train_params.layers > LIMITS["max_cnn_layers"]:
-        errors.append(f"layers ({train_params.layers}) exceeds limit ({LIMITS['max_cnn_layers']})")
-    if train_params.dropout > LIMITS["max_dropout"]:
-        errors.append(f"dropout ({train_params.dropout}) exceeds limit ({LIMITS['max_dropout']})")
-    if train_params.latentDim > LIMITS["max_latent_dim"]:
+    if train_params.batchSize > effective_limits["max_batch_size"]:
         errors.append(
-            f"latentDim ({train_params.latentDim}) exceeds limit ({LIMITS['max_latent_dim']})"
+            f"batchSize ({train_params.batchSize}) exceeds limit ({effective_limits['max_batch_size']})"
         )
-    if train_params.aeEpochs > LIMITS["max_ae_epochs"]:
+    if train_params.epochs > effective_limits["max_epochs"]:
+        errors.append(f"epochs ({train_params.epochs}) exceeds limit ({effective_limits['max_epochs']})")
+    if train_params.layers > effective_limits["max_cnn_layers"]:
+        errors.append(f"layers ({train_params.layers}) exceeds limit ({effective_limits['max_cnn_layers']})")
+    if train_params.dropout > effective_limits["max_dropout"]:
+        errors.append(f"dropout ({train_params.dropout}) exceeds limit ({effective_limits['max_dropout']})")
+    if train_params.latentDim > effective_limits["max_latent_dim"]:
         errors.append(
-            f"aeEpochs ({train_params.aeEpochs}) exceeds limit ({LIMITS['max_ae_epochs']})"
+            f"latentDim ({train_params.latentDim}) exceeds limit ({effective_limits['max_latent_dim']})"
         )
-    if train_params.mlpEpochs > LIMITS["max_mlp_epochs"]:
+    if train_params.aeEpochs > effective_limits["max_ae_epochs"]:
         errors.append(
-            f"mlpEpochs ({train_params.mlpEpochs}) exceeds limit ({LIMITS['max_mlp_epochs']})"
+            f"aeEpochs ({train_params.aeEpochs}) exceeds limit ({effective_limits['max_ae_epochs']})"
+        )
+    if train_params.mlpEpochs > effective_limits["max_mlp_epochs"]:
+        errors.append(
+            f"mlpEpochs ({train_params.mlpEpochs}) exceeds limit ({effective_limits['max_mlp_epochs']})"
         )
 
     if errors:
@@ -127,4 +135,3 @@ class SaveResultRequest(BaseModel):
     training: TrainingParams
     result: dict[str, Any]
     name: str | None = None
-

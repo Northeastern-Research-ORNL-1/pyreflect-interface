@@ -90,6 +90,8 @@ export interface Limits {
 export interface LimitsResponse {
   production: boolean;
   limits: Limits;
+  access_granted?: boolean;
+  limit_source?: 'local_dev' | 'whitelist' | 'production';
 }
 
 // Default limits (local/unlimited)
