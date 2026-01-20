@@ -35,16 +35,19 @@ poller_image = (
     .pip_install("fastapi", "redis", "rq")
 )
 
+TORCH_VERSION = "2.5.1+cu124"
+TORCH_INDEX_URL = "https://download.pytorch.org/whl/cu124"
+
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    # Torch 2.2.x is not compatible with NumPy 2.x at runtime (breaks torch<->numpy
-    # interop and emits warnings). Pin NumPy <2 inside Modal to keep training stable.
-    .pip_install("numpy<2")
+    # Align with backend requirements (NumPy 2.x) and keep Torch interop compatible.
+    .pip_install("numpy>=2.1.0")
     # IMPORTANT: PyPI `torch` is often CPU-only. Install a CUDA wheel explicitly so
     # the Modal GPU is actually used.
-    # NOTE: The CUDA wheels use a local version tag (e.g. `2.2.2+cu121`), so pin it
+    # NOTE: B200 (Blackwell, sm_100) requires CUDA 12.4+ builds, so we pin cu124.
+    # The CUDA wheels use a local version tag (e.g. `2.5.1+cu124`), so pin it
     # explicitly to avoid accidentally pulling the CPU-only wheel from PyPI.
-    .pip_install("torch==2.2.2+cu121", index_url="https://download.pytorch.org/whl/cu121")
+    .pip_install(f"torch=={TORCH_VERSION}", index_url=TORCH_INDEX_URL)
     .pip_install(
         "redis",
         "rq",
@@ -122,6 +125,18 @@ GPU_TIERS = {
     "B200": "B200",         # $6.25/hr, 192GB VRAM
 }
 
+GPU_FALLBACK_ORDER = [
+    "B200",
+    "H200",
+    "H100",
+    "A100-80GB",
+    "A100",
+    "L40S",
+    "A10G",
+    "L4",
+    "T4",
+]
+
 DEFAULT_GPU = "T4"
 
 
@@ -178,11 +193,25 @@ def _run_rq_worker_impl(lock_value: str, gpu_name: str):
             print(f"torch.cuda.is_available(): {cuda_ok}")
             print(f"torch.version.cuda: {getattr(getattr(torch, 'version', None), 'cuda', None)}")
             if not cuda_ok:
-                raise RuntimeError(
-                    "CUDA is not available inside this Modal GPU container. "
-                    "Install a CUDA-enabled PyTorch build."
+                print(
+                    "⚠️ CUDA is not available inside this Modal GPU container. "
+                    "Falling back to CPU execution."
                 )
-            print(f"GPU: {torch.cuda.get_device_name(0)}")
+            else:
+                supported, reason = _cuda_arch_supported(torch)
+                if not supported:
+                    fallback_gpu = _next_gpu_tier(gpu_name)
+                    print(f"⚠️ GPU {gpu_name} not supported by this torch build: {reason}")
+                    if fallback_gpu:
+                        print(f"↪️ Falling back to {fallback_gpu} GPU worker")
+                        try:
+                            get_gpu_worker_fn(fallback_gpu).spawn(lock_value)
+                            return
+                        except Exception as spawn_exc:
+                            print(f"Warning: Failed to spawn {fallback_gpu} worker: {spawn_exc}")
+                    print("↪️ No lower GPU tier available; falling back to CPU execution")
+                else:
+                    print(f"GPU: {torch.cuda.get_device_name(0)}")
         except Exception as exc:
             raise RuntimeError(f"GPU sanity check failed: {exc}") from exc
 
@@ -492,3 +521,67 @@ def _poll_queue_impl() -> dict:
 if __name__ == "__main__":
     print("Deploy with: modal deploy src/backend/modal_worker.py")
     print("Or run locally: modal run src/backend/modal_worker.py::run_rq_worker_burst")
+def _normalize_cuda_arch(arch: str) -> int | None:
+    digits = "".join(ch for ch in arch if ch.isdigit())
+    if not digits:
+        return None
+    return int(digits)
+
+
+def _cuda_arch_supported(torch) -> tuple[bool, str | None]:
+    if not getattr(torch, "cuda", None) or not torch.cuda.is_available():
+        return False, "CUDA is not available in this container"
+
+    try:
+        capability = torch.cuda.get_device_capability()
+        device_arch = capability[0] * 10 + capability[1]
+    except Exception as exc:
+        return False, f"Failed to read CUDA device capability: {exc}"
+
+    arch_list: list[str] = []
+    if getattr(torch.cuda, "get_arch_list", None):
+        try:
+            arch_list = list(torch.cuda.get_arch_list())
+        except Exception:
+            arch_list = []
+
+    if not arch_list:
+        return True, None
+
+    arch_numbers = [
+        arch_number
+        for arch in arch_list
+        if (arch_number := _normalize_cuda_arch(arch)) is not None
+    ]
+    if not arch_numbers:
+        return True, None
+
+    if device_arch in arch_numbers:
+        return True, None
+
+    max_arch = max(arch_numbers)
+    min_arch = min(arch_numbers)
+    if device_arch > max_arch:
+        return (
+            False,
+            f"CUDA capability sm_{capability[0]}{capability[1]} exceeds torch build arch list {arch_list}",
+        )
+    if device_arch < min_arch:
+        return (
+            False,
+            f"CUDA capability sm_{capability[0]}{capability[1]} older than torch build arch list {arch_list}",
+        )
+    return (
+        False,
+        f"CUDA capability sm_{capability[0]}{capability[1]} not explicitly supported by torch build arch list {arch_list}",
+    )
+
+
+def _next_gpu_tier(current: str) -> str | None:
+    current = (current or "").upper()
+    if current not in GPU_FALLBACK_ORDER:
+        return None
+    idx = GPU_FALLBACK_ORDER.index(current)
+    if idx + 1 >= len(GPU_FALLBACK_ORDER):
+        return None
+    return GPU_FALLBACK_ORDER[idx + 1]
