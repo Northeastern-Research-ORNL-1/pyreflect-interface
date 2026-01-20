@@ -72,10 +72,10 @@ export default function DownloadBundleModal({
                   onChange={(e) => onSelectionChange({ includeJson: e.target.checked })}
                 />
                 <span className="download-option__text">
-	                  output.json
-	                  <InfoTooltip hint="Includes params + results. If you deselect PNGs, they are embedded in output.json as base64." />
-	                </span>
-	              </span>
+                  output.json
+                  <InfoTooltip hint="Includes params + results. If you deselect PNGs, they are embedded in output.json as base64." />
+                </span>
+              </span>
               <span className="download-option__size">
                 {selection.includeJson
                   ? estimate.estimating
@@ -144,7 +144,7 @@ export default function DownloadBundleModal({
                 {hasModel
                   ? selection.includeModel
                     ? estimate.modelBytes !== null
-                      ? `${formatBytes(estimate.modelBytes)}${estimate.modelSource ? ` (${estimate.modelSource})` : ''}`
+                      ? formatBytes(estimate.modelBytes)
                       : estimate.estimating
                         ? 'Estimating...'
                         : 'Unknown'
