@@ -88,9 +88,6 @@ export default function LimitsAccessModal({
               GET MY CODE
             </button>
           )}
-          <button className="btn btn--outline" onClick={onClear} disabled={!canInteract}>
-            CLEAR
-          </button>
           <button className="btn btn--outline" onClick={onApply} disabled={!canInteract}>
             REFRESH
           </button>
