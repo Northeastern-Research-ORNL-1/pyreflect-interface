@@ -192,3 +192,17 @@ MODAL_TRIGGER_TOKEN = _get_str_env("MODAL_TRIGGER_TOKEN")
 
 # Optional admin token for debug endpoints.
 ADMIN_TOKEN = _get_str_env("ADMIN_TOKEN")
+
+# =====================
+# Checkpointing
+# =====================
+
+# How often to save checkpoints during training (epochs). Set to 0 to disable.
+CHECKPOINT_EVERY_N_EPOCHS = int(os.getenv("CHECKPOINT_EVERY_N_EPOCHS", "5"))
+
+# Whether to save checkpoint on best validation loss (in addition to periodic).
+CHECKPOINT_BEST_ONLY = _get_bool_env("CHECKPOINT_BEST_ONLY", default=False)
+
+# Separate HuggingFace repo for checkpoints (e.g., "org/checkpoints").
+# If not set, checkpoints will be stored in a "checkpoints/" subfolder of HF_REPO_ID.
+HF_CHECKPOINT_REPO_ID = _get_str_env("HF_CHECKPOINT_REPO_ID")

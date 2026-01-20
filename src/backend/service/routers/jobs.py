@@ -1179,3 +1179,177 @@ async def force_purge_job(
         )
 
     return result
+
+
+@router.get("/checkpoints")
+async def list_checkpoints_endpoint(
+    http_request: Request,
+    x_user_id: str | None = Header(default=None),
+):
+    """
+    List all available checkpoints (jobs that can be resumed).
+
+    Returns a list of job IDs that have checkpoints saved on HuggingFace Hub.
+    """
+    from ..services.checkpointing import list_checkpoints
+
+    hf_token = os.getenv("HF_TOKEN")
+
+    if not hf_token:
+        return {"checkpoints": [], "message": "HuggingFace not configured"}
+
+    try:
+        from huggingface_hub import HfApi
+
+        api = HfApi(token=hf_token)
+        checkpoint_ids = list_checkpoints(api)
+        return {"checkpoints": checkpoint_ids}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to list checkpoints: {exc}"
+        ) from exc
+
+
+@router.post("/checkpoints/{job_id}/resume")
+async def resume_from_checkpoint(
+    job_id: str,
+    http_request: Request,
+    x_user_id: str | None = Header(default=None),
+):
+    """
+    Resume a training job from a checkpoint.
+
+    This creates a new job that will load the checkpoint and continue training
+    from where it left off.
+    """
+    require_user_id(is_production=IS_PRODUCTION, x_user_id=x_user_id)
+
+    rq = _get_rq_or_reconnect(http_request)
+    if not rq or not rq.available or not rq.redis or not rq.queue:
+        raise HTTPException(status_code=503, detail="Job queue not available.")
+
+    # First verify the checkpoint exists
+    from ..services.checkpointing import list_checkpoints
+
+    hf_token = os.getenv("HF_TOKEN")
+
+    if not hf_token:
+        raise HTTPException(
+            status_code=400, detail="HuggingFace not configured for checkpointing"
+        )
+
+    try:
+        from huggingface_hub import HfApi
+
+        api = HfApi(token=hf_token)
+        checkpoint_ids = list_checkpoints(api)
+
+        if job_id not in checkpoint_ids:
+            raise HTTPException(
+                status_code=404, detail=f"No checkpoint found for job {job_id}"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to verify checkpoint: {exc}"
+        ) from exc
+
+    # Get original job params from RQ if the job still exists
+    job_params = None
+    job_name = None
+    try:
+        from rq.job import Job
+
+        old_job = Job.fetch(job_id, connection=rq.redis)
+        meta = old_job.meta or {}
+        job_params = meta.get("job_params")
+        job_name = meta.get("name")
+
+        if not isinstance(job_params, dict):
+            try:
+                if old_job.args and isinstance(old_job.args[0], dict):
+                    job_params = old_job.args[0]
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    if not isinstance(job_params, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Original job parameters not found. Cannot resume without knowing what to train.",
+        )
+
+    # Create a new job with the same ID so it picks up the checkpoint
+    from ..jobs import run_training_job
+    from ..config import RQ_JOB_TIMEOUT
+
+    # Use the same job ID so the worker loads the existing checkpoint
+    new_job = rq.queue.enqueue(
+        run_training_job,
+        job_params,
+        user_id=x_user_id,
+        name=f"{job_name or 'Resumed'} (resumed)" if job_name else "Resumed training",
+        job_id=job_id,  # Same ID to pick up checkpoint
+        job_timeout=RQ_JOB_TIMEOUT,
+        meta={
+            "status": "queued",
+            "user_id": x_user_id,
+            "name": f"{job_name or 'Resumed'} (resumed)"
+            if job_name
+            else "Resumed training",
+            "job_params": job_params,
+            "resumed_from_checkpoint": True,
+        },
+    )
+
+    # Trigger Modal worker
+    _maybe_trigger_modal_gpu_worker(rq)
+
+    return {
+        "job_id": new_job.id,
+        "status": "queued",
+        "message": f"Job resumed from checkpoint (epoch info will be available when worker starts)",
+        "resumed_from": job_id,
+    }
+
+
+@router.delete("/checkpoints/{job_id}")
+async def delete_checkpoint_endpoint(
+    job_id: str,
+    http_request: Request,
+    x_user_id: str | None = Header(default=None),
+):
+    """
+    Delete a checkpoint for a job.
+
+    Useful for cleaning up checkpoints that are no longer needed.
+    """
+    require_user_id(is_production=IS_PRODUCTION, x_user_id=x_user_id)
+
+    from ..services.checkpointing import delete_checkpoint
+
+    hf_token = os.getenv("HF_TOKEN")
+
+    if not hf_token:
+        raise HTTPException(status_code=400, detail="HuggingFace not configured")
+
+    try:
+        from huggingface_hub import HfApi
+
+        api = HfApi(token=hf_token)
+        deleted = delete_checkpoint(api, job_id, log_fn=print)
+
+        return {
+            "job_id": job_id,
+            "deleted": deleted,
+            "message": "Checkpoint deleted"
+            if deleted
+            else "Checkpoint not found or already deleted",
+        }
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete checkpoint: {exc}"
+        ) from exc
