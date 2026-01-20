@@ -861,7 +861,14 @@ export default function ExploreSidebar({
                 const percent = jobProgress && jobProgress.total > 0
                   ? Math.min(100, Math.max(0, (jobProgress.epoch / jobProgress.total) * 100))
                   : null;
+                // Use meta.status for stopped/paused jobs instead of RQ status
+                const metaStatus = job.meta?.status;
+                const isStopped = metaStatus === 'stopped';
+                const isPaused = metaStatus === 'paused';
+                const displayStatus = isStopped ? 'stopped' : isPaused ? 'paused' : job.status;
                 const statusColor = job.status === 'failed' ? '#ef4444' : 
+                                  isStopped ? '#ef4444' :
+                                  isPaused ? '#f59e0b' :
                                   job.status === 'finished' ? '#10b981' : 
                                   job.status === 'started' ? '#3b82f6' : '#f59e0b';
                 const elapsed = job.status === 'queued'
@@ -914,7 +921,7 @@ export default function ExploreSidebar({
                       <span className={styles.progressStatus} style={{ color: statusColor }}>
                         {job.status === 'queued' ? `Queued (${elapsed})`
                           : job.status === 'started' ? `Running (${elapsed})`
-                          : elapsed ? `${job.status} (${elapsed})` : job.status}
+                          : elapsed ? `${displayStatus} (${elapsed})` : displayStatus}
                       </span>
                     </div>
                     {job.meta?.status === 'saving' && (
@@ -925,7 +932,9 @@ export default function ExploreSidebar({
                         ? `Epoch ${jobProgress.epoch}/${jobProgress.total}`
                         : job.status === 'queued' 
                           ? 'Waiting...' 
-                          : job.meta?.status || 'Processing...'}
+                          : (isStopped || isPaused)
+                            ? 'Stopped before training started'
+                            : job.meta?.status || 'Processing...'}
                       {failNote && (
                         <div style={{ marginTop: '4px', fontSize: '11px', color: '#ef4444' }}>
                           {failNote}
@@ -980,7 +989,7 @@ export default function ExploreSidebar({
                       {job.status === 'started' && job.meta?.stop_requested && (
                         <span className={styles.stoppingLabel}>Stopping...</span>
                       )}
-                      {job.status === 'failed' && (
+                      {(job.status === 'failed' || isStopped || isPaused) && (
                         <>
                           {checkpoints.includes(job.job_id) && (
                             <button
