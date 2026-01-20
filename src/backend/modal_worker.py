@@ -57,16 +57,7 @@ def _build_worker_image(*, torch_index_url: str, torch_pre: bool = False) -> mod
             "pip uninstall -y torch torchvision torchaudio || true",
             f"pip install --no-cache-dir --upgrade --force-reinstall --pre torch torchvision --index-url {torch_index_url}",
             # Emit a build-time sanity check in Modal build logs.
-            "python - <<'PY'\n"
-            "import torch\n"
-            "print('torch.__version__:', torch.__version__)\n"
-            "print('torch.version.cuda:', getattr(getattr(torch, 'version', None), 'cuda', None))\n"
-            "try:\n"
-            "    import torchvision\n"
-            "    print('torchvision.__version__:', torchvision.__version__)\n"
-            "except Exception as e:\n"
-            "    print('torchvision import failed:', e)\n"
-            "PY",
+            "python -c 'import torch; print(\"torch.__version__:\", torch.__version__); print(\"torch.version.cuda:\", getattr(getattr(torch, \"version\", None), \"cuda\", None))'",
         )
     else:
         img = img.pip_install("torch", index_url=torch_index_url)
