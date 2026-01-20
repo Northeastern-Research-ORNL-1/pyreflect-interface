@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi import File, Form, Header, UploadFile
@@ -26,6 +27,14 @@ def _require_user_id(x_user_id: str | None) -> None:
     require_user_id(is_production=IS_PRODUCTION, x_user_id=x_user_id)
 
 
+def _get_generations_collection(http_request: Request) -> Any | None:
+    """Get MongoDB generations collection from app state."""
+    mongo = getattr(http_request.app.state, "mongo", None)
+    if mongo and getattr(mongo, "available", False):
+        return getattr(mongo, "generations", None)
+    return None
+
+
 def _model_meta_user_id(model_id: str) -> str | None:
     meta_path = MODELS_DIR / f"{model_id}.meta.json"
     if not meta_path.exists():
@@ -38,16 +47,74 @@ def _model_meta_user_id(model_id: str) -> str | None:
     return user_id if isinstance(user_id, str) else None
 
 
-def _require_model_access(model_id: str, x_user_id: str | None) -> None:
+def _check_mongo_model_ownership(generations: Any, model_id: str, user_id: str) -> bool:
+    """Check if user owns model according to MongoDB generations collection."""
+    if generations is None:
+        return False
+    try:
+        doc = generations.find_one(
+            {"result.model_id": model_id, "user_id": user_id},
+            {"_id": 1},
+        )
+        return doc is not None
+    except Exception as exc:
+        print(f"Warning: MongoDB ownership check failed: {exc}")
+        return False
+
+
+def _require_model_access(
+    model_id: str,
+    x_user_id: str | None,
+    *,
+    http_request: Request | None = None,
+    allow_hf_fallback: bool = False,
+) -> None:
+    """
+    Verify model access permissions.
+    
+    Checks ownership in order:
+    1. Local metadata file (fast path for locally stored models)
+    2. MongoDB generations collection (for HF-only models from Modal GPU)
+    3. HF fallback (if enabled and HF is configured)
+    
+    Args:
+        model_id: The model ID to check
+        x_user_id: The requesting user's ID
+        http_request: FastAPI request (needed for MongoDB access)
+        allow_hf_fallback: If True, allow access when model doesn't exist locally but HF is configured.
+    """
     _require_user_id(x_user_id)
+    
+    # Check 1: Local metadata file
     owner = _model_meta_user_id(model_id)
+    local_path = MODELS_DIR / f"{model_id}.pth"
+    local_exists = local_path.exists()
 
-    # In production, deny access to models without owner metadata
-    if IS_PRODUCTION and owner is None:
+    # If local owner metadata exists, verify ownership
+    if owner is not None:
+        if owner != x_user_id:
+            raise HTTPException(status_code=403, detail="Model access denied")
+        return  # Owner matches, access granted
+
+    # Check 2: MongoDB ownership (for HF-only models from Modal GPU)
+    if http_request is not None and x_user_id:
+        generations = _get_generations_collection(http_request)
+        if _check_mongo_model_ownership(generations, model_id, x_user_id):
+            return  # User owns this model according to MongoDB
+
+    # No local or MongoDB ownership found...
+    if not IS_PRODUCTION:
+        return  # In dev, allow access
+    
+    # In production with HF fallback enabled and HF configured:
+    # Allow access if the model doesn't exist locally (will check HF instead)
+    if allow_hf_fallback and HF_REPO_ID and not local_exists:
+        return
+    
+    # Deny access
+    if local_exists:
         raise HTTPException(status_code=403, detail="Model access denied (no owner metadata)")
-
-    # Deny if owner exists and doesn't match the requesting user
-    if owner and owner != x_user_id:
+    else:
         raise HTTPException(status_code=403, detail="Model access denied")
 
 def _require_upload_token(x_model_upload_token: str | None) -> None:
@@ -129,12 +196,14 @@ async def upload_model(
 @router.get("/models/{model_id}")
 async def download_model(
     model_id: str,
+    http_request: Request,
     x_user_id: str | None = Header(default=None),
 ):
     if not model_id or "/" in model_id or "\\" in model_id:
         raise HTTPException(status_code=400, detail="Invalid model ID")
 
-    _require_model_access(model_id, x_user_id)
+    # Allow HF fallback - models stored on HF won't have local metadata
+    _require_model_access(model_id, x_user_id, http_request=http_request, allow_hf_fallback=True)
 
     file_path = MODELS_DIR / f"{model_id}.pth"
     if file_path.exists():
@@ -154,12 +223,13 @@ async def download_model(
 @router.delete("/models/{model_id}")
 async def delete_model(
     model_id: str,
+    http_request: Request,
     x_user_id: str | None = Header(default=None),
 ):
     if not model_id or "/" in model_id or "\\" in model_id:
         raise HTTPException(status_code=400, detail="Invalid model ID")
 
-    _require_model_access(model_id, x_user_id)
+    _require_model_access(model_id, x_user_id, http_request=http_request)
 
     file_path = MODELS_DIR / f"{model_id}.pth"
     if not file_path.exists():
@@ -181,7 +251,9 @@ async def get_model_info(
     if not model_id or "/" in model_id or "\\" in model_id:
         raise HTTPException(status_code=400, detail="Invalid model ID")
 
-    _require_model_access(model_id, x_user_id)
+    # Check ownership via local metadata or MongoDB (for HF-only models from Modal GPU)
+    _require_model_access(model_id, x_user_id, http_request=http_request, allow_hf_fallback=True)
+    
     local_path = MODELS_DIR / f"{model_id}.pth"
     if local_path.exists():
         size_mb = local_path.stat().st_size / (1024 * 1024)
