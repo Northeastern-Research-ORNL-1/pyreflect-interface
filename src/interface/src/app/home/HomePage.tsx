@@ -18,6 +18,7 @@ import {
   FilmLayer,
   GenerateResponse,
   GeneratorParams,
+  GpuTier,
   Limits,
   LimitsResponse,
   NrSldMode,
@@ -121,6 +122,7 @@ export default function HomePage() {
   const [workflow, setWorkflow] = useState<Workflow>('nr_sld');
   const [nrSldMode, setNrSldMode] = useState<NrSldMode>('train');
   const [autoGenerateModelStats, setAutoGenerateModelStats] = useState(true);
+  const [gpu, setGpu] = useState<GpuTier>('T4');
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -484,6 +486,7 @@ export default function HomePage() {
         workflow,
         mode: nrSldMode,
         autoGenerateModelStats,
+        gpu,
       };
 
       // Try queue first (fire-and-forget for instant button return)
@@ -539,6 +542,7 @@ export default function HomePage() {
       limitsAccessCode,
       trainingParams,
       workflow,
+      gpu,
     ]
   );
 
@@ -679,6 +683,8 @@ export default function HomePage() {
             onAutoGenerateModelStatsChange={setAutoGenerateModelStats}
             isCollapsed={sidebarCollapsed}
             onToggleCollapse={() => setSidebarCollapsed((prev) => !prev)}
+            gpu={gpu}
+            onGpuChange={setGpu}
           />
         </aside>
 
