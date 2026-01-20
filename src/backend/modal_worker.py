@@ -41,7 +41,7 @@ TORCH_INDEX_URL = "https://download.pytorch.org/whl/cu124"
 # Older stable CUDA 12.4 wheels often top out at sm_90, which produces:
 #   "sm_100 is not compatible with the current PyTorch installation"
 # We use a newer CUDA runtime wheel for B200 to ensure sm_100 cubins are present.
-TORCH_INDEX_URL_B200 = "https://download.pytorch.org/whl/nightly/cu126"
+TORCH_INDEX_URL_B200 = "https://download.pytorch.org/whl/nightly/cu130"
 
 
 def _build_worker_image(*, torch_index_url: str, torch_pre: bool = False) -> modal.Image:
@@ -51,7 +51,9 @@ def _build_worker_image(*, torch_index_url: str, torch_pre: bool = False) -> mod
     # the Modal GPU is actually used.
     if torch_pre:
         # Nightly builds are pre-releases, so we must allow pre-release resolution.
-        img = img.run_commands(f"pip install --pre torch --index-url {torch_index_url}")
+        img = img.run_commands(
+            f"pip install --no-cache-dir --upgrade --pre torch torchvision --index-url {torch_index_url}"
+        )
     else:
         img = img.pip_install("torch", index_url=torch_index_url)
 
@@ -197,6 +199,7 @@ def _run_rq_worker_impl(lock_value: str, gpu_name: str):
     redis_conn = Redis.from_url(redis_url)
     redis_conn.ping()
 
+    handed_off_lock = False
     try:
         try:
             import torch
@@ -218,6 +221,7 @@ def _run_rq_worker_impl(lock_value: str, gpu_name: str):
                         print(f"↪️ Falling back to {fallback_gpu} GPU worker")
                         try:
                             get_gpu_worker_fn(fallback_gpu).spawn(lock_value)
+                            handed_off_lock = True
                             return
                         except Exception as spawn_exc:
                             print(f"Warning: Failed to spawn {fallback_gpu} worker: {spawn_exc}")
@@ -237,9 +241,11 @@ def _run_rq_worker_impl(lock_value: str, gpu_name: str):
         # Release the poller lock if we still own it.
         lock_key = "pyreflect:modal_worker_lock"
         try:
-            current = redis_conn.get(lock_key)
-            if current is not None and current.decode("utf-8") == lock_value:
-                redis_conn.delete(lock_key)
+            # If we spawned a fallback worker, let the fallback worker release the lock.
+            if not handed_off_lock:
+                current = redis_conn.get(lock_key)
+                if current is not None and current.decode("utf-8") == lock_value:
+                    redis_conn.delete(lock_key)
         except Exception:
             pass
 
