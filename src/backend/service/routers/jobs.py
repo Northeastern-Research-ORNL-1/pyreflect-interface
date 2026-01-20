@@ -34,7 +34,7 @@ from ..integrations.redis_queue import (
 )
 from ..schemas import GenerateRequest, validate_limits
 from ..services.limits_access import get_effective_limits
-from ..services.guards import require_admin_token
+from ..services.guards import require_admin_token, require_user_id
 from ..services.rate_limit import limit_jobs_submit
 
 router = APIRouter()
@@ -497,7 +497,8 @@ async def retry_job(job_id: str, http_request: Request):
 async def stop_job(
     job_id: str,
     http_request: Request,
-    hard: bool = False,
+    x_user_id: str | None = Header(default=None),
+    hard: bool = True,
 ):
     """
     Request a running job to stop.
@@ -507,13 +508,52 @@ async def stop_job(
     For phases that may take a very long time (or can hang in a C/IO call), we can
     also send an RQ `stop-job` command to kill the current workhorse.
 
-    - Default: only hard-stop for non-training phases.
-    - hard=true: always send a hard-stop command (useful if training is stuck mid-epoch).
+    - Default: hard stop + best-effort cleanup for the UI.
+    - hard=false: only set stop_requested (lets worker exit gracefully).
     """
     rq = _get_rq_or_reconnect(http_request)
 
     if not rq or not rq.available or not rq.redis:
         raise HTTPException(status_code=503, detail="Job queue not available.")
+
+    require_user_id(is_production=IS_PRODUCTION, x_user_id=x_user_id)
+
+    def _best_effort_cleanup_job_visibility(*, queue_name: str) -> dict:
+        """Remove job from queue/started registries so the UI stops showing it."""
+
+        removed_from_queue = False
+        removed_from_registries: dict[str, int] = {}
+
+        try:
+            if rq.queue is not None:
+                rq.queue.remove(job_id)
+                removed_from_queue = True
+        except Exception:
+            removed_from_queue = False
+
+        # RQ registries are zsets; in this project we also observed entries like
+        # <job_id>:<execution_id> under rq:wip:<queue>.
+        for key in (f"rq:wip:{queue_name}", f"rq:started:{queue_name}"):
+            removed = 0
+            try:
+                # Use zscan_iter so we don't load the whole zset.
+                for member, _score in rq.redis.zscan_iter(key, match=f"{job_id}*"):
+                    value = member.decode("utf-8", errors="replace") if isinstance(member, (bytes, bytearray)) else str(member)
+                    if value == job_id or value.startswith(job_id + ":"):
+                        try:
+                            rq.redis.zrem(key, member)
+                            removed += 1
+                        except Exception:
+                            pass
+            except Exception:
+                removed = 0
+            if removed:
+                removed_from_registries[key] = removed
+
+        return {
+            "removed_from_queue": removed_from_queue,
+            "removed_from_registries": removed_from_registries,
+        }
 
     try:
         from rq.job import Job
@@ -526,6 +566,12 @@ async def stop_job(
 
         # Set stop flag in meta
         meta = job.meta or {}
+
+        # Ownership check: prevent stopping another user's job.
+        job_user_id = meta.get("user_id")
+        if job_user_id and x_user_id and job_user_id != x_user_id:
+            raise HTTPException(status_code=403, detail="Job belongs to another user")
+
         meta["stop_requested"] = True
         meta.setdefault("status", "stopping")
         if meta.get("status") not in {"completed", "failed", "stopped"}:
@@ -533,9 +579,10 @@ async def stop_job(
         job.meta = meta
         job.save_meta()
 
-        # If we aren't in the training loop yet, prefer a hard stop.
+        # Hard stop kills the current workhorse process. This is the only reliable
+        # mechanism when the worker is stuck in a long/hanging operation.
         worker_phase = meta.get("status")
-        should_hard_stop = bool(hard) or worker_phase not in {"training"}
+        should_hard_stop = bool(hard)
         hard_stop_sent = False
         hard_stop_error: str | None = None
         if should_hard_stop:
@@ -546,6 +593,27 @@ async def stop_job(
                 hard_stop_sent = True
             except Exception as exc:
                 hard_stop_error = str(exc)[:300]
+
+        # Best-effort: remove job from queue/started registries so the UI reflects stop
+        # immediately. This does not kill the worker by itself.
+        cleanup = {}
+        try:
+            queue_name = (rq.queue.name if rq.queue is not None else getattr(rq, "queue_name", None)) or "training"
+            cleanup = _best_effort_cleanup_job_visibility(queue_name=queue_name)
+        except Exception:
+            cleanup = {}
+
+        # If we sent a hard stop, mark it as stopped now so /jobs/{id} doesn't look "running" forever.
+        if hard_stop_sent:
+            try:
+                meta = job.meta or meta
+                meta["status"] = "stopped"
+                meta["stopped_phase"] = meta.get("stopped_phase") or worker_phase
+                meta["completed_at"] = meta.get("completed_at") or datetime.now(timezone.utc).isoformat()
+                job.meta = meta
+                job.save_meta()
+            except Exception:
+                pass
 
         message = "Stop requested."
         if hard_stop_sent:
@@ -558,6 +626,7 @@ async def stop_job(
             "status": "stop_requested",
             "hard_stop": hard_stop_sent,
             "phase": worker_phase,
+            "cleanup": cleanup,
             "message": message,
         }
 

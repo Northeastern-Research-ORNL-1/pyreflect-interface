@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -176,6 +177,56 @@ def _maybe_find_workers_for_job(redis_conn, plan: Plan, job_id: str) -> list[str
     return matches
 
 
+class _RedisCLI:
+    def __init__(self, redis_url: str):
+        self.redis_url = redis_url
+
+    def _run(self, *args: str) -> list[str]:
+        # Use --raw to make parsing easy and stable.
+        cmd = ["redis-cli", "-u", self.redis_url, "--raw", *args]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError((proc.stderr or proc.stdout or "redis-cli failed").strip())
+        out = (proc.stdout or "").splitlines()
+        return [line.rstrip("\n") for line in out]
+
+    def ping(self) -> None:
+        out = self._run("PING")
+        if not out or out[0].strip().upper() != "PONG":
+            raise RuntimeError("PING did not return PONG")
+
+    def lrem(self, key: str, count: int, value: str) -> None:
+        self._run("LREM", key, str(count), value)
+
+    def zrange(self, key: str, start: int, stop: int) -> list[str]:
+        return self._run("ZRANGE", key, str(start), str(stop))
+
+    def zrem(self, key: str, member: str) -> None:
+        self._run("ZREM", key, member)
+
+    def delete(self, *keys: str) -> None:
+        if not keys:
+            return
+        self._run("DEL", *keys)
+
+    def smembers(self, key: str) -> list[str]:
+        return self._run("SMEMBERS", key)
+
+    def srem(self, key: str, member: str) -> None:
+        self._run("SREM", key, member)
+
+    def hgetall(self, key: str) -> dict[str, str]:
+        out = self._run("HGETALL", key)
+        # redis-cli returns alternating key/value lines.
+        if not out:
+            return {}
+        if len(out) % 2 != 0:
+            # Best-effort: ignore trailing line.
+            out = out[:-1]
+        it = iter(out)
+        return {str(k): str(v) for k, v in zip(it, it)}
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Purge a stuck RQ job from Redis")
     parser.add_argument("--job-id", required=True, help="RQ job id to purge")
@@ -219,37 +270,60 @@ def main(argv: list[str]) -> int:
         print("ERROR: Redis URL missing. Set REDIS_URL or pass --redis-url.", file=sys.stderr)
         return 2
 
+    # Prefer redis-py if available; fall back to redis-cli so this script can run
+    # on minimal servers.
+    redis_conn = None
+    redis_cli = None
+    redis_mode = "redis-py"
     try:
-        from redis import Redis
-    except Exception as exc:
-        print(f"ERROR: redis-py not installed: {exc}", file=sys.stderr)
-        return 2
+        from redis import Redis  # type: ignore
 
-    redis_conn = Redis.from_url(redis_url)
-    try:
+        redis_conn = Redis.from_url(redis_url)
         redis_conn.ping()
-    except Exception as exc:
-        print(f"ERROR: Failed to connect to Redis: {exc}", file=sys.stderr)
-        return 2
+    except Exception:
+        redis_mode = "redis-cli"
+        try:
+            redis_cli = _RedisCLI(redis_url)
+            redis_cli.ping()
+        except Exception as exc:
+            print(
+                "ERROR: Could not connect via redis-py or redis-cli. "
+                "Install `redis` (pip) or ensure redis-cli is available.\n"
+                f"Details: {exc}",
+                file=sys.stderr,
+            )
+            return 2
 
     plan = _build_plan(args.queue, args.job_id)
 
     # Safety: staleness check based on meta.updated_at (if present).
-    updated_at_raw = _get_job_meta_updated_at(redis_conn, f"rq:job:{args.job_id}")
-    updated_at_dt = _parse_iso8601(updated_at_raw) if updated_at_raw else None
-    if args.min_stale_s > 0 and not args.force:
-        if updated_at_dt is None:
+    # This requires rq + redis-py. If we're running via redis-cli, we refuse unless forced.
+    updated_at_raw: str | None = None
+    updated_at_dt: datetime | None = None
+    if redis_mode == "redis-py":
+        updated_at_raw = _get_job_meta_updated_at(redis_conn, f"rq:job:{args.job_id}")
+        updated_at_dt = _parse_iso8601(updated_at_raw) if updated_at_raw else None
+        if args.min_stale_s > 0 and not args.force:
+            if updated_at_dt is None:
+                print(
+                    "Refusing purge: could not read meta.updated_at for this job. "
+                    "Re-run with --force if you are sure this is a zombie job.",
+                    file=sys.stderr,
+                )
+                return 3
+            age_s = int((_utcnow() - updated_at_dt).total_seconds())
+            if age_s < args.min_stale_s:
+                print(
+                    f"Refusing purge: job meta.updated_at is only {age_s}s old (< {args.min_stale_s}s). "
+                    "Re-run with --force if needed.",
+                    file=sys.stderr,
+                )
+                return 3
+    else:
+        if args.min_stale_s > 0 and not args.force:
             print(
-                "Refusing purge: could not read meta.updated_at for this job. "
-                "Re-run with --force if you are sure this is a zombie job.",
-                file=sys.stderr,
-            )
-            return 3
-        age_s = int((_utcnow() - updated_at_dt).total_seconds())
-        if age_s < args.min_stale_s:
-            print(
-                f"Refusing purge: job meta.updated_at is only {age_s}s old (< {args.min_stale_s}s). "
-                "Re-run with --force if needed.",
+                "Refusing purge in redis-cli mode without --force. "
+                "(Cannot read job meta to verify staleness.)",
                 file=sys.stderr,
             )
             return 3
@@ -261,19 +335,31 @@ def main(argv: list[str]) -> int:
     print(f"Job:   {args.job_id}")
     if updated_at_raw:
         print(f"meta.updated_at: {updated_at_raw}")
+    print(f"Backend: {redis_mode}")
     print("Mode:  DRY-RUN" if dry_run else "Mode:  EXECUTE")
 
     # 1) Remove from queue list
     print(f"- LREM {plan.queue_key} {args.job_id}")
     if not dry_run:
         try:
-            redis_conn.lrem(plan.queue_key, 0, args.job_id)
+            if redis_mode == "redis-py":
+                redis_conn.lrem(plan.queue_key, 0, args.job_id)
+            else:
+                assert redis_cli is not None
+                redis_cli.lrem(plan.queue_key, 0, args.job_id)
         except Exception as exc:
             print(f"  WARN: LREM failed: {exc}")
 
     # 2) Remove from registries
     for zkey in plan.registry_zset_keys:
-        members = _iter_zset_members(redis_conn, zkey)
+        if redis_mode == "redis-py":
+            members = _iter_zset_members(redis_conn, zkey)
+        else:
+            assert redis_cli is not None
+            try:
+                members = redis_cli.zrange(zkey, 0, -1)
+            except Exception:
+                members = []
         hits = _find_started_registry_members(members, args.job_id)
         if not hits:
             continue
@@ -281,7 +367,11 @@ def main(argv: list[str]) -> int:
             print(f"- ZREM {zkey} {member}")
             if not dry_run:
                 try:
-                    redis_conn.zrem(zkey, member)
+                    if redis_mode == "redis-py":
+                        redis_conn.zrem(zkey, member)
+                    else:
+                        assert redis_cli is not None
+                        redis_cli.zrem(zkey, member)
                 except Exception as exc:
                     print(f"  WARN: ZREM failed for {zkey}: {exc}")
 
@@ -290,7 +380,11 @@ def main(argv: list[str]) -> int:
         print(f"- DEL {key}")
     if not dry_run:
         try:
-            redis_conn.delete(*plan.job_keys)
+            if redis_mode == "redis-py":
+                redis_conn.delete(*plan.job_keys)
+            else:
+                assert redis_cli is not None
+                redis_cli.delete(*plan.job_keys)
         except Exception as exc:
             print(f"  WARN: DEL job keys failed: {exc}")
 
@@ -299,7 +393,27 @@ def main(argv: list[str]) -> int:
     if args.worker:
         worker_names = [args.worker]
     elif args.clean_workers:
-        worker_names = _maybe_find_workers_for_job(redis_conn, plan, args.job_id)
+        if redis_mode == "redis-py":
+            worker_names = _maybe_find_workers_for_job(redis_conn, plan, args.job_id)
+        else:
+            assert redis_cli is not None
+            matches: list[str] = []
+            try:
+                worker_names_all = redis_cli.smembers(plan.worker_set_key)
+            except Exception:
+                worker_names_all = []
+            for name in worker_names_all:
+                if not name:
+                    continue
+                try:
+                    h = redis_cli.hgetall(plan.worker_key_prefix + name)
+                except Exception:
+                    continue
+                for candidate_field in ("current_job_id", "job_id", "current_job"):
+                    if h.get(candidate_field) == args.job_id:
+                        matches.append(name)
+                        break
+            worker_names = matches
 
     for w in worker_names:
         worker_key = plan.worker_key_prefix + w
@@ -307,11 +421,19 @@ def main(argv: list[str]) -> int:
         print(f"- DEL {worker_key}")
         if not dry_run:
             try:
-                redis_conn.srem(plan.worker_set_key, w)
+                if redis_mode == "redis-py":
+                    redis_conn.srem(plan.worker_set_key, w)
+                else:
+                    assert redis_cli is not None
+                    redis_cli.srem(plan.worker_set_key, w)
             except Exception as exc:
                 print(f"  WARN: SREM worker failed: {exc}")
             try:
-                redis_conn.delete(worker_key)
+                if redis_mode == "redis-py":
+                    redis_conn.delete(worker_key)
+                else:
+                    assert redis_cli is not None
+                    redis_cli.delete(worker_key)
             except Exception as exc:
                 print(f"  WARN: DEL worker failed: {exc}")
 
