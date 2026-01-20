@@ -6,6 +6,7 @@ import { useSession } from 'next-auth/react';
 import AppHeader from '@/components/AppHeader';
 import DownloadBundleModal from '@/components/DownloadBundleModal';
 import ImportNameModal from '@/components/ImportNameModal';
+import LimitsAccessModal from '@/components/LimitsAccessModal';
 import ParameterPanel from '@/components/ParameterPanel';
 import GraphDisplay from '@/components/GraphDisplay';
 import ConsoleOutput from '@/components/ConsoleOutput';
@@ -100,6 +101,19 @@ export default function HomePage() {
     return typeof maybeId === 'string' ? maybeId : undefined;
   })();
 
+  const sessionGithubId = (() => {
+    const user = session?.user as unknown;
+    if (!user || typeof user !== 'object') return undefined;
+    const maybeId = (user as Record<string, unknown>).githubId;
+    return typeof maybeId === 'string' ? maybeId : undefined;
+  })();
+
+  const sessionIsAdmin = (() => {
+    const user = session?.user as unknown;
+    if (!user || typeof user !== 'object') return false;
+    return (user as Record<string, unknown>).isAdmin === true;
+  })();
+
   const [filmLayers, setFilmLayers] = useState<FilmLayer[]>(DEFAULT_LAYERS);
   const [generatorParams, setGeneratorParams] = useState<GeneratorParams>(DEFAULT_GENERATOR);
   const [trainingParams, setTrainingParams] = useState<TrainingParams>(DEFAULT_TRAINING);
@@ -120,6 +134,11 @@ export default function HomePage() {
   const [backendStatus, setBackendStatus] = useState<BackendStatus | null>(null);
   const [limits, setLimits] = useState<Limits>(DEFAULT_LIMITS);
   const [isProduction, setIsProduction] = useState(false);
+  const [limitsAccessCode, setLimitsAccessCode] = useState('');
+  const [limitsAccessExpiresAt, setLimitsAccessExpiresAt] = useState<string | null>(null);
+  const [limitsAccessGranted, setLimitsAccessGranted] = useState(false);
+  const [limitsAccessSource, setLimitsAccessSource] = useState<string | null>(null);
+  const [showLimitsAccessModal, setShowLimitsAccessModal] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
 
   const [showExplore, setShowExplore] = useState(false);
@@ -357,9 +376,12 @@ export default function HomePage() {
     if (!isHydrated) return;
     const fetchStatus = async () => {
       try {
+        const limitsHeaders: Record<string, string> = {};
+        if (sessionUserId) limitsHeaders['X-User-ID'] = sessionUserId;
+
         const [statusRes, limitsRes] = await Promise.all([
           fetch(`${API_URL}/api/status`),
-          fetch(`${API_URL}/api/limits`),
+          fetch(`${API_URL}/api/limits`, { headers: limitsHeaders, cache: 'no-store' }),
         ]);
         if (statusRes.ok) {
           const status: BackendStatus = await statusRes.json();
@@ -375,6 +397,8 @@ export default function HomePage() {
           const limitsData: LimitsResponse = await limitsRes.json();
           setLimits(limitsData.limits);
           setIsProduction(limitsData.production);
+          setLimitsAccessGranted(Boolean(limitsData.access_granted));
+          setLimitsAccessSource(limitsData.limit_source ?? null);
           if (limitsData.production) {
             addLog(
               `Production mode: limits enforced (max ${limitsData.limits.max_curves} curves, ${limitsData.limits.max_epochs} epochs)`
@@ -386,7 +410,53 @@ export default function HomePage() {
       }
     };
     fetchStatus();
-  }, [isHydrated, addLog]);
+  }, [isHydrated, addLog, sessionUserId]);
+
+  const refreshLimits = useCallback(
+    async () => {
+      const headers: Record<string, string> = {};
+      if (sessionUserId) headers['X-User-ID'] = sessionUserId;
+
+      try {
+        const res = await fetch(`${API_URL}/api/limits`, { headers, cache: 'no-store' });
+        if (!res.ok) return;
+        const limitsData: LimitsResponse = await res.json();
+        setLimits(limitsData.limits);
+        setIsProduction(limitsData.production);
+        setLimitsAccessGranted(Boolean(limitsData.access_granted));
+        setLimitsAccessSource(limitsData.limit_source ?? null);
+      } catch {
+        // ignore
+      }
+    },
+    [sessionUserId]
+  );
+
+  useEffect(() => {
+    if (!isHydrated) return;
+    if (!isProduction) return;
+    if (!sessionGithubId) return;
+    if (!limitsAccessSource) return;
+
+    // If the backend reports production limits for a signed-in user, it's very
+    // often because the backend allowlist expects a different ID format (e.g.
+    // numeric GitHub ID vs GitHub username). Logging the numeric ID here makes
+    // it easy to update `LIMITS_WHITELIST_USER_IDS` appropriately.
+    if (limitsAccessSource === 'production') {
+      addLog(`Signed-in GitHub numeric id: ${sessionGithubId} (for allowlist debugging)`);
+    }
+  }, [isHydrated, isProduction, sessionGithubId, limitsAccessSource, addLog]);
+
+  useEffect(() => {
+    if (!isHydrated) return;
+    if (!sessionUserId) {
+      setLimitsAccessCode('');
+      setLimitsAccessExpiresAt(null);
+      setLimitsAccessGranted(false);
+      setLimitsAccessSource(null);
+    }
+    void refreshLimits();
+  }, [isHydrated, sessionUserId, refreshLimits]);
 
   const handleGenerate = useCallback(
     async (name?: string) => {
@@ -438,15 +508,17 @@ export default function HomePage() {
             }
             addLog('Job will run in background. Check history when complete.');
           } else {
-            // Queue not available / misconfigured - show server error detail if present.
+            // Show server error detail if present.
             try {
               const err = await queueRes.json();
               const detail = typeof err?.detail === 'string' ? err.detail : '';
-              if (detail) addLog(`Queue submit failed: ${detail}`);
+              if (detail) addLog(`Job submit failed: ${detail}`);
             } catch {
               // ignore parse errors
             }
-            addLog('Queue not available. Start Redis / fix REDIS_URL on the backend (check GET /api/queue).');
+            if (queueRes.status === 503) {
+              addLog('Queue not available. Start Redis / fix REDIS_URL on the backend (check GET /api/queue).');
+            }
           }
         })
         .catch(() => {
@@ -464,6 +536,7 @@ export default function HomePage() {
       generatorParams,
       nrSldMode,
       sessionUserId,
+      limitsAccessCode,
       trainingParams,
       workflow,
     ]
@@ -472,6 +545,10 @@ export default function HomePage() {
   const handleUploadFiles = useCallback(
     async (uploads: { file: File; role: UploadRole }[]) => {
       if (uploads.length === 0) return;
+      if (!sessionUserId) {
+        addLog('Please sign in to upload files.');
+        return;
+      }
       setIsUploading(true);
       addLog(`Uploading ${uploads.length} file(s)...`);
 
@@ -484,6 +561,9 @@ export default function HomePage() {
       try {
         const response = await fetch(`${API_URL}/api/upload`, {
           method: 'POST',
+          headers: {
+            'X-User-ID': sessionUserId,
+          },
           body: formData,
         });
 
@@ -499,7 +579,7 @@ export default function HomePage() {
         setIsUploading(false);
       }
     },
-    [addLog]
+    [addLog, sessionUserId]
   );
 
   const handleImportJSON = useCallback(() => {
@@ -564,6 +644,8 @@ export default function HomePage() {
         epochProgress={epochProgress}
         hasGraphData={Boolean(graphData)}
         session={session ?? null}
+        limitsAccessGranted={limitsAccessGranted}
+        onOpenLimitsAccess={() => setShowLimitsAccessModal(true)}
         onOpenHistory={() => setShowExplore(true)}
         onImportJson={handleImportJSON}
         onExportJson={handleExportAll}
@@ -655,6 +737,28 @@ export default function HomePage() {
         onCancel={cancelImportName}
         onConfirm={confirmImportName}
       />
+
+        <LimitsAccessModal
+          isOpen={showLimitsAccessModal}
+          code={limitsAccessCode}
+          expiresAt={limitsAccessExpiresAt}
+          accessGranted={limitsAccessGranted}
+          limitSource={limitsAccessSource}
+          hasSession={Boolean(sessionUserId)}
+          isAdmin={sessionIsAdmin}
+          onChange={setLimitsAccessCode}
+          onCancel={() => setShowLimitsAccessModal(false)}
+          onFetchMyCode={() => undefined}
+          onClear={() => {
+            setLimitsAccessCode('');
+            setLimitsAccessExpiresAt(null);
+            void refreshLimits();
+          }}
+          onApply={() => {
+            void refreshLimits();
+            setShowLimitsAccessModal(false);
+          }}
+        />
     </div>
   );
 }
