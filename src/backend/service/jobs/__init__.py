@@ -384,6 +384,9 @@ def run_training_job(
                 leave=True,
             )
             for X_batch, y_batch in batch_pbar:
+                # Check stop frequently so /stop can interrupt mid-epoch.
+                if _get_stop_requested():
+                    raise StopRequested("training")
                 X_batch, y_batch = X_batch.to(device), y_batch.to(device)
                 optimizer.zero_grad()
                 outputs = model(X_batch)
@@ -400,6 +403,8 @@ def run_training_job(
             val_running_loss = 0.0
             with torch.no_grad():
                 for X_batch, y_batch in valid_loader:
+                    if _get_stop_requested():
+                        raise StopRequested("training")
                     X_batch, y_batch = X_batch.to(device), y_batch.to(device)
                     outputs = model(X_batch)
                     val_running_loss += loss_fn(outputs, y_batch).item()
