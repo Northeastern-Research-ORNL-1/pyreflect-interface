@@ -13,6 +13,7 @@ from .config import (
     HF_REPO_ID,
     HF_TOKEN,
     MONGODB_URI,
+    STALE_JOB_CLEANUP_INTERVAL_S,
 )
 from .config import START_LOCAL_RQ_WORKER
 from .integrations.huggingface import init_huggingface
@@ -26,6 +27,7 @@ from .routers.models import router as models_router
 from .routers.status import router as status_router
 from .routers.upload import router as upload_router
 from .services.pyreflect_runtime import PYREFLECT
+from .services.stale_job_cleanup import cleanup_stale_jobs
 from .settings_store import ensure_backend_layout
 
 
@@ -51,12 +53,22 @@ def create_app() -> FastAPI:
         try:
             from .integrations.redis_queue import normalize_redis_url
 
-            redis_url = normalize_redis_url(os.getenv("REDIS_URL", "redis://localhost:6379"))
+            redis_url = normalize_redis_url(
+                os.getenv("REDIS_URL", "redis://localhost:6379")
+            )
             parsed = urlparse(redis_url)
             redis_host = parsed.hostname or "localhost"
-            if not START_LOCAL_RQ_WORKER and redis_host in {"localhost", "127.0.0.1", "::1"}:
-                print("   WARNING: START_LOCAL_RQ_WORKER=false but REDIS_URL points to localhost.")
-                print("            Remote workers (Modal) cannot see jobs from this Redis.")
+            if not START_LOCAL_RQ_WORKER and redis_host in {
+                "localhost",
+                "127.0.0.1",
+                "::1",
+            }:
+                print(
+                    "   WARNING: START_LOCAL_RQ_WORKER=false but REDIS_URL points to localhost."
+                )
+                print(
+                    "            Remote workers (Modal) cannot see jobs from this Redis."
+                )
         except Exception:
             pass
         ensure_backend_layout()
@@ -69,9 +81,15 @@ def create_app() -> FastAPI:
                 # SimpleWorker runs jobs in the main process (no forking)
                 worker_process = subprocess.Popen(
                     [
-                        sys.executable, "-m", "rq.cli", "worker", "training",
-                        "--path", ".",
-                        "--worker-class", "rq.worker.SimpleWorker",
+                        sys.executable,
+                        "-m",
+                        "rq.cli",
+                        "worker",
+                        "training",
+                        "--path",
+                        ".",
+                        "--worker-class",
+                        "rq.worker.SimpleWorker",
                     ],
                     # Don't pipe stdout/stderr unless you're actively draining them;
                     # otherwise the worker can deadlock once the OS pipe buffer fills.
@@ -88,6 +106,46 @@ def create_app() -> FastAPI:
         if mongo.available and mongo.client is not None:
             keepalive_task = asyncio.create_task(mongo_keepalive(mongo.client))
 
+        # Background task to clean up stale/zombie jobs
+        stale_cleanup_task = None
+        if rq.available and rq.redis is not None:
+
+            async def stale_job_cleanup_loop():
+                """Periodically scan for and clean up stale jobs."""
+                import logging
+
+                logger = logging.getLogger(__name__)
+
+                while True:
+                    try:
+                        await asyncio.sleep(STALE_JOB_CLEANUP_INTERVAL_S)
+                        # Run cleanup in a thread to avoid blocking the event loop
+                        result = await asyncio.to_thread(
+                            cleanup_stale_jobs,
+                            redis_conn=rq.redis,
+                            queue_name="training",
+                        )
+                        if result.get("cleaned"):
+                            logger.info(
+                                f"Stale job cleanup: cleaned {len(result['cleaned'])} job(s): "
+                                f"{result['cleaned']}"
+                            )
+                        if result.get("errors"):
+                            logger.warning(
+                                f"Stale job cleanup errors: {result['errors']}"
+                            )
+                    except asyncio.CancelledError:
+                        break
+                    except Exception as e:
+                        logger.error(f"Stale job cleanup error: {e}")
+                        # Don't exit on error, just wait and retry
+                        await asyncio.sleep(STALE_JOB_CLEANUP_INTERVAL_S)
+
+            stale_cleanup_task = asyncio.create_task(stale_job_cleanup_loop())
+            print(
+                f"   Stale job cleanup task started (interval: {STALE_JOB_CLEANUP_INTERVAL_S}s)"
+            )
+
         yield
 
         # Cleanup
@@ -98,6 +156,13 @@ def create_app() -> FastAPI:
                 worker_process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 worker_process.kill()
+
+        if stale_cleanup_task:
+            stale_cleanup_task.cancel()
+            try:
+                await stale_cleanup_task
+            except asyncio.CancelledError:
+                pass
 
         if keepalive_task:
             keepalive_task.cancel()

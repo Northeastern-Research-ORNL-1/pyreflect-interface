@@ -4,6 +4,7 @@ Job queue API endpoints.
 Provides endpoints for submitting training jobs to the queue,
 checking job status, and managing the queue.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -36,8 +37,10 @@ from ..schemas import GenerateRequest, validate_limits
 from ..services.limits_access import get_effective_limits
 from ..services.guards import require_admin_token, require_user_id
 from ..services.rate_limit import limit_jobs_submit
+from ..services.stale_job_cleanup import cleanup_stale_jobs, get_stale_job_summary
 
 router = APIRouter()
+
 
 class RenameJobRequest(BaseModel):
     name: str | None = None
@@ -109,7 +112,11 @@ def _maybe_trigger_modal_gpu_worker(rq) -> dict[str, object]:
         fn = modal.Function.lookup(MODAL_APP_NAME, MODAL_FUNCTION_NAME)
         if calls_poller:
             fn.spawn()
-            return {"triggered": True, "via": "modal_client", "target": MODAL_FUNCTION_NAME}
+            return {
+                "triggered": True,
+                "via": "modal_client",
+                "target": MODAL_FUNCTION_NAME,
+            }
 
         # Direct burst worker spawn: acquire lock and pass lock_value so the worker can release it.
         if lock_value is None:
@@ -136,7 +143,11 @@ def _maybe_trigger_modal_gpu_worker(rq) -> dict[str, object]:
             except Exception:
                 pass
 
-        return {"triggered": False, "reason": "modal_spawn_failed", "error": str(exc)[:400]}
+        return {
+            "triggered": False,
+            "reason": "modal_spawn_failed",
+            "error": str(exc)[:400],
+        }
 
 
 @router.post("/jobs/submit")
@@ -170,7 +181,9 @@ async def submit_job(
     # be consumed by remote workers (e.g. Modal cannot reach localhost Redis).
     if not START_LOCAL_RQ_WORKER:
         try:
-            redis_url = normalize_redis_url(os.getenv("REDIS_URL", "redis://localhost:6379"))
+            redis_url = normalize_redis_url(
+                os.getenv("REDIS_URL", "redis://localhost:6379")
+            )
             parsed = urlparse(redis_url)
             redis_host = parsed.hostname or "localhost"
             if redis_host in {"localhost", "127.0.0.1", "::1"}:
@@ -235,7 +248,9 @@ async def submit_job(
         }
 
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to submit job: {exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"Failed to submit job: {exc}"
+        ) from exc
 
 
 @router.get("/jobs/{job_id}")
@@ -317,7 +332,9 @@ async def rename_job(
 
         existing_user = meta.get("user_id")
         if existing_user and existing_user != x_user_id:
-            raise HTTPException(status_code=403, detail="Job already claimed by another user")
+            raise HTTPException(
+                status_code=403, detail="Job already claimed by another user"
+            )
 
         meta["name"] = name
         meta["user_id"] = existing_user or x_user_id
@@ -327,11 +344,15 @@ async def rename_job(
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to rename job: {exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"Failed to rename job: {exc}"
+        ) from exc
 
 
 @router.post("/jobs/{job_id}/claim")
-async def claim_job(job_id: str, http_request: Request, x_user_id: str | None = Header(default=None)):
+async def claim_job(
+    job_id: str, http_request: Request, x_user_id: str | None = Header(default=None)
+):
     """
     Attach a job to a user after it was created (e.g. user logs in mid-run).
 
@@ -352,7 +373,9 @@ async def claim_job(job_id: str, http_request: Request, x_user_id: str | None = 
 
         existing = meta.get("user_id")
         if existing and existing != x_user_id:
-            raise HTTPException(status_code=403, detail="Job already claimed by another user")
+            raise HTTPException(
+                status_code=403, detail="Job already claimed by another user"
+            )
 
         meta["user_id"] = x_user_id
         job.meta = meta
@@ -366,7 +389,11 @@ async def claim_job(job_id: str, http_request: Request, x_user_id: str | None = 
                 result = None
                 try:
                     latest = job.latest_result()
-                    if latest and getattr(latest, "type", None) and latest.type.name == "SUCCESSFUL":
+                    if (
+                        latest
+                        and getattr(latest, "type", None)
+                        and latest.type.name == "SUCCESSFUL"
+                    ):
                         result = latest.return_value
                 except Exception:
                     result = None
@@ -377,7 +404,11 @@ async def claim_job(job_id: str, http_request: Request, x_user_id: str | None = 
                         result = None
 
                 if isinstance(result, dict):
-                    model_id = (result.get("model_id") if isinstance(result.get("model_id"), str) else None)
+                    model_id = (
+                        result.get("model_id")
+                        if isinstance(result.get("model_id"), str)
+                        else None
+                    )
                     if model_id:
                         existing = generations.find_one(
                             {"user_id": x_user_id, "result.model_id": model_id},
@@ -410,7 +441,9 @@ async def claim_job(job_id: str, http_request: Request, x_user_id: str | None = 
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to claim job: {exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"Failed to claim job: {exc}"
+        ) from exc
 
 
 @router.post("/jobs/{job_id}/retry")
@@ -459,9 +492,13 @@ async def retry_job(job_id: str, http_request: Request):
 
         # Preserve old user/name when possible, but don't require meta to exist.
         old_user_id = (
-            meta.get("user_id") if meta.get("user_id") else (old_job.kwargs or {}).get("user_id")
+            meta.get("user_id")
+            if meta.get("user_id")
+            else (old_job.kwargs or {}).get("user_id")
         )
-        old_name = meta.get("name") if meta.get("name") else (old_job.kwargs or {}).get("name")
+        old_name = (
+            meta.get("name") if meta.get("name") else (old_job.kwargs or {}).get("name")
+        )
 
         new_job = rq.queue.enqueue(
             run_training_job,
@@ -490,7 +527,9 @@ async def retry_job(job_id: str, http_request: Request):
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to retry job: {exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"Failed to retry job: {exc}"
+        ) from exc
 
 
 @router.post("/jobs/{job_id}/stop")
@@ -538,7 +577,11 @@ async def stop_job(
             try:
                 # Use zscan_iter so we don't load the whole zset.
                 for member, _score in rq.redis.zscan_iter(key, match=f"{job_id}*"):
-                    value = member.decode("utf-8", errors="replace") if isinstance(member, (bytes, bytearray)) else str(member)
+                    value = (
+                        member.decode("utf-8", errors="replace")
+                        if isinstance(member, (bytes, bytearray))
+                        else str(member)
+                    )
                     if value == job_id or value.startswith(job_id + ":"):
                         try:
                             rq.redis.zrem(key, member)
@@ -598,7 +641,11 @@ async def stop_job(
         # immediately. This does not kill the worker by itself.
         cleanup = {}
         try:
-            queue_name = (rq.queue.name if rq.queue is not None else getattr(rq, "queue_name", None)) or "training"
+            queue_name = (
+                rq.queue.name
+                if rq.queue is not None
+                else getattr(rq, "queue_name", None)
+            ) or "training"
             cleanup = _best_effort_cleanup_job_visibility(queue_name=queue_name)
         except Exception:
             cleanup = {}
@@ -609,7 +656,9 @@ async def stop_job(
                 meta = job.meta or meta
                 meta["status"] = "stopped"
                 meta["stopped_phase"] = meta.get("stopped_phase") or worker_phase
-                meta["completed_at"] = meta.get("completed_at") or datetime.now(timezone.utc).isoformat()
+                meta["completed_at"] = (
+                    meta.get("completed_at") or datetime.now(timezone.utc).isoformat()
+                )
                 job.meta = meta
                 job.save_meta()
             except Exception:
@@ -617,7 +666,9 @@ async def stop_job(
 
         message = "Stop requested."
         if hard_stop_sent:
-            message = "Stop requested. Sent RQ stop-job command to kill the worker process."
+            message = (
+                "Stop requested. Sent RQ stop-job command to kill the worker process."
+            )
         elif should_hard_stop and hard_stop_error:
             message = f"Stop requested, but failed to send RQ stop-job command: {hard_stop_error}"
 
@@ -633,7 +684,9 @@ async def stop_job(
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to stop job: {exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"Failed to stop job: {exc}"
+        ) from exc
 
 
 @router.delete("/jobs/purge")
@@ -661,7 +714,11 @@ async def purge_user_jobs(
 
     try:
         from rq.job import Job
-        from rq.registry import FailedJobRegistry, FinishedJobRegistry, StartedJobRegistry
+        from rq.registry import (
+            FailedJobRegistry,
+            FinishedJobRegistry,
+            StartedJobRegistry,
+        )
 
         started_registry = StartedJobRegistry(queue=rq.queue)
         finished_registry = FinishedJobRegistry(queue=rq.queue)
@@ -730,7 +787,9 @@ async def purge_user_jobs(
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to purge jobs: {exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"Failed to purge jobs: {exc}"
+        ) from exc
 
 
 @router.delete("/jobs/{job_id}")
@@ -752,7 +811,10 @@ async def cancel_job(job_id: str, http_request: Request):
         status = job.get_status()
 
         if status == "started":
-            raise HTTPException(status_code=400, detail="Cannot cancel a running job. Use /stop instead.")
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot cancel a running job. Use /stop instead.",
+            )
 
         if status == "finished":
             raise HTTPException(status_code=400, detail="Job already completed")
@@ -774,12 +836,18 @@ async def cancel_job(job_id: str, http_request: Request):
             pass
 
         job.cancel()
-        return {"job_id": job_id, "status": "cancelled", "message": "Job cancelled successfully"}
+        return {
+            "job_id": job_id,
+            "status": "cancelled",
+            "message": "Job cancelled successfully",
+        }
 
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to cancel job: {exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"Failed to cancel job: {exc}"
+        ) from exc
 
 
 @router.delete("/jobs/{job_id}/delete")
@@ -796,7 +864,11 @@ async def delete_job(job_id: str, http_request: Request):
 
     try:
         from rq.job import Job
-        from rq.registry import FailedJobRegistry, FinishedJobRegistry, StartedJobRegistry
+        from rq.registry import (
+            FailedJobRegistry,
+            FinishedJobRegistry,
+            StartedJobRegistry,
+        )
 
         job = Job.fetch(job_id, connection=rq.redis)
         status = job.get_status()
@@ -836,7 +908,9 @@ async def delete_job(job_id: str, http_request: Request):
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to delete job: {exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete job: {exc}"
+        ) from exc
 
 
 @router.get("/queue")
@@ -864,7 +938,9 @@ async def queue_status(
             info["error"] = reason
 
     try:
-        redis_url = normalize_redis_url(os.getenv("REDIS_URL", "redis://localhost:6379"))
+        redis_url = normalize_redis_url(
+            os.getenv("REDIS_URL", "redis://localhost:6379")
+        )
         parsed = urlparse(redis_url)
         redis_host = parsed.hostname or "localhost"
         redis_db = 0
@@ -879,7 +955,11 @@ async def queue_status(
             "port": parsed.port,
             "db": redis_db,
         }
-        info["remote_workers_compatible"] = redis_host not in {"localhost", "127.0.0.1", "::1"}
+        info["remote_workers_compatible"] = redis_host not in {
+            "localhost",
+            "127.0.0.1",
+            "::1",
+        }
     except Exception:
         pass
     info["local_worker_enabled"] = START_LOCAL_RQ_WORKER
@@ -948,13 +1028,52 @@ async def queue_status(
             try:
                 if rq.redis:
                     should_attempt = bool(
-                        rq.redis.set("pyreflect:modal_spawn_attempt", str(int(time.time())), nx=True, ex=5)
+                        rq.redis.set(
+                            "pyreflect:modal_spawn_attempt",
+                            str(int(time.time())),
+                            nx=True,
+                            ex=5,
+                        )
                     )
             except Exception:
                 should_attempt = True
 
             if should_attempt:
-                info["remote_worker"] = await asyncio.to_thread(_maybe_trigger_modal_gpu_worker, rq)
+                info["remote_worker"] = await asyncio.to_thread(
+                    _maybe_trigger_modal_gpu_worker, rq
+                )
+    except Exception:
+        pass
+
+    # Check for stale/zombie jobs (throttled to avoid Redis spam on UI polling)
+    try:
+        if info.get("available") and rq.redis:
+            should_check_stale = True
+            try:
+                # Only check every 30 seconds per client
+                should_check_stale = bool(
+                    rq.redis.set(
+                        "pyreflect:stale_job_check",
+                        str(int(time.time())),
+                        nx=True,
+                        ex=30,
+                    )
+                )
+            except Exception:
+                should_check_stale = False
+
+            if should_check_stale:
+                stale_summary = await asyncio.to_thread(
+                    get_stale_job_summary,
+                    redis_conn=rq.redis,
+                    queue_name="training",
+                )
+                if stale_summary.get("stale"):
+                    info["stale_jobs"] = stale_summary["stale"]
+                    info["stale_jobs_warning"] = (
+                        f"Detected {len(stale_summary['stale'])} potentially stale job(s). "
+                        "These may be zombie jobs from crashed workers and will be auto-cleaned."
+                    )
     except Exception:
         pass
 
@@ -982,3 +1101,81 @@ async def spawn_remote_worker(
     if not rq or not rq.available:
         raise HTTPException(status_code=503, detail="Job queue not available.")
     return {"remote_worker": _maybe_trigger_modal_gpu_worker(rq)}
+
+
+@router.post("/queue/cleanup")
+async def cleanup_stale_jobs_endpoint(
+    http_request: Request,
+    x_admin_token: str | None = Header(default=None),
+    dry_run: bool = False,
+    threshold_seconds: int | None = None,
+):
+    """
+    Admin endpoint: manually trigger stale job cleanup.
+
+    Detects and cleans up zombie jobs that are stuck in "started" state
+    because their worker died without proper cleanup.
+
+    Args:
+        dry_run: If true, only detect but don't clean up
+        threshold_seconds: Override the default staleness threshold (seconds)
+    """
+    require_admin_token(
+        is_production=IS_PRODUCTION,
+        admin_token=ADMIN_TOKEN,
+        x_admin_token=x_admin_token,
+    )
+
+    rq = _get_rq_or_reconnect(http_request)
+    if not rq or not rq.available or not rq.redis:
+        raise HTTPException(status_code=503, detail="Job queue not available.")
+
+    import asyncio
+
+    result = await asyncio.to_thread(
+        cleanup_stale_jobs,
+        redis_conn=rq.redis,
+        queue_name="training",
+        threshold_seconds=threshold_seconds,
+        dry_run=dry_run,
+    )
+    return result
+
+
+@router.post("/jobs/{job_id}/force-purge")
+async def force_purge_job(
+    job_id: str,
+    http_request: Request,
+    x_admin_token: str | None = Header(default=None),
+):
+    """
+    Admin endpoint: force purge a job from Redis.
+
+    Use this to manually remove zombie jobs that the automatic cleanup
+    hasn't caught yet. This is a destructive operation.
+    """
+    require_admin_token(
+        is_production=IS_PRODUCTION,
+        admin_token=ADMIN_TOKEN,
+        x_admin_token=x_admin_token,
+    )
+
+    rq = _get_rq_or_reconnect(http_request)
+    if not rq or not rq.available or not rq.redis:
+        raise HTTPException(status_code=503, detail="Job queue not available.")
+
+    from ..services.stale_job_cleanup import _purge_zombie_job
+
+    result = _purge_zombie_job(
+        redis_conn=rq.redis,
+        job_id=job_id,
+        queue_name="training",
+    )
+
+    if not result.get("success"):
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to purge job: {result.get('error', 'unknown error')}",
+        )
+
+    return result

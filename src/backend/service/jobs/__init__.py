@@ -4,6 +4,7 @@ Background job functions for RQ workers.
 These functions are designed to be run in a separate worker process.
 They should NOT depend on any web request context.
 """
+
 from __future__ import annotations
 
 import json
@@ -141,7 +142,9 @@ def run_training_job(
         print(message, flush=True)
         set_meta({"logs": logs})
 
-    def update_progress(epoch: int, total: int, train_loss: float, val_loss: float) -> None:
+    def update_progress(
+        epoch: int, total: int, train_loss: float, val_loss: float
+    ) -> None:
         """Update training progress in job meta."""
         set_meta(
             {
@@ -167,7 +170,9 @@ def run_training_job(
     set_meta(init_meta, force=True)
 
     if not PYREFLECT.available:
-        raise RuntimeError("pyreflect not available. Please install pyreflect dependencies.")
+        raise RuntimeError(
+            "pyreflect not available. Please install pyreflect dependencies."
+        )
 
     ReflectivityDataGenerator = PYREFLECT.ReflectivityDataGenerator
     DataProcessor = PYREFLECT.DataProcessor
@@ -178,7 +183,9 @@ def run_training_job(
 
     # Prefer CUDA when available (e.g. Modal GPU workers), regardless of what the
     # upstream `pyreflect.config.runtime.DEVICE` defaulted to.
-    device, device_reason = resolve_torch_device(torch, runtime_device=runtime_device, prefer_cuda=True)
+    device, device_reason = resolve_torch_device(
+        torch, runtime_device=runtime_device, prefer_cuda=True
+    )
     if device_reason:
         log(f"Warning: {device_reason}")
 
@@ -220,7 +227,12 @@ def run_training_job(
             api = HfApi(token=hf_token)
             # Pre-create repo so upload is only the file transfer.
             try:
-                api.create_repo(repo_id=hf_repo_id, repo_type="dataset", exist_ok=True, private=False)
+                api.create_repo(
+                    repo_id=hf_repo_id,
+                    repo_type="dataset",
+                    exist_ok=True,
+                    private=False,
+                )
             except Exception:
                 pass
             hf = HuggingFaceIntegration(available=True, repo_id=hf_repo_id, api=api)
@@ -230,7 +242,9 @@ def run_training_job(
             hf = None
 
     if storage_mode == "hf" and hf is None:
-        raise RuntimeError("MODEL_STORAGE=hf requires HF_REPO_ID + HF_TOKEN (and a valid Hugging Face auth).")
+        raise RuntimeError(
+            "MODEL_STORAGE=hf requires HF_REPO_ID + HF_TOKEN (and a valid Hugging Face auth)."
+        )
 
     mongo_uri = (mongo_uri or os.getenv("MONGODB_URI") or "").strip() or None
     require_mongo = _get_bool("REQUIRE_MONGO_SAVE", default=False)
@@ -273,7 +287,9 @@ def run_training_job(
         # =====================
         # Data Generation
         # =====================
-        log(f"Generating {num_curves} synthetic curves with {num_film_layers} film layers...")
+        log(
+            f"Generating {num_curves} synthetic curves with {num_film_layers} film layers..."
+        )
         set_meta({"status": "generating"})
 
         gen_start = time.perf_counter()
@@ -289,12 +305,17 @@ def run_training_job(
         first_n = min(num_curves, max(1, generation_chunk_size))
         nr0, sld0 = data_generator.generate(first_n)
 
+        # pyreflect may return more curves than requested; only take what we need
+        actual_first = min(nr0.shape[0], num_curves)
+        nr0 = nr0[:actual_first]
+        sld0 = sld0[:actual_first]
+
         # Pre-allocate full arrays to avoid holding many chunk objects.
         nr_curves = np.empty((num_curves,) + tuple(nr0.shape[1:]), dtype=nr0.dtype)
         sld_curves = np.empty((num_curves,) + tuple(sld0.shape[1:]), dtype=sld0.dtype)
-        nr_curves[:first_n] = nr0
-        sld_curves[:first_n] = sld0
-        generated = first_n
+        nr_curves[:actual_first] = nr0
+        sld_curves[:actual_first] = sld0
+        generated = actual_first
 
         set_meta({"generation": {"done": generated, "total": num_curves}})
         if generated < num_curves:
@@ -304,9 +325,11 @@ def run_training_job(
             _raise_if_stopped("generation")
             n = min(generation_chunk_size, num_curves - generated)
             nr_chunk, sld_chunk = data_generator.generate(n)
-            nr_curves[generated : generated + n] = nr_chunk
-            sld_curves[generated : generated + n] = sld_chunk
-            generated += n
+            # pyreflect may return more curves than requested; only take what we need
+            actual_n = min(nr_chunk.shape[0], num_curves - generated)
+            nr_curves[generated : generated + actual_n] = nr_chunk[:actual_n]
+            sld_curves[generated : generated + actual_n] = sld_chunk[:actual_n]
+            generated += actual_n
             set_meta({"generation": {"done": generated, "total": num_curves}})
             log(f"   Generated {generated}/{num_curves} curves...")
 
@@ -354,14 +377,18 @@ def run_training_job(
         model = CNN(layers=layers, dropout_prob=dropout).to(device)
         model.train()
 
-        list_arrays = DataProcessor.split_arrays(reshaped_nr, normalized_sld, size_split=SPLIT_RATIO)
+        list_arrays = DataProcessor.split_arrays(
+            reshaped_nr, normalized_sld, size_split=SPLIT_RATIO
+        )
         tensor_arrays = DataProcessor.convert_tensors(list_arrays)
         _, _, _, train_loader, valid_loader, _ = DataProcessor.get_dataloaders(
             *tensor_arrays,
             batch_size=batch_size,
         )
 
-        optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+        optimizer = torch.optim.Adam(
+            model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY
+        )
         loss_fn = torch.nn.MSELoss()
 
         epoch_list = []
@@ -482,7 +509,9 @@ def run_training_job(
 
             if hf is None or not upload_model(hf, buffer, model_id):
                 raise RuntimeError("Hugging Face upload failed.")
-            log(f"Model uploaded to Hugging Face Hub: {model_id}.pth ({model_size_mb:.2f} MB)")
+            log(
+                f"Model uploaded to Hugging Face Hub: {model_id}.pth ({model_size_mb:.2f} MB)"
+            )
         except Exception as exc:
             raise RuntimeError(f"Hugging Face upload failed: {exc}") from exc
     else:
@@ -529,7 +558,9 @@ def run_training_job(
         test_input = torch.tensor(test_nr_normalized, dtype=torch.float32).to(device)
         pred_sld_normalized = model(test_input).cpu().numpy()
 
-    pred_sld_denorm = DataProcessor.denormalize_xy_curves(pred_sld_normalized, stats=sld_stats, apply_exp=False)
+    pred_sld_denorm = DataProcessor.denormalize_xy_curves(
+        pred_sld_normalized, stats=sld_stats, apply_exp=False
+    )
     pred_sld_y = pred_sld_denorm[0, 1, :]
     pred_sld_z = pred_sld_denorm[0, 0, :]
 
@@ -537,11 +568,17 @@ def run_training_job(
 
     # Compute NR from predicted SLD
     computed_nr = gt_nr[1].tolist()
-    if PYREFLECT.compute_nr_available and compute_nr_from_sld is not None and not _get_stop_requested():
+    if (
+        PYREFLECT.compute_nr_available
+        and compute_nr_from_sld is not None
+        and not _get_stop_requested()
+    ):
         log("Computing NR from predicted SLD...")
         try:
             pred_sld_profile = (pred_sld_z, pred_sld_y)
-            _, computed_r = compute_nr_from_sld(pred_sld_profile, Q=gt_nr[0], order="substrate_to_air")
+            _, computed_r = compute_nr_from_sld(
+                pred_sld_profile, Q=gt_nr[0], order="substrate_to_air"
+            )
             computed_nr = computed_r.tolist()
         except Exception as exc:
             log(f"Warning: Could not compute NR from predicted SLD: {exc}")
@@ -554,7 +591,11 @@ def run_training_job(
     # Calculate metrics
     sample_indices = np.linspace(0, len(pred_sld_y) - 1, 50, dtype=int)
     chi = [
-        {"x": int(i), "predicted": float(pred_sld_y[idx]), "actual": float(gt_sld[1][idx])}
+        {
+            "x": int(i),
+            "predicted": float(pred_sld_y[idx]),
+            "actual": float(gt_sld[1][idx]),
+        }
         for i, idx in enumerate(sample_indices)
     ]
 
@@ -573,11 +614,27 @@ def run_training_job(
     # Build Result
     # =====================
     result = {
-        "nr": {"q": gt_nr[0].tolist(), "groundTruth": gt_nr[1].tolist(), "computed": computed_nr},
-        "sld": {"z": sld_z.tolist(), "groundTruth": gt_sld[1].tolist(), "predicted": pred_sld_y.tolist()},
-        "training": {"epochs": epoch_list, "trainingLoss": train_losses, "validationLoss": val_losses},
+        "nr": {
+            "q": gt_nr[0].tolist(),
+            "groundTruth": gt_nr[1].tolist(),
+            "computed": computed_nr,
+        },
+        "sld": {
+            "z": sld_z.tolist(),
+            "groundTruth": gt_sld[1].tolist(),
+            "predicted": pred_sld_y.tolist(),
+        },
+        "training": {
+            "epochs": epoch_list,
+            "trainingLoss": train_losses,
+            "validationLoss": val_losses,
+        },
         "chi": chi,
-        "metrics": {"mse": float(final_mse), "r2": float(np.clip(r2, 0, 1)), "mae": mae},
+        "metrics": {
+            "mse": float(final_mse),
+            "r2": float(np.clip(r2, 0, 1)),
+            "mae": mae,
+        },
         "name": name,
         "model_id": model_id,
         "model_size_mb": model_size_mb,

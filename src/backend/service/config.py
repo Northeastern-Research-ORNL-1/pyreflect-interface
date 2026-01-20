@@ -50,9 +50,12 @@ def _parse_typed_env(env_key: str, default: int | float) -> int | float:
 
 
 # Always-available limit tables.
-LOCAL_LIMITS: dict[str, int | float] = {k: local for k, (local, _prod) in _DEFAULT_LIMITS.items()}
+LOCAL_LIMITS: dict[str, int | float] = {
+    k: local for k, (local, _prod) in _DEFAULT_LIMITS.items()
+}
 PRODUCTION_LIMITS: dict[str, int | float] = {
-    k: _parse_typed_env(k.upper(), prod) for k, (_local, prod) in _DEFAULT_LIMITS.items()
+    k: _parse_typed_env(k.upper(), prod)
+    for k, (_local, prod) in _DEFAULT_LIMITS.items()
 }
 
 
@@ -127,6 +130,14 @@ LOCAL_MODEL_WAIT_POLL_S = float(os.getenv("LOCAL_MODEL_WAIT_POLL_S", "2.0"))
 # Training job timeout for RQ (supports strings like "30m", "2h", or seconds).
 RQ_JOB_TIMEOUT = os.getenv("RQ_JOB_TIMEOUT", "2h")
 
+# Stale job cleanup: if a job's meta.updated_at is older than this, consider it stale.
+# This handles zombie jobs where Modal worker dies without cleanup.
+# Default: 10 minutes (600 seconds). Workers update meta every ~1 second.
+STALE_JOB_THRESHOLD_S = int(os.getenv("STALE_JOB_THRESHOLD_S", "600"))
+
+# How often to run the background cleanup task (seconds).
+STALE_JOB_CLEANUP_INTERVAL_S = int(os.getenv("STALE_JOB_CLEANUP_INTERVAL_S", "60"))
+
 
 def _get_bool_env(name: str, default: bool) -> bool:
     value = os.getenv(name)
@@ -158,7 +169,9 @@ def _squash_whitespace(value: str | None) -> str | None:
 
 # Whether the API process should start a local RQ worker subprocess.
 # - Default: enabled for local dev, disabled for PRODUCTION (so you can use Modal workers).
-START_LOCAL_RQ_WORKER = _get_bool_env("START_LOCAL_RQ_WORKER", default=not IS_PRODUCTION)
+START_LOCAL_RQ_WORKER = _get_bool_env(
+    "START_LOCAL_RQ_WORKER", default=not IS_PRODUCTION
+)
 
 # =====================
 # Modal (Remote GPU Workers)

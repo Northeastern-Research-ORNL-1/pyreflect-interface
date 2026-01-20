@@ -695,6 +695,90 @@ Files from `pyreflect/datasets/` can be uploaded:
 | `/api/jobs/purge`             | DELETE | Delete non-running jobs for a user      |
 | `/api/queue`                  | GET    | Queue status and worker info            |
 | `/api/queue/spawn`            | POST   | Trigger remote worker spawn (debug)     |
+| `/api/queue/cleanup`          | POST   | Trigger stale job cleanup (admin)       |
+| `/api/jobs/{job_id}/force-purge` | POST | Force purge a zombie job (admin)     |
+
+### Job Lifecycle and Zombie Prevention
+
+The system includes automatic detection and cleanup of "zombie" jobs - jobs that get stuck in "started" state when their worker dies unexpectedly (Modal container killed, OOM, heartbeat timeout, etc.).
+
+#### How It Works
+
+```mermaid
+flowchart TB
+    subgraph Normal["Normal Job Flow"]
+        Submit[Job Submitted]
+        Queue[(Redis Queue)]
+        Worker[Modal GPU Worker]
+        Complete[Job Complete]
+    end
+
+    subgraph Failure["Worker Death (Zombie Scenario)"]
+        Started[Job Started]
+        Death[Worker Dies]
+        Zombie[Zombie Job<br/>stuck in 'started']
+    end
+
+    subgraph Detection["Automatic Cleanup"]
+        Cleanup[Stale Job Detector<br/>runs every 60s]
+        Check{updated_at<br/>older than 10min?}
+        Purge[Purge from Redis]
+        MarkFailed[Mark as Failed]
+    end
+
+    Submit --> Queue --> Worker --> Complete
+    
+    Started --> Death --> Zombie
+    Zombie --> Cleanup
+    Cleanup --> Check
+    Check -->|Yes| Purge --> MarkFailed
+    Check -->|No| Wait[Keep Monitoring]
+```
+
+#### Detection Mechanism
+
+Workers update `job.meta.updated_at` every ~1 second during execution. The stale job detector:
+
+1. Scans the started registry (`rq:wip:training`, `rq:started:training`)
+2. Checks each job's `meta.updated_at` timestamp
+3. If older than `STALE_JOB_THRESHOLD_S` (default: 600 seconds / 10 minutes), marks it as stale
+4. Purges stale jobs from Redis registries and marks them as failed
+
+#### Configuration
+
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `STALE_JOB_THRESHOLD_S` | 600 | Seconds before a job is considered stale |
+| `STALE_JOB_CLEANUP_INTERVAL_S` | 60 | How often the cleanup task runs |
+
+#### Manual Cleanup
+
+For immediate cleanup (admin only):
+
+```bash
+# Dry-run: see what would be cleaned
+curl -X POST "http://localhost:8000/api/queue/cleanup?dry_run=true" \
+  -H "X-Admin-Token: YOUR_ADMIN_TOKEN"
+
+# Actually clean up stale jobs
+curl -X POST "http://localhost:8000/api/queue/cleanup" \
+  -H "X-Admin-Token: YOUR_ADMIN_TOKEN"
+
+# Force purge a specific job
+curl -X POST "http://localhost:8000/api/jobs/JOB_ID/force-purge" \
+  -H "X-Admin-Token: YOUR_ADMIN_TOKEN"
+```
+
+#### Graceful Stop
+
+The `/api/jobs/{job_id}/stop` endpoint:
+
+1. Sets `meta.stop_requested = true` (checked by worker between phases/epochs)
+2. Sends RQ `stop-job` command to kill the workhorse process immediately
+3. Removes job from queue/started registries
+4. Updates meta to show "stopped" status in UI
+
+This handles both graceful stops (worker sees flag) and hard stops (worker process killed).
 
 ## Technology Stack
 
