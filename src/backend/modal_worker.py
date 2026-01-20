@@ -64,9 +64,6 @@ def _build_worker_image(
             # package is a different project and is missing required modules).
             "pyreflect @ https://github.com/williamQyq/pyreflect/archive/refs/heads/main.zip",
         )
-        # Bundle only the backend service package so the RQ worker can import
-        # `service.jobs.run_training_job` without pulling in unrelated repo files.
-        .add_local_dir(_SERVICE_DIR, remote_path="/root/backend/service")
     )
 
     # Install torch LAST so no later dependency resolution can downgrade it.
@@ -78,7 +75,9 @@ def _build_worker_image(
         # Build-time sanity check: ensure torch wheel is CUDA 13+.
         "python -c \"import sys, torch; v=getattr(getattr(torch,'version',None),'cuda',None); print('torch.__version__:', torch.__version__); print('torch.version.cuda:', v); major=int(str(v).split('.')[0]) if v else 0; sys.exit(0 if major>=13 else 1)\"",
     )
-    return img
+
+    # Add local files last (Modal best practice; avoids rebuilds).
+    return img.add_local_dir(_SERVICE_DIR, remote_path="/root/backend/service")
 
 
 image = _build_worker_image(torch_index_url=TORCH_INDEX_URL, install_torchvision=True)
