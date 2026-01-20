@@ -3,10 +3,11 @@
 A minimal, monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyreflect) neutron reflectivity analysis package.
 
 ![Interface Preview](https://img.shields.io/badge/status-live-black)
-![Version](https://img.shields.io/badge/version-v0.1.1-black)
+![Version](https://img.shields.io/badge/version-v0.1.2-black)
 
 ## Version
 
+- **v0.1.2** — Production hardening + whitelist-only higher limits.
 - **v0.1.1** — GitHub auth, explore/history sidebar, and download bundle support.
 
 ## Live Deployment
@@ -44,6 +45,12 @@ The hosted deployment runs with the full stack enabled: Redis job queue + Modal 
 | Dropout       | 0.9     | 0.5        |
 | Latent Dim    | 128     | 32         |
 | AE/MLP Epochs | 500     | 100        |
+
+Higher limits in production are **allowlist-only**.
+
+- The frontend sends `X-User-ID` as your GitHub username (login).
+- The backend uses `LIMITS_WHITELIST_USER_IDS` (comma-separated GitHub usernames) to decide who gets local/unlimited limits.
+- If you are not allowlisted, the UI shows a lock icon and the Limits modal provides contact info.
 
 ## Project Structure
 
@@ -342,6 +349,10 @@ cd src/backend
 uv python pin 3.12
 uv sync
 
+# Optional: start from the example env file
+cp .env.example .env
+# For local dev (unlimited limits), set: PRODUCTION=false
+
 # Start Redis (required for /api/jobs/* and /api/queue)
 # macOS (Homebrew): brew install redis && redis-server
 # Docker: docker run -p 6379:6379 redis:7
@@ -356,6 +367,10 @@ Backend runs at **http://localhost:8000**
 ```bash
 cd src/interface
 bun install
+
+# Required for GitHub sign-in
+cp .env.example .env
+# Set NEXTAUTH_URL=http://localhost:3000 and fill GITHUB_CLIENT_ID/GITHUB_CLIENT_SECRET
 bun dev
 ```
 
@@ -514,6 +529,10 @@ PRODUCTION=true uv run uvicorn main:app --port 8000
 # .env
 PRODUCTION=true
 
+# Comma-separated GitHub usernames that can use local/unlimited limits in production.
+# Example: LIMITS_WHITELIST_USER_IDS=undeemed,alice,bob
+LIMITS_WHITELIST_USER_IDS=
+
 # CORS (comma-separated origins)
 CORS_ORIGINS=http://localhost:3000,https://your-app.vercel.app
 # Or use a regex allowlist (useful for multiple subdomains):
@@ -547,6 +566,8 @@ MAX_LATENT_DIM=32
 MAX_AE_EPOCHS=100
 MAX_MLP_EPOCHS=100
 ```
+
+Security note: the backend allowlist is only as trustworthy as the `X-User-ID` header. In production, do not expose the backend directly to untrusted clients unless you add a real auth layer.
 
 Then run normally:
 
@@ -648,7 +669,7 @@ Files from `pyreflect/datasets/` can be uploaded:
 | Endpoint                      | Method | Description                             |
 | ----------------------------- | ------ | --------------------------------------- |
 | `/api/health`                 | GET    | Health check                            |
-| `/api/limits`                 | GET    | Current limits and production flag      |
+| `/api/limits`                 | GET    | Current limits + access status          |
 | `/api/defaults`               | GET    | Default parameters                      |
 | `/api/generate`               | POST   | Generate NR/SLD curves (non-streaming)  |
 | `/api/generate/stream`        | POST   | Generate with SSE log stream            |
