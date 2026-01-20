@@ -499,6 +499,10 @@ async def stop_job(job_id: str, http_request: Request):
     Request a running job to stop.
 
     Sets a flag in job meta that the worker checks between phases/epochs.
+
+    For phases that may take a very long time (e.g. reflectivity generation), we also
+    send an RQ `stop-job` command to kill the current workhorse. This is the only
+    reliable way to stop code that doesn't yield back to Python for long periods.
     """
     rq = _get_rq_or_reconnect(http_request)
 
@@ -523,10 +527,32 @@ async def stop_job(job_id: str, http_request: Request):
         job.meta = meta
         job.save_meta()
 
+        # If we aren't in the training loop yet, prefer a hard stop.
+        worker_phase = meta.get("status")
+        should_hard_stop = worker_phase not in {"training"}
+        hard_stop_sent = False
+        hard_stop_error: str | None = None
+        if should_hard_stop:
+            try:
+                from rq.command import send_stop_job_command
+
+                send_stop_job_command(rq.redis, job_id)
+                hard_stop_sent = True
+            except Exception as exc:
+                hard_stop_error = str(exc)[:300]
+
+        message = "Stop requested."
+        if hard_stop_sent:
+            message = "Stop requested. Sent RQ stop-job command to kill the worker process."
+        elif should_hard_stop and hard_stop_error:
+            message = f"Stop requested, but failed to send RQ stop-job command: {hard_stop_error}"
+
         return {
             "job_id": job_id,
             "status": "stop_requested",
-            "message": "Stop requested. Job will stop after the current generation chunk or epoch.",
+            "hard_stop": hard_stop_sent,
+            "phase": worker_phase,
+            "message": message,
         }
 
     except HTTPException:
