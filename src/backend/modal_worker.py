@@ -109,16 +109,27 @@ def _normalize_redis_url(value: str) -> str:
     return value
 
 
-@app.function(
-    image=image,
-    gpu="T4",  # Use T4 GPU (cheapest)
-    timeout=4 * 60 * 60,  # Hard cap for the whole burst worker session
-    secrets=[modal.Secret.from_name("pyreflect-redis")],  # Redis credentials
-)
-def run_rq_worker_burst(lock_value: str):
-    """
-    Run a real RQ worker (SimpleWorker) in burst mode on a GPU container.
+# GPU tiers available for training (Modal pricing as of Jan 2026)
+GPU_TIERS = {
+    "T4": "T4",             # $0.59/hr, 16GB VRAM
+    "L4": "L4",             # $0.80/hr, 24GB VRAM
+    "A10G": "A10G",         # $1.10/hr, 24GB VRAM
+    "L40S": "L40S",         # $1.95/hr, 48GB VRAM
+    "A100": "A100",         # $2.10/hr, 40GB VRAM
+    "A100-80GB": "A100-80GB",  # $2.50/hr, 80GB VRAM
+    "H100": "H100",         # $3.95/hr, 80GB VRAM
+    "H200": "H200",         # $4.54/hr, 141GB VRAM
+    "B200": "B200",         # $6.25/hr, 192GB VRAM
+}
 
+DEFAULT_GPU = "T4"
+
+
+def _run_rq_worker_impl(lock_value: str, gpu_name: str):
+    """
+    Core RQ worker implementation shared by all GPU-specific functions.
+    
+    Runs a real RQ worker (SimpleWorker) in burst mode on a GPU container.
     This executes `service.jobs.run_training_job` exactly like a local RQ worker,
     so job status/result fields, logs, HF uploads, and history persistence match.
     """
@@ -131,6 +142,8 @@ def run_rq_worker_burst(lock_value: str):
     from redis import Redis
     from rq import Queue
     from rq.worker import SimpleWorker
+
+    print(f"🎮 GPU Worker starting on {gpu_name}")
 
     redis_url = os.environ.get("REDIS_URL")
     if not redis_url:
@@ -174,7 +187,7 @@ def run_rq_worker_burst(lock_value: str):
             raise RuntimeError(f"GPU sanity check failed: {exc}") from exc
 
         queue = Queue("training", connection=redis_conn)
-        worker_name = f"gpu-{socket.gethostname()}-{uuid.uuid4().hex[:6]}"
+        worker_name = f"gpu-{gpu_name.lower()}-{socket.gethostname()}-{uuid.uuid4().hex[:6]}"
 
         worker = SimpleWorker([queue], connection=redis_conn, name=worker_name)
         print(f"✅ Starting RQ SimpleWorker '{worker_name}' (burst mode)")
@@ -188,6 +201,134 @@ def run_rq_worker_burst(lock_value: str):
                 redis_conn.delete(lock_key)
         except Exception:
             pass
+
+
+# --- GPU-specific worker functions ---
+# Each function uses a different GPU tier. The poller/backend spawns the appropriate one.
+
+@app.function(
+    image=image,
+    gpu="T4",
+    timeout=4 * 60 * 60,
+    secrets=[modal.Secret.from_name("pyreflect-redis")],
+)
+def run_rq_worker_t4(lock_value: str):
+    """RQ worker on T4 GPU (~$0.59/hr, 16GB VRAM)"""
+    _run_rq_worker_impl(lock_value, "T4")
+
+
+@app.function(
+    image=image,
+    gpu="L4",
+    timeout=4 * 60 * 60,
+    secrets=[modal.Secret.from_name("pyreflect-redis")],
+)
+def run_rq_worker_l4(lock_value: str):
+    """RQ worker on L4 GPU (~$0.80/hr, 24GB VRAM)"""
+    _run_rq_worker_impl(lock_value, "L4")
+
+
+@app.function(
+    image=image,
+    gpu="A10G",
+    timeout=4 * 60 * 60,
+    secrets=[modal.Secret.from_name("pyreflect-redis")],
+)
+def run_rq_worker_a10g(lock_value: str):
+    """RQ worker on A10G GPU (~$1.10/hr, 24GB VRAM)"""
+    _run_rq_worker_impl(lock_value, "A10G")
+
+
+@app.function(
+    image=image,
+    gpu="L40S",
+    timeout=4 * 60 * 60,
+    secrets=[modal.Secret.from_name("pyreflect-redis")],
+)
+def run_rq_worker_l40s(lock_value: str):
+    """RQ worker on L40S GPU ($1.95/hr, 48GB VRAM)"""
+    _run_rq_worker_impl(lock_value, "L40S")
+
+
+@app.function(
+    image=image,
+    gpu="A100",
+    timeout=4 * 60 * 60,
+    secrets=[modal.Secret.from_name("pyreflect-redis")],
+)
+def run_rq_worker_a100(lock_value: str):
+    """RQ worker on A100 GPU ($2.10/hr, 40GB VRAM)"""
+    _run_rq_worker_impl(lock_value, "A100")
+
+
+@app.function(
+    image=image,
+    gpu="A100-80GB",
+    timeout=4 * 60 * 60,
+    secrets=[modal.Secret.from_name("pyreflect-redis")],
+)
+def run_rq_worker_a100_80gb(lock_value: str):
+    """RQ worker on A100-80GB GPU ($2.50/hr, 80GB VRAM)"""
+    _run_rq_worker_impl(lock_value, "A100-80GB")
+
+
+@app.function(
+    image=image,
+    gpu="H100",
+    timeout=4 * 60 * 60,
+    secrets=[modal.Secret.from_name("pyreflect-redis")],
+)
+def run_rq_worker_h100(lock_value: str):
+    """RQ worker on H100 GPU ($3.95/hr, 80GB VRAM)"""
+    _run_rq_worker_impl(lock_value, "H100")
+
+
+@app.function(
+    image=image,
+    gpu="H200",
+    timeout=4 * 60 * 60,
+    secrets=[modal.Secret.from_name("pyreflect-redis")],
+)
+def run_rq_worker_h200(lock_value: str):
+    """RQ worker on H200 GPU ($4.54/hr, 141GB VRAM)"""
+    _run_rq_worker_impl(lock_value, "H200")
+
+
+@app.function(
+    image=image,
+    gpu="B200",
+    timeout=4 * 60 * 60,
+    secrets=[modal.Secret.from_name("pyreflect-redis")],
+)
+def run_rq_worker_b200(lock_value: str):
+    """RQ worker on B200 GPU ($6.25/hr, 192GB VRAM)"""
+    _run_rq_worker_impl(lock_value, "B200")
+
+
+# Backwards compatibility alias
+def run_rq_worker_burst(lock_value: str):
+    """Deprecated: Use run_rq_worker_t4 instead."""
+    run_rq_worker_t4(lock_value)
+
+
+def get_gpu_worker_fn(gpu: str):
+    """Get the appropriate worker function for the given GPU tier."""
+    gpu = (gpu or DEFAULT_GPU).upper()
+    gpu_map = {
+        "T4": run_rq_worker_t4,
+        "L4": run_rq_worker_l4,
+        "A10G": run_rq_worker_a10g,
+        "L40S": run_rq_worker_l40s,
+        "A100": run_rq_worker_a100,
+        "A100-80GB": run_rq_worker_a100_80gb,
+        "H100": run_rq_worker_h100,
+        "H200": run_rq_worker_h200,
+        "B200": run_rq_worker_b200,
+    }
+    if gpu in gpu_map:
+        return gpu_map[gpu]
+    print(f"Unknown GPU tier '{gpu}', falling back to {DEFAULT_GPU}")
+    return run_rq_worker_t4
 
 
 @app.function(
@@ -226,6 +367,21 @@ def poll_queue_http(token: str | None = None):
     if expected and token != expected:
         raise HTTPException(status_code=401, detail="unauthorized")
     return _poll_queue_impl()
+
+
+def _get_requested_gpu_from_queue(queue) -> str:
+    """Check the first queued job for GPU preference."""
+    try:
+        job_ids = queue.job_ids
+        if job_ids:
+            job = queue.fetch_job(job_ids[0])
+            if job and job.args:
+                job_params = job.args[0] if job.args else {}
+                if isinstance(job_params, dict):
+                    return job_params.get("gpu", DEFAULT_GPU)
+    except Exception:
+        pass
+    return DEFAULT_GPU
 
 
 def _poll_queue_impl() -> dict:
@@ -276,9 +432,12 @@ def _poll_queue_impl() -> dict:
         lock_ttl_s = max(lock_ttl_s, 60)
         acquired = redis_conn.set(lock_key, lock_value, nx=True, ex=lock_ttl_s)
         if acquired:
-            print(f"📋 {queued} jobs queued, spawning GPU worker...")
-            run_rq_worker_burst.spawn(lock_value)
-            return {"ok": True, "spawned": True, "queued": queued, "started": started}
+            # Get the GPU preference from the first queued job
+            requested_gpu = _get_requested_gpu_from_queue(queue)
+            worker_fn = get_gpu_worker_fn(requested_gpu)
+            print(f"📋 {queued} jobs queued, spawning {requested_gpu} GPU worker...")
+            worker_fn.spawn(lock_value)
+            return {"ok": True, "spawned": True, "queued": queued, "started": started, "gpu": requested_gpu}
 
         try:
             ttl = redis_conn.ttl(lock_key)
@@ -309,13 +468,16 @@ def _poll_queue_impl() -> dict:
                     retry_value = f"{uuid.uuid4()}:{int(time.time())}"
                     retry_acquired = redis_conn.set(lock_key, retry_value, nx=True, ex=lock_ttl_s)
                     if retry_acquired:
-                        print(f"📋 {queued} jobs queued, spawning GPU worker...")
-                        run_rq_worker_burst.spawn(retry_value)
+                        requested_gpu = _get_requested_gpu_from_queue(queue)
+                        worker_fn = get_gpu_worker_fn(requested_gpu)
+                        print(f"📋 {queued} jobs queued, spawning {requested_gpu} GPU worker...")
+                        worker_fn.spawn(retry_value)
                         return {
                             "ok": True,
                             "spawned": True,
                             "queued": queued,
                             "started": started,
+                            "gpu": requested_gpu,
                             "stale_lock_cleared": True,
                         }
         except Exception:

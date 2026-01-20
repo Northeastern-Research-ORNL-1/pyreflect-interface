@@ -109,6 +109,19 @@ export const DEFAULT_LIMITS: Limits = {
 export type DataSource = 'synthetic' | 'real';
 export type Workflow = 'nr_sld' | 'sld_chi' | 'nr_sld_chi';
 export type NrSldMode = 'train' | 'infer';
+export type GpuTier = 'T4' | 'L4' | 'A10G' | 'L40S' | 'A100' | 'A100-80GB' | 'H100' | 'H200' | 'B200';
+
+export const GPU_TIERS: { value: GpuTier; label: string; description: string; speed: string }[] = [
+  { value: 'T4', label: 'NVIDIA T4', description: '$0.59/hr, 16GB, 65 TF', speed: '1×' },
+  { value: 'L4', label: 'NVIDIA L4', description: '$0.80/hr, 24GB, 121 TF', speed: '2×' },
+  { value: 'A10G', label: 'NVIDIA A10G', description: '$1.10/hr, 24GB, 125 TF', speed: '2×' },
+  { value: 'L40S', label: 'NVIDIA L40S', description: '$1.95/hr, 48GB, 362 TF', speed: '5.5×' },
+  { value: 'A100', label: 'NVIDIA A100', description: '$2.10/hr, 40GB, 312 TF', speed: '5×' },
+  { value: 'A100-80GB', label: 'NVIDIA A100-80', description: '$2.50/hr, 80GB, 312 TF', speed: '5×' },
+  { value: 'H100', label: 'NVIDIA H100', description: '$3.95/hr, 80GB, 989 TF', speed: '15×' },
+  { value: 'H200', label: 'NVIDIA H200', description: '$4.54/hr, 141GB, 989 TF', speed: '15×' },
+  { value: 'B200', label: 'NVIDIA B200', description: '$6.25/hr, 192GB, 2250 TF', speed: '35×' },
+];
 export type UploadRole =
   | 'auto'
   | 'nr_train'
