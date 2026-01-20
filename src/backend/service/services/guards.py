@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import secrets
+
 from fastapi import HTTPException
 
 
@@ -18,5 +20,5 @@ def require_admin_token(
         return
     if not admin_token:
         raise HTTPException(status_code=503, detail="ADMIN_TOKEN not configured")
-    if not x_admin_token or x_admin_token != admin_token:
+    if not x_admin_token or not secrets.compare_digest(x_admin_token, admin_token):
         raise HTTPException(status_code=401, detail="Invalid admin token")
