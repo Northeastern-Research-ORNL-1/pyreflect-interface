@@ -235,6 +235,15 @@
   background: rgba(239, 68, 68, 0.1);
 }
 
+.jobActionResume {
+  border-color: #10b981;
+  color: #10b981;
+}
+
+.jobActionResume:hover {
+  background: rgba(16, 185, 129, 0.1);
+}
+
 .itemSubDate {
   font-size: 10px;
   color: var(--text-muted);
@@ -422,6 +431,16 @@
 
 .popupBtnDelete:hover {
   background: #dc2626;
+}
+
+.popupBtnResume {
+  background: #10b981;
+  border-color: #10b981;
+  color: white;
+}
+
+.popupBtnResume:hover {
+  background: #059669;
 }
 
 @media (max-width: 640px) {

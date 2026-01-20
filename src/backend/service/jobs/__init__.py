@@ -48,6 +48,7 @@ def run_training_job(
     from rq import get_current_job
 
     from ..config import (
+        CHECKPOINT_EVERY_N_EPOCHS,
         LEARNING_RATE,
         LOCAL_MODEL_WAIT_POLL_S,
         LOCAL_MODEL_WAIT_TIMEOUT_S,
@@ -57,6 +58,12 @@ def run_training_job(
         WEIGHT_DECAY,
     )
     from ..integrations.huggingface import HuggingFaceIntegration, upload_model
+    from ..services.checkpointing import (
+        Checkpoint,
+        delete_checkpoint,
+        load_checkpoint,
+        save_checkpoint,
+    )
     from ..services.local_model_limit import save_torch_state_dict_with_local_limit
     from ..services.pyreflect_runtime import PYREFLECT, resolve_torch_device
 
@@ -394,11 +401,42 @@ def run_training_job(
         epoch_list = []
         train_losses = []
         val_losses = []
+        start_epoch = 0
+        best_val_loss = float("inf")
+
+        # Try to load checkpoint for resume
+        resumed_from_checkpoint = False
+        if job and hf and hf.api:
+            checkpoint = load_checkpoint(hf.api, torch, job.id, device, log_fn=log)
+            if checkpoint:
+                try:
+                    model.load_state_dict(checkpoint.model_state_dict)
+                    optimizer.load_state_dict(checkpoint.optimizer_state_dict)
+                    epoch_list = checkpoint.epoch_list
+                    train_losses = checkpoint.train_losses
+                    val_losses = checkpoint.val_losses
+                    start_epoch = checkpoint.epoch
+                    best_val_loss = checkpoint.best_val_loss
+                    resumed_from_checkpoint = True
+                    log(f"Resumed from checkpoint at epoch {start_epoch}")
+                    set_meta(
+                        {
+                            "resumed_from_checkpoint": True,
+                            "resumed_at_epoch": start_epoch,
+                        }
+                    )
+                except Exception as exc:
+                    log(f"Warning: Could not restore checkpoint state: {exc}")
+                    # Reset and start fresh
+                    epoch_list = []
+                    train_losses = []
+                    val_losses = []
+                    start_epoch = 0
 
         stopped_early = False
         training_start = time.perf_counter()
 
-        for epoch in range(epochs):
+        for epoch in range(start_epoch, epochs):
             model.train()
             running_loss = 0.0
 
@@ -441,10 +479,51 @@ def run_training_job(
             train_losses.append(train_loss)
             val_losses.append(val_loss)
 
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+
             # Log final epoch stats after progress bar completes
             print(f"  -> Train: {train_loss:.6f}, Val: {val_loss:.6f}", flush=True)
 
             update_progress(epoch + 1, epochs, train_loss, val_loss)
+
+            # Save checkpoint every N epochs (if enabled and HF available)
+            if (
+                CHECKPOINT_EVERY_N_EPOCHS > 0
+                and hf
+                and job
+                and (epoch + 1) % CHECKPOINT_EVERY_N_EPOCHS == 0
+                and (epoch + 1) < epochs  # Don't checkpoint on final epoch
+            ):
+                try:
+                    # Move model to CPU for checkpointing
+                    cpu_state = {
+                        k: v.detach().cpu() for k, v in model.state_dict().items()
+                    }
+                    opt_state = optimizer.state_dict()
+                    # Move optimizer state tensors to CPU too
+                    for state in opt_state.get("state", {}).values():
+                        for k, v in state.items():
+                            if hasattr(v, "cpu"):
+                                state[k] = v.cpu()
+
+                    ckpt = Checkpoint(
+                        job_id=job.id,
+                        epoch=epoch + 1,
+                        model_state_dict=cpu_state,
+                        optimizer_state_dict=opt_state,
+                        train_losses=train_losses.copy(),
+                        val_losses=val_losses.copy(),
+                        epoch_list=epoch_list.copy(),
+                        best_val_loss=best_val_loss,
+                        saved_at=datetime.now(timezone.utc).isoformat(),
+                        nr_stats=nr_stats,
+                        sld_stats=sld_stats,
+                    )
+                    save_checkpoint(hf.api, torch, ckpt, log_fn=log)
+                    set_meta({"last_checkpoint_epoch": epoch + 1})
+                except Exception as exc:
+                    log(f"Warning: Checkpoint save failed: {exc}")
 
             # Check for stop request after each epoch
             if _get_stop_requested():
@@ -690,6 +769,11 @@ def run_training_job(
             log(f"Warning: Could not save to database: {exc}")
 
     log("Training complete!")
+
+    # Delete checkpoint on successful completion (no longer needed)
+    if hf and hf.api and job:
+        delete_checkpoint(hf.api, job.id, log_fn=log)
+
     # Finalize job meta (force flush so UI sees completion immediately).
     set_meta(
         {
