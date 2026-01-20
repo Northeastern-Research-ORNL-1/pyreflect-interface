@@ -57,6 +57,20 @@ describe('LimitsAccessModal', () => {
     expect(screen.getByText('Local limits')).toBeInTheDocument();
   });
 
+  it('shows contact message when locked and signed in', () => {
+    renderModal({ accessGranted: false, hasSession: true, limitSource: 'production' });
+    expect(
+      screen.getByText(/Request xiao\.jer \[at\] northeastern \[dot\] edu to get access to unlimited limits\./)
+    ).toBeInTheDocument();
+  });
+
+  it('shows sign-in + contact message when signed out', () => {
+    renderModal({ accessGranted: false, hasSession: false, isAdmin: false });
+    expect(
+      screen.getByText(/Request xiao\.jer \[at\] northeastern \[dot\] edu to get access to unlimited limits\./)
+    ).toBeInTheDocument();
+  });
+
   it('disables session-gated buttons when signed out', () => {
     renderModal({ hasSession: false, isAdmin: true });
     expect(screen.getByRole('button', { name: 'GET MY CODE' })).toBeDisabled();

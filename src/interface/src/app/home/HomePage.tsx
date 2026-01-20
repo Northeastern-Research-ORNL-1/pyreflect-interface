@@ -101,6 +101,13 @@ export default function HomePage() {
     return typeof maybeId === 'string' ? maybeId : undefined;
   })();
 
+  const sessionGithubId = (() => {
+    const user = session?.user as unknown;
+    if (!user || typeof user !== 'object') return undefined;
+    const maybeId = (user as Record<string, unknown>).githubId;
+    return typeof maybeId === 'string' ? maybeId : undefined;
+  })();
+
   const sessionIsAdmin = (() => {
     const user = session?.user as unknown;
     if (!user || typeof user !== 'object') return false;
@@ -424,6 +431,21 @@ export default function HomePage() {
     },
     [sessionUserId]
   );
+
+  useEffect(() => {
+    if (!isHydrated) return;
+    if (!isProduction) return;
+    if (!sessionGithubId) return;
+    if (!limitsAccessSource) return;
+
+    // If the backend reports production limits for a signed-in user, it's very
+    // often because the backend allowlist expects a different ID format (e.g.
+    // numeric GitHub ID vs GitHub username). Logging the numeric ID here makes
+    // it easy to update `LIMITS_WHITELIST_USER_IDS` appropriately.
+    if (limitsAccessSource === 'production') {
+      addLog(`Signed-in GitHub numeric id: ${sessionGithubId} (for allowlist debugging)`);
+    }
+  }, [isHydrated, isProduction, sessionGithubId, limitsAccessSource, addLog]);
 
   useEffect(() => {
     if (!isHydrated) return;

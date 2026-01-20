@@ -10,16 +10,22 @@ export const authOptions: NextAuthOptions = {
   ],
   callbacks: {
     async jwt({ token, account, profile }) {
-      // Persist the GitHub user ID to the token
+      // Persist the GitHub login to the token.
+      //
+      // We use this value as `X-User-ID` when talking to the backend so the
+      // allowlist can be managed using human-readable GitHub usernames.
       if (account && profile) {
-        token.id = (profile as { id: number }).id?.toString();
+        const p = profile as { id?: number; login?: string };
+        token.id = p.login?.toString();
+        token.githubId = p.id?.toString();
       }
       return token;
     },
     async session({ session, token }) {
-      // Include the GitHub user ID in the session
+      // Include the GitHub login in the session (used as `X-User-ID`).
       if (session.user) {
         (session.user as { id?: string }).id = token.id as string;
+        (session.user as { githubId?: string }).githubId = token.githubId as string;
       }
       return session;
     },
