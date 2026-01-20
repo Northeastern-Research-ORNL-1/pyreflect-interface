@@ -35,32 +35,32 @@ poller_image = (
     .pip_install("fastapi", "redis", "rq")
 )
 
-TORCH_INDEX_URL = "https://download.pytorch.org/whl/cu124"
+TORCH_INDEX_URL = "https://download.pytorch.org/whl/cu130"
 
 # B200 (Blackwell, sm_100) needs a torch wheel built with sm_100 support.
-# Older stable CUDA 12.4 wheels often top out at sm_90, which produces:
-#   "sm_100 is not compatible with the current PyTorch installation"
-# We use a newer CUDA runtime wheel for B200 to ensure sm_100 cubins are present.
-TORCH_INDEX_URL_B200 = "https://download.pytorch.org/whl/nightly/cu130"
+# We run all GPU tiers on CUDA 13.x wheels for consistency.
+TORCH_INDEX_URL_B200 = TORCH_INDEX_URL
 
 
-def _build_worker_image(*, torch_index_url: str, torch_pre: bool = False) -> modal.Image:
+def _build_worker_image(
+    *,
+    torch_index_url: str,
+    torch_pre: bool = False,
+    install_torchvision: bool = False,
+) -> modal.Image:
     img = modal.Image.debian_slim(python_version="3.11").pip_install("numpy>=2.1.0")
 
-    # IMPORTANT: PyPI `torch` is often CPU-only. Install a CUDA wheel explicitly so
-    # the Modal GPU is actually used.
-    if torch_pre:
-        # Nightly builds are pre-releases, so we must allow pre-release resolution.
-        img = img.run_commands(
-            # Explicit uninstall avoids pip deciding a previously-cached wheel is
-            # "already satisfied".
-            "pip uninstall -y torch torchvision torchaudio || true",
-            f"pip install --no-cache-dir --upgrade --force-reinstall --pre torch torchvision --index-url {torch_index_url}",
-            # Emit a build-time sanity check in Modal build logs.
-            "python -c 'import torch; print(\"torch.__version__:\", torch.__version__); print(\"torch.version.cuda:\", getattr(getattr(torch, \"version\", None), \"cuda\", None))'",
-        )
-    else:
-        img = img.pip_install("torch", index_url=torch_index_url)
+    torch_packages = "torch torchvision" if install_torchvision else "torch"
+
+    # IMPORTANT: PyPI `torch` is often CPU-only. Install CUDA wheels explicitly.
+    # Always force-reinstall to avoid stale wheels during image rebuilds.
+    pre_flag = "--pre " if torch_pre else ""
+    img = img.run_commands(
+        "pip uninstall -y torch torchvision torchaudio || true",
+        f"pip install --no-cache-dir --upgrade --force-reinstall {pre_flag}{torch_packages} --index-url {torch_index_url}",
+        # Build-time sanity check: ensure torch wheel is CUDA 13+.
+        "python -c \"import sys, torch; v=getattr(getattr(torch,'version',None),'cuda',None); print('torch.__version__:', torch.__version__); print('torch.version.cuda:', v); major=int(str(v).split('.')[0]) if v else 0; sys.exit(0 if major>=13 else 1)\"",
+    )
 
     return (
         img.pip_install(
@@ -82,8 +82,10 @@ def _build_worker_image(*, torch_index_url: str, torch_pre: bool = False) -> mod
     )
 
 
-image = _build_worker_image(torch_index_url=TORCH_INDEX_URL)
-image_b200 = _build_worker_image(torch_index_url=TORCH_INDEX_URL_B200, torch_pre=True)
+image = _build_worker_image(torch_index_url=TORCH_INDEX_URL, install_torchvision=True)
+
+# Keep a separate symbol for clarity; both resolve to CUDA 13 wheels.
+image_b200 = _build_worker_image(torch_index_url=TORCH_INDEX_URL_B200, install_torchvision=True)
 
 def _normalize_redis_url(value: str) -> str:
     """
