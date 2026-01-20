@@ -4,6 +4,7 @@ Redis Queue (RQ) integration for background job processing.
 This module provides the queue infrastructure for processing long-running
 training jobs asynchronously. Jobs are queued and processed by RQ workers.
 """
+
 from __future__ import annotations
 
 import os
@@ -179,17 +180,21 @@ def get_queue_info(rq: RQIntegration) -> dict:
         return info
 
     try:
-        from rq.registry import StartedJobRegistry, FinishedJobRegistry, FailedJobRegistry
+        from rq.registry import (
+            StartedJobRegistry,
+            FinishedJobRegistry,
+            FailedJobRegistry,
+        )
 
         # Get jobs in different states
         queued_ids = rq.queue.job_ids[:20]
-        
+
         registry = StartedJobRegistry(queue=rq.queue)
         started_ids = registry.get_job_ids()
-        
+
         finished_registry = FinishedJobRegistry(queue=rq.queue)
         finished_ids = finished_registry.get_job_ids()[:10]  # Last 10 finished
-        
+
         failed_registry = FailedJobRegistry(queue=rq.queue)
         failed_ids = failed_registry.get_job_ids()[:10]
 
