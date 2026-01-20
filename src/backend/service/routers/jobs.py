@@ -264,6 +264,7 @@ async def get_job(job_id: str, http_request: Request):
         status["meta"] = {
             "status": meta.get("status"),
             "progress": meta.get("progress"),
+            "generation": meta.get("generation"),
             "logs": meta.get("logs", [])[-20:],  # Last 20 log entries
             "started_at": meta.get("started_at"),
             "completed_at": meta.get("completed_at"),
@@ -271,6 +272,9 @@ async def get_job(job_id: str, http_request: Request):
             "user_id": meta.get("user_id"),
             "name": meta.get("name"),
             "retried_from": meta.get("retried_from"),
+            "stop_requested": meta.get("stop_requested"),
+            "stopped_phase": meta.get("stopped_phase"),
+            "stopped_early": meta.get("stopped_early"),
         }
     except Exception:
         pass
@@ -513,6 +517,9 @@ async def stop_job(job_id: str, http_request: Request):
         # Set stop flag in meta
         meta = job.meta or {}
         meta["stop_requested"] = True
+        meta.setdefault("status", "stopping")
+        if meta.get("status") not in {"completed", "failed", "stopped"}:
+            meta["status"] = "stopping"
         job.meta = meta
         job.save_meta()
 
@@ -648,6 +655,22 @@ async def cancel_job(job_id: str, http_request: Request):
 
         if status == "finished":
             raise HTTPException(status_code=400, detail="Job already completed")
+
+        # Ensure the job is removed from the queue so it doesn't keep showing up in `/queue`.
+        # Some rq versions leave canceled jobs in `queue.job_ids`.
+        try:
+            if rq.queue is not None:
+                rq.queue.remove(job_id)
+        except Exception:
+            pass
+
+        try:
+            meta = job.meta or {}
+            meta["status"] = "cancelled"
+            job.meta = meta
+            job.save_meta()
+        except Exception:
+            pass
 
         job.cancel()
         return {"job_id": job_id, "status": "cancelled", "message": "Job cancelled successfully"}
