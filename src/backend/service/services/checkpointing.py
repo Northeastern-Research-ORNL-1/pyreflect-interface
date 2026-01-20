@@ -123,6 +123,32 @@ def save_checkpoint(
         return False
 
 
+def _move_optimizer_state_to_device(
+    optimizer_state_dict: dict[str, Any], device: Any, torch: Any
+) -> dict[str, Any]:
+    """
+    Move optimizer state tensors to the specified device.
+
+    The optimizer state dict has structure:
+    {
+        'state': {param_id: {'step': tensor, 'exp_avg': tensor, ...}},
+        'param_groups': [...]
+    }
+
+    torch.load with map_location doesn't always move nested tensors properly,
+    so we need to do it manually.
+    """
+    if "state" not in optimizer_state_dict:
+        return optimizer_state_dict
+
+    for param_id, param_state in optimizer_state_dict["state"].items():
+        for key, value in param_state.items():
+            if torch.is_tensor(value):
+                param_state[key] = value.to(device)
+
+    return optimizer_state_dict
+
+
 def load_checkpoint(
     api: "HfApi",
     torch: Any,
@@ -155,11 +181,17 @@ def load_checkpoint(
             local_path, map_location=device, weights_only=False
         )
 
+        # Move optimizer state tensors to device (torch.load doesn't always do this)
+        optimizer_state = checkpoint_data["optimizer_state_dict"]
+        optimizer_state = _move_optimizer_state_to_device(
+            optimizer_state, device, torch
+        )
+
         checkpoint = Checkpoint(
             job_id=checkpoint_data["job_id"],
             epoch=checkpoint_data["epoch"],
             model_state_dict=checkpoint_data["model_state_dict"],
-            optimizer_state_dict=checkpoint_data["optimizer_state_dict"],
+            optimizer_state_dict=optimizer_state,
             train_losses=checkpoint_data["train_losses"],
             val_losses=checkpoint_data["val_losses"],
             epoch_list=checkpoint_data["epoch_list"],
