@@ -85,7 +85,7 @@ def _build_worker_image(
         "pip install --no-cache-dir --upgrade --force-reinstall --no-deps "
         "'pyreflect @ https://github.com/williamQyq/pyreflect/archive/refs/heads/main.zip'",
         # Build-time sanity checks.
-        "python -c \"import sys; import numpy as np; import torch; "
+        'python -c "import sys; import numpy as np; import torch; '
         "print('numpy.__version__:', np.__version__); "
         "print('torch.__version__:', torch.__version__); "
         "v=getattr(getattr(torch,'version',None),'cuda',None); "
@@ -101,7 +101,10 @@ def _build_worker_image(
 image = _build_worker_image(torch_index_url=TORCH_INDEX_URL, install_torchvision=True)
 
 # Keep a separate symbol for clarity; both resolve to CUDA 13 wheels.
-image_b200 = _build_worker_image(torch_index_url=TORCH_INDEX_URL_B200, install_torchvision=True)
+image_b200 = _build_worker_image(
+    torch_index_url=TORCH_INDEX_URL_B200, install_torchvision=True
+)
+
 
 def _normalize_redis_url(value: str) -> str:
     """
@@ -151,15 +154,15 @@ def _normalize_redis_url(value: str) -> str:
 
 # GPU tiers available for training (Modal pricing as of Jan 2026)
 GPU_TIERS = {
-    "T4": "T4",             # $0.59/hr, 16GB VRAM
-    "L4": "L4",             # $0.80/hr, 24GB VRAM
-    "A10G": "A10G",         # $1.10/hr, 24GB VRAM
-    "L40S": "L40S",         # $1.95/hr, 48GB VRAM
-    "A100": "A100",         # $2.10/hr, 40GB VRAM
+    "T4": "T4",  # $0.59/hr, 16GB VRAM
+    "L4": "L4",  # $0.80/hr, 24GB VRAM
+    "A10G": "A10G",  # $1.10/hr, 24GB VRAM
+    "L40S": "L40S",  # $1.95/hr, 48GB VRAM
+    "A100": "A100",  # $2.10/hr, 40GB VRAM
     "A100-80GB": "A100-80GB",  # $2.50/hr, 80GB VRAM
-    "H100": "H100",         # $3.95/hr, 80GB VRAM
-    "H200": "H200",         # $4.54/hr, 141GB VRAM
-    "B200": "B200",         # $6.25/hr, 192GB VRAM
+    "H100": "H100",  # $3.95/hr, 80GB VRAM
+    "H200": "H200",  # $4.54/hr, 141GB VRAM
+    "B200": "B200",  # $6.25/hr, 192GB VRAM
 }
 
 GPU_FALLBACK_ORDER = [
@@ -180,7 +183,7 @@ DEFAULT_GPU = "T4"
 def _run_rq_worker_impl(lock_value: str, gpu_name: str):
     """
     Core RQ worker implementation shared by all GPU-specific functions.
-    
+
     Runs a real RQ worker (SimpleWorker) in burst mode on a GPU container.
     This executes `service.jobs.run_training_job` exactly like a local RQ worker,
     so job status/result fields, logs, HF uploads, and history persistence match.
@@ -199,7 +202,9 @@ def _run_rq_worker_impl(lock_value: str, gpu_name: str):
 
     redis_url = os.environ.get("REDIS_URL")
     if not redis_url:
-        raise RuntimeError("REDIS_URL not set (configure Modal secret 'pyreflect-redis').")
+        raise RuntimeError(
+            "REDIS_URL not set (configure Modal secret 'pyreflect-redis')."
+        )
     redis_url = _normalize_redis_url(redis_url)
 
     parsed = urlparse(redis_url)
@@ -230,7 +235,9 @@ def _run_rq_worker_impl(lock_value: str, gpu_name: str):
             cuda_ok = bool(getattr(torch, "cuda", None) and torch.cuda.is_available())
             print(f"torch.__version__: {getattr(torch, '__version__', None)}")
             print(f"torch.cuda.is_available(): {cuda_ok}")
-            print(f"torch.version.cuda: {getattr(getattr(torch, 'version', None), 'cuda', None)}")
+            print(
+                f"torch.version.cuda: {getattr(getattr(torch, 'version', None), 'cuda', None)}"
+            )
             if not cuda_ok:
                 print(
                     "⚠️ CUDA is not available inside this Modal GPU container. "
@@ -238,14 +245,20 @@ def _run_rq_worker_impl(lock_value: str, gpu_name: str):
                 )
             else:
                 try:
-                    arch_list = torch.cuda.get_arch_list() if getattr(torch.cuda, "get_arch_list", None) else None
+                    arch_list = (
+                        torch.cuda.get_arch_list()
+                        if getattr(torch.cuda, "get_arch_list", None)
+                        else None
+                    )
                     print(f"torch.cuda.get_arch_list(): {arch_list}")
                 except Exception as arch_exc:
                     print(f"torch.cuda.get_arch_list() failed: {arch_exc}")
                 supported, reason = _cuda_arch_supported(torch)
                 if not supported:
                     fallback_gpu = _next_gpu_tier(gpu_name)
-                    print(f"⚠️ GPU {gpu_name} not supported by this torch build: {reason}")
+                    print(
+                        f"⚠️ GPU {gpu_name} not supported by this torch build: {reason}"
+                    )
                     if fallback_gpu:
                         print(f"↪️ Falling back to {fallback_gpu} GPU worker")
                         try:
@@ -253,15 +266,21 @@ def _run_rq_worker_impl(lock_value: str, gpu_name: str):
                             handed_off_lock = True
                             return
                         except Exception as spawn_exc:
-                            print(f"Warning: Failed to spawn {fallback_gpu} worker: {spawn_exc}")
-                    print("↪️ No lower GPU tier available; falling back to CPU execution")
+                            print(
+                                f"Warning: Failed to spawn {fallback_gpu} worker: {spawn_exc}"
+                            )
+                    print(
+                        "↪️ No lower GPU tier available; falling back to CPU execution"
+                    )
                 else:
                     print(f"GPU: {torch.cuda.get_device_name(0)}")
         except Exception as exc:
             raise RuntimeError(f"GPU sanity check failed: {exc}") from exc
 
         queue = Queue("training", connection=redis_conn)
-        worker_name = f"gpu-{gpu_name.lower()}-{socket.gethostname()}-{uuid.uuid4().hex[:6]}"
+        worker_name = (
+            f"gpu-{gpu_name.lower()}-{socket.gethostname()}-{uuid.uuid4().hex[:6]}"
+        )
 
         worker = SimpleWorker([queue], connection=redis_conn, name=worker_name)
         print(f"✅ Starting RQ SimpleWorker '{worker_name}' (burst mode)")
@@ -281,6 +300,7 @@ def _run_rq_worker_impl(lock_value: str, gpu_name: str):
 
 # --- GPU-specific worker functions ---
 # Each function uses a different GPU tier. The poller/backend spawns the appropriate one.
+
 
 @app.function(
     image=image,
@@ -398,7 +418,9 @@ def torch_diagnostics_b200():
     }
     try:
         out["torch.cuda.get_arch_list"] = (
-            list(torch.cuda.get_arch_list()) if getattr(torch.cuda, "get_arch_list", None) else None
+            list(torch.cuda.get_arch_list())
+            if getattr(torch.cuda, "get_arch_list", None)
+            else None
         )
     except Exception as exc:
         out["torch.cuda.get_arch_list"] = f"error: {exc}"
@@ -409,7 +431,9 @@ def torch_diagnostics_b200():
         out["torch.cuda.is_available"] = f"error: {exc}"
 
     try:
-        out["torch.cuda.get_device_capability"] = tuple(torch.cuda.get_device_capability())
+        out["torch.cuda.get_device_capability"] = tuple(
+            torch.cuda.get_device_capability()
+        )
     except Exception as exc:
         out["torch.cuda.get_device_capability"] = f"error: {exc}"
 
@@ -419,7 +443,9 @@ def torch_diagnostics_b200():
         out["torch.cuda.get_device_name"] = f"error: {exc}"
 
     try:
-        out["nvidia-smi"] = subprocess.check_output(["nvidia-smi"], text=True, stderr=subprocess.STDOUT)
+        out["nvidia-smi"] = subprocess.check_output(
+            ["nvidia-smi"], text=True, stderr=subprocess.STDOUT
+        )
     except Exception as exc:
         out["nvidia-smi"] = f"error: {exc}"
 
@@ -471,16 +497,28 @@ def pyreflect_diagnostics_b200():
             "pyreflect.input.reflectivity_data_generator",
             "ReflectivityDataGenerator",
         ),
-        ("pyreflect.input.data_processor", "pyreflect.input.data_processor", "DataProcessor"),
+        (
+            "pyreflect.input.data_processor",
+            "pyreflect.input.data_processor",
+            "DataProcessor",
+        ),
         ("pyreflect.models.cnn", "pyreflect.models.cnn", "CNN"),
         ("pyreflect.config.runtime", "pyreflect.config.runtime", "DEVICE"),
-        ("pyreflect.pipelines.reflectivity_pipeline", "pyreflect.pipelines", "reflectivity_pipeline"),
+        (
+            "pyreflect.pipelines.reflectivity_pipeline",
+            "pyreflect.pipelines",
+            "reflectivity_pipeline",
+        ),
         (
             "pyreflect.pipelines.train_autoencoder_mlp_chi_pred",
             "pyreflect.pipelines",
             "train_autoencoder_mlp_chi_pred",
         ),
-        ("pyreflect.pipelines.sld_profile_pred_chi", "pyreflect.pipelines", "sld_profile_pred_chi"),
+        (
+            "pyreflect.pipelines.sld_profile_pred_chi",
+            "pyreflect.pipelines",
+            "sld_profile_pred_chi",
+        ),
     ]
 
     for label, module_name, attr in checks:
@@ -628,13 +666,21 @@ def _poll_queue_impl() -> dict:
             worker_fn = get_gpu_worker_fn(requested_gpu)
             print(f"📋 {queued} jobs queued, spawning {requested_gpu} GPU worker...")
             worker_fn.spawn(lock_value)
-            return {"ok": True, "spawned": True, "queued": queued, "started": started, "gpu": requested_gpu}
+            return {
+                "ok": True,
+                "spawned": True,
+                "queued": queued,
+                "started": started,
+                "gpu": requested_gpu,
+            }
 
         try:
             ttl = redis_conn.ttl(lock_key)
             existing = redis_conn.get(lock_key)
             existing_str = existing.decode("utf-8") if existing is not None else "?"
-            print(f"⏳ Spawn lock held (ttl={ttl}s, value={existing_str}); will retry next tick.")
+            print(
+                f"⏳ Spawn lock held (ttl={ttl}s, value={existing_str}); will retry next tick."
+            )
 
             if started == 0 and len(workers) == 0:
                 existing_ts: int | None = None
@@ -651,17 +697,23 @@ def _poll_queue_impl() -> dict:
                     is_stale = True
 
                 if is_stale:
-                    print(f"🧹 Clearing stale spawn lock (ttl={ttl}s) and retrying spawn...")
+                    print(
+                        f"🧹 Clearing stale spawn lock (ttl={ttl}s) and retrying spawn..."
+                    )
                     try:
                         redis_conn.delete(lock_key)
                     except Exception:
                         pass
                     retry_value = f"{uuid.uuid4()}:{int(time.time())}"
-                    retry_acquired = redis_conn.set(lock_key, retry_value, nx=True, ex=lock_ttl_s)
+                    retry_acquired = redis_conn.set(
+                        lock_key, retry_value, nx=True, ex=lock_ttl_s
+                    )
                     if retry_acquired:
                         requested_gpu = _get_requested_gpu_from_queue(queue)
                         worker_fn = get_gpu_worker_fn(requested_gpu)
-                        print(f"📋 {queued} jobs queued, spawning {requested_gpu} GPU worker...")
+                        print(
+                            f"📋 {queued} jobs queued, spawning {requested_gpu} GPU worker..."
+                        )
                         worker_fn.spawn(retry_value)
                         return {
                             "ok": True,
@@ -674,7 +726,13 @@ def _poll_queue_impl() -> dict:
         except Exception:
             pass
 
-        return {"ok": True, "spawned": False, "queued": queued, "started": started, "reason": "lock_held"}
+        return {
+            "ok": True,
+            "spawned": False,
+            "queued": queued,
+            "started": started,
+            "reason": "lock_held",
+        }
 
     return {"ok": True, "spawned": False, "queued": queued, "started": started}
 
@@ -683,6 +741,8 @@ def _poll_queue_impl() -> dict:
 if __name__ == "__main__":
     print("Deploy with: modal deploy src/backend/modal_worker.py")
     print("Or run locally: modal run src/backend/modal_worker.py::run_rq_worker_burst")
+
+
 def _normalize_cuda_arch(arch: str) -> int | None:
     digits = "".join(ch for ch in arch if ch.isdigit())
     if not digits:
