@@ -52,7 +52,21 @@ def _build_worker_image(*, torch_index_url: str, torch_pre: bool = False) -> mod
     if torch_pre:
         # Nightly builds are pre-releases, so we must allow pre-release resolution.
         img = img.run_commands(
-            f"pip install --no-cache-dir --upgrade --pre torch torchvision --index-url {torch_index_url}"
+            # Explicit uninstall avoids pip deciding a previously-cached wheel is
+            # "already satisfied".
+            "pip uninstall -y torch torchvision torchaudio || true",
+            f"pip install --no-cache-dir --upgrade --force-reinstall --pre torch torchvision --index-url {torch_index_url}",
+            # Emit a build-time sanity check in Modal build logs.
+            "python - <<'PY'\n"
+            "import torch\n"
+            "print('torch.__version__:', torch.__version__)\n"
+            "print('torch.version.cuda:', getattr(getattr(torch, 'version', None), 'cuda', None))\n"
+            "try:\n"
+            "    import torchvision\n"
+            "    print('torchvision.__version__:', torchvision.__version__)\n"
+            "except Exception as e:\n"
+            "    print('torchvision import failed:', e)\n"
+            "PY",
         )
     else:
         img = img.pip_install("torch", index_url=torch_index_url)
@@ -205,6 +219,7 @@ def _run_rq_worker_impl(lock_value: str, gpu_name: str):
             import torch
 
             cuda_ok = bool(getattr(torch, "cuda", None) and torch.cuda.is_available())
+            print(f"torch.__version__: {getattr(torch, '__version__', None)}")
             print(f"torch.cuda.is_available(): {cuda_ok}")
             print(f"torch.version.cuda: {getattr(getattr(torch, 'version', None), 'cuda', None)}")
             if not cuda_ok:
@@ -213,6 +228,11 @@ def _run_rq_worker_impl(lock_value: str, gpu_name: str):
                     "Falling back to CPU execution."
                 )
             else:
+                try:
+                    arch_list = torch.cuda.get_arch_list() if getattr(torch.cuda, "get_arch_list", None) else None
+                    print(f"torch.cuda.get_arch_list(): {arch_list}")
+                except Exception as arch_exc:
+                    print(f"torch.cuda.get_arch_list() failed: {arch_exc}")
                 supported, reason = _cuda_arch_supported(torch)
                 if not supported:
                     fallback_gpu = _next_gpu_tier(gpu_name)
