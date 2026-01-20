@@ -48,22 +48,10 @@ def _build_worker_image(
     torch_pre: bool = False,
     install_torchvision: bool = False,
 ) -> modal.Image:
-    img = modal.Image.debian_slim(python_version="3.11").pip_install("numpy>=2.1.0")
-
-    torch_packages = "torch torchvision" if install_torchvision else "torch"
-
-    # IMPORTANT: PyPI `torch` is often CPU-only. Install CUDA wheels explicitly.
-    # Always force-reinstall to avoid stale wheels during image rebuilds.
-    pre_flag = "--pre " if torch_pre else ""
-    img = img.run_commands(
-        "pip uninstall -y torch torchvision torchaudio || true",
-        f"pip install --no-cache-dir --upgrade --force-reinstall {pre_flag}{torch_packages} --index-url {torch_index_url}",
-        # Build-time sanity check: ensure torch wheel is CUDA 13+.
-        "python -c \"import sys, torch; v=getattr(getattr(torch,'version',None),'cuda',None); print('torch.__version__:', torch.__version__); print('torch.version.cuda:', v); major=int(str(v).split('.')[0]) if v else 0; sys.exit(0 if major>=13 else 1)\"",
-    )
-
-    return (
-        img.pip_install(
+    img = (
+        modal.Image.debian_slim(python_version="3.11")
+        .pip_install("numpy>=2.1.0")
+        .pip_install(
             "redis",
             "rq",
             "scipy",
@@ -80,6 +68,17 @@ def _build_worker_image(
         # `service.jobs.run_training_job` without pulling in unrelated repo files.
         .add_local_dir(_SERVICE_DIR, remote_path="/root/backend/service")
     )
+
+    # Install torch LAST so no later dependency resolution can downgrade it.
+    torch_packages = "torch torchvision" if install_torchvision else "torch"
+    pre_flag = "--pre " if torch_pre else ""
+    img = img.run_commands(
+        "pip uninstall -y torch torchvision torchaudio || true",
+        f"pip install --no-cache-dir --upgrade --force-reinstall {pre_flag}{torch_packages} --index-url {torch_index_url}",
+        # Build-time sanity check: ensure torch wheel is CUDA 13+.
+        "python -c \"import sys, torch; v=getattr(getattr(torch,'version',None),'cuda',None); print('torch.__version__:', torch.__version__); print('torch.version.cuda:', v); major=int(str(v).split('.')[0]) if v else 0; sys.exit(0 if major>=13 else 1)\"",
+    )
+    return img
 
 
 image = _build_worker_image(torch_index_url=TORCH_INDEX_URL, install_torchvision=True)
