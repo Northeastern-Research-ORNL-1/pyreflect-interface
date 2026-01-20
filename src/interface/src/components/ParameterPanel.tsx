@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, type ChangeEvent } from 'react';
-import { FilmLayer, GeneratorParams, TrainingParams, Limits, DEFAULT_LIMITS, DataSource, Workflow, NrSldMode, UploadRole } from '@/types';
+import { FilmLayer, GeneratorParams, TrainingParams, Limits, DEFAULT_LIMITS, DataSource, Workflow, NrSldMode, UploadRole, GpuTier, GPU_TIERS } from '@/types';
 import EditableValue from './EditableValue';
 import InfoTooltip from './InfoTooltip';
 import styles from './ParameterPanel.module.css';
@@ -61,6 +61,8 @@ export interface ParameterPanelProps {
   isProduction?: boolean;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
+  gpu?: GpuTier;
+  onGpuChange?: (value: GpuTier) => void;
 }
 
 export default function ParameterPanel({
@@ -88,6 +90,8 @@ export default function ParameterPanel({
   isProduction = false,
   isCollapsed = false,
   onToggleCollapse,
+  gpu = 'T4',
+  onGpuChange,
 }: ParameterPanelProps) {
   const [expandedLayers, setExpandedLayers] = useState(() =>
     new Set<number>(filmLayers.map((_, index) => index))
@@ -297,7 +301,7 @@ export default function ParameterPanel({
   const expandAllLayers = () => {
     setExpandedLayers(new Set(filmLayers.map((_, index) => index)));
   };
-  
+
   const updateLayer = (index: number, field: keyof FilmLayer, value: number | string) => {
     const newLayers = [...filmLayers];
     newLayers[index] = { ...newLayers[index], [field]: value };
@@ -341,10 +345,10 @@ export default function ParameterPanel({
   if (isCollapsed) {
     return (
       <div className={styles.panelCollapsed}>
-        <button 
-           className={styles.sidebarToggle} 
-           onClick={onToggleCollapse}
-           title="Expand Sidebar"
+        <button
+          className={styles.sidebarToggle}
+          onClick={onToggleCollapse}
+          title="Expand Sidebar"
         >
           ▶
         </button>
@@ -475,7 +479,7 @@ export default function ParameterPanel({
                 </button>
               </div>
             </div>
-            
+
             <div className={styles.layers}>
               {filmLayers.map((layer, index) => (
                 <div key={index} className="layer-item">
@@ -498,8 +502,8 @@ export default function ParameterPanel({
                       />
                     </div>
                     {index !== 0 && index !== filmLayers.length - 1 && (
-                      <button 
-                        className="layer-item__remove" 
+                      <button
+                        className="layer-item__remove"
                         onClick={() => removeLayer(index)}
                         type="button"
                       >
@@ -510,100 +514,100 @@ export default function ParameterPanel({
 
                   {expandedLayers.has(index) && (
                     <div className={styles.layerParams}>
-                    <div className="control">
-                      <div className="control__label">
-                        <span>SLD<InfoTooltip hint={"Scattering Length Density (×10⁻⁶ Å⁻²).\n\nDetermines neutron contrast of this layer."} /></span>
-                        <EditableValue
+                      <div className="control">
+                        <div className="control__label">
+                          <span>SLD<InfoTooltip hint={"Scattering Length Density (×10⁻⁶ Å⁻²).\n\nDetermines neutron contrast of this layer."} /></span>
+                          <EditableValue
+                            value={layer.sld}
+                            onChange={(v) => updateLayer(index, 'sld', v)}
+                            min={0}
+                            max={10}
+                            step={0.01}
+                            decimals={2}
+                          />
+                        </div>
+                        <input
+                          type="range"
+                          className="slider"
+                          min="0"
+                          max="6.4"
+                          step="0.01"
                           value={layer.sld}
-                          onChange={(v) => updateLayer(index, 'sld', v)}
-                          min={0}
-                          max={10}
-                          step={0.01}
-                          decimals={2}
+                          onChange={(e) => updateLayer(index, 'sld', parseFloat(e.target.value))}
                         />
                       </div>
-                      <input
-                        type="range"
-                        className="slider"
-                        min="0"
-                        max="6.4"
-                        step="0.01"
-                        value={layer.sld}
-                        onChange={(e) => updateLayer(index, 'sld', parseFloat(e.target.value))}
-                      />
-                    </div>
 
-                    <div className="control">
-                      <div className="control__label">
-                        <span>Thickness (Å)<InfoTooltip hint={"Layer thickness in Angstroms.\n\nAffects fringe spacing in reflectivity curve."} /></span>
-                        <EditableValue
+                      <div className="control">
+                        <div className="control__label">
+                          <span>Thickness (Å)<InfoTooltip hint={"Layer thickness in Angstroms.\n\nAffects fringe spacing in reflectivity curve."} /></span>
+                          <EditableValue
+                            value={layer.thickness}
+                            onChange={(v) => updateLayer(index, 'thickness', v)}
+                            min={0}
+                            max={2000}
+                            step={1}
+                            decimals={0}
+                            disabled={index === 0 || index === filmLayers.length - 1}
+                          />
+                        </div>
+                        <input
+                          type="range"
+                          className="slider"
+                          min="0"
+                          max="500"
+                          step="1"
                           value={layer.thickness}
-                          onChange={(v) => updateLayer(index, 'thickness', v)}
-                          min={0}
-                          max={2000}
-                          step={1}
-                          decimals={0}
+                          onChange={(e) => updateLayer(index, 'thickness', parseFloat(e.target.value))}
                           disabled={index === 0 || index === filmLayers.length - 1}
                         />
                       </div>
-                      <input
-                        type="range"
-                        className="slider"
-                        min="0"
-                        max="500"
-                        step="1"
-                        value={layer.thickness}
-                        onChange={(e) => updateLayer(index, 'thickness', parseFloat(e.target.value))}
-                        disabled={index === 0 || index === filmLayers.length - 1}
-                      />
-                    </div>
 
-                    <div className="control">
-                      <div className="control__label">
-                        <span>Roughness (Å)<InfoTooltip hint={"Interfacial roughness in Angstroms.\n\nSmears the interface and reduces fringe amplitude."} /></span>
-                        <EditableValue
+                      <div className="control">
+                        <div className="control__label">
+                          <span>Roughness (Å)<InfoTooltip hint={"Interfacial roughness in Angstroms.\n\nSmears the interface and reduces fringe amplitude."} /></span>
+                          <EditableValue
+                            value={layer.roughness}
+                            onChange={(v) => updateLayer(index, 'roughness', v)}
+                            min={0}
+                            max={500}
+                            step={0.5}
+                            decimals={1}
+                          />
+                        </div>
+                        <input
+                          type="range"
+                          className="slider"
+                          min="0"
+                          max="150"
+                          step="0.5"
                           value={layer.roughness}
-                          onChange={(v) => updateLayer(index, 'roughness', v)}
-                          min={0}
-                          max={500}
-                          step={0.5}
-                          decimals={1}
+                          onChange={(e) => updateLayer(index, 'roughness', parseFloat(e.target.value))}
                         />
                       </div>
-                      <input
-                        type="range"
-                        className="slider"
-                        min="0"
-                        max="150"
-                        step="0.5"
-                        value={layer.roughness}
-                        onChange={(e) => updateLayer(index, 'roughness', parseFloat(e.target.value))}
-                      />
-                    </div>
 
-                    <div className="control">
-                      <div className="control__label">
-                        <span>iSLD<InfoTooltip hint={"Imaginary SLD.\nRepresents absorption in the layer (typically small or zero)."} /></span>
-                        <EditableValue
+                      <div className="control">
+                        <div className="control__label">
+                          <span>iSLD<InfoTooltip hint={"Imaginary SLD.\nRepresents absorption in the layer (typically small or zero)."} /></span>
+                          <EditableValue
+                            value={layer.isld}
+                            onChange={(v) => updateLayer(index, 'isld', v)}
+                            min={0}
+                            max={1}
+                            step={0.001}
+                            decimals={3}
+                          />
+                        </div>
+                        <input
+                          type="range"
+                          className="slider"
+                          min="0"
+                          max="1"
+                          step="0.001"
                           value={layer.isld}
-                          onChange={(v) => updateLayer(index, 'isld', v)}
-                          min={0}
-                          max={1}
-                          step={0.001}
-                          decimals={3}
+                          onChange={(e) => updateLayer(index, 'isld', parseFloat(e.target.value))}
                         />
                       </div>
-                      <input
-                        type="range"
-                        className="slider"
-                        min="0"
-                        max="1"
-                        step="0.001"
-                        value={layer.isld}
-                        onChange={(e) => updateLayer(index, 'isld', parseFloat(e.target.value))}
-                      />
                     </div>
-                  </div>
                   )}
                 </div>
               ))}
@@ -615,7 +619,7 @@ export default function ParameterPanel({
             <div className="section__header">
               <h3 className="section__title">Generator</h3>
             </div>
-            
+
             <div className="control">
               <div className="control__label">
                 <span>Number of Curves<InfoTooltip hint={"How many synthetic NR curves to generate for training.\n\nMore curves = better model but longer training."} />{isProduction && ` (max ${limits.max_curves})`}</span>
@@ -635,9 +639,9 @@ export default function ParameterPanel({
                 max={limits.max_curves}
                 step="100"
                 value={generatorParams.numCurves}
-                onChange={(e) => onGeneratorParamsChange({ 
-                  ...generatorParams, 
-                  numCurves: parseInt(e.target.value) 
+                onChange={(e) => onGeneratorParamsChange({
+                  ...generatorParams,
+                  numCurves: parseInt(e.target.value)
                 })}
               />
             </div>
@@ -661,9 +665,9 @@ export default function ParameterPanel({
                 max={filmLayers.length}
                 step="1"
                 value={generatorParams.numFilmLayers}
-                onChange={(e) => onGeneratorParamsChange({ 
-                  ...generatorParams, 
-                  numFilmLayers: Math.min(parseInt(e.target.value), filmLayers.length) 
+                onChange={(e) => onGeneratorParamsChange({
+                  ...generatorParams,
+                  numFilmLayers: Math.min(parseInt(e.target.value), filmLayers.length)
                 })}
               />
             </div>
@@ -679,7 +683,29 @@ export default function ParameterPanel({
               <InfoTooltip hint={trainingTooltip} />
             </h3>
           </div>
-          
+
+          {onGpuChange && (
+            <div className="control">
+              <div className="control__label">
+                <span>GPU<InfoTooltip hint={"GPU tier for Modal cloud training.\nSpeed is relative to T4 (FP16 dense TFLOPS).\n\nT4: $0.59/hr, 16GB, 65 TF, 1×\nL4: $0.80/hr, 24GB, 121 TF, 2×\nA10G: $1.10/hr, 24GB, 125 TF, 2×\nL40S: $1.95/hr, 48GB, 362 TF, 5.5×\nA100: $2.10/hr, 40GB, 312 TF, 5×\nA100-80: $2.50/hr, 80GB, 312 TF, 5×\nH100: $3.95/hr, 80GB, 989 TF, 15×\nH200: $4.54/hr, 141GB, 989 TF, 15×\nB200: $6.25/hr, 192GB, 2250 TF, 35×"} /></span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-primary)' }}>
+                  {GPU_TIERS.find(g => g.value === gpu)?.description || gpu}
+                </span>
+              </div>
+              <select
+                className="control__input"
+                value={gpu}
+                onChange={(e) => onGpuChange(e.target.value as GpuTier)}
+              >
+                {GPU_TIERS.map((tier) => (
+                  <option key={tier.value} value={tier.value}>
+                    {tier.label} — {tier.speed} Speed
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <div className="control">
             <div className="control__label">
               <span>Batch Size<InfoTooltip hint={"Number of samples processed together in one training step.\n\nLarger = faster but uses more memory."} />{isProduction && ` (max ${limits.max_batch_size})`}</span>
@@ -699,9 +725,9 @@ export default function ParameterPanel({
               max={limits.max_batch_size}
               step="8"
               value={trainingParams.batchSize}
-              onChange={(e) => onTrainingParamsChange({ 
-                ...trainingParams, 
-                batchSize: parseInt(e.target.value) 
+              onChange={(e) => onTrainingParamsChange({
+                ...trainingParams,
+                batchSize: parseInt(e.target.value)
               })}
             />
           </div>
@@ -725,9 +751,9 @@ export default function ParameterPanel({
               max={limits.max_epochs}
               step="1"
               value={trainingParams.epochs}
-              onChange={(e) => onTrainingParamsChange({ 
-                ...trainingParams, 
-                epochs: parseInt(e.target.value) 
+              onChange={(e) => onTrainingParamsChange({
+                ...trainingParams,
+                epochs: parseInt(e.target.value)
               })}
             />
           </div>
@@ -751,9 +777,9 @@ export default function ParameterPanel({
               max={limits.max_cnn_layers}
               step="1"
               value={trainingParams.layers}
-              onChange={(e) => onTrainingParamsChange({ 
-                ...trainingParams, 
-                layers: parseInt(e.target.value) 
+              onChange={(e) => onTrainingParamsChange({
+                ...trainingParams,
+                layers: parseInt(e.target.value)
               })}
             />
           </div>
@@ -777,9 +803,9 @@ export default function ParameterPanel({
               max={limits.max_dropout}
               step="0.05"
               value={trainingParams.dropout}
-              onChange={(e) => onTrainingParamsChange({ 
-                ...trainingParams, 
-                dropout: parseFloat(e.target.value) 
+              onChange={(e) => onTrainingParamsChange({
+                ...trainingParams,
+                dropout: parseFloat(e.target.value)
               })}
             />
           </div>
@@ -803,9 +829,9 @@ export default function ParameterPanel({
               max={limits.max_latent_dim}
               step="4"
               value={trainingParams.latentDim}
-              onChange={(e) => onTrainingParamsChange({ 
-                ...trainingParams, 
-                latentDim: parseInt(e.target.value) 
+              onChange={(e) => onTrainingParamsChange({
+                ...trainingParams,
+                latentDim: parseInt(e.target.value)
               })}
             />
           </div>
@@ -829,9 +855,9 @@ export default function ParameterPanel({
               max={limits.max_ae_epochs}
               step="10"
               value={trainingParams.aeEpochs}
-              onChange={(e) => onTrainingParamsChange({ 
-                ...trainingParams, 
-                aeEpochs: parseInt(e.target.value) 
+              onChange={(e) => onTrainingParamsChange({
+                ...trainingParams,
+                aeEpochs: parseInt(e.target.value)
               })}
             />
           </div>
@@ -855,9 +881,9 @@ export default function ParameterPanel({
               max={limits.max_mlp_epochs}
               step="10"
               value={trainingParams.mlpEpochs}
-              onChange={(e) => onTrainingParamsChange({ 
-                ...trainingParams, 
-                mlpEpochs: parseInt(e.target.value) 
+              onChange={(e) => onTrainingParamsChange({
+                ...trainingParams,
+                mlpEpochs: parseInt(e.target.value)
               })}
             />
           </div>
@@ -957,22 +983,22 @@ export default function ParameterPanel({
               backendStatus.expt_files.length > 0 ||
               (backendStatus.model_files && backendStatus.model_files.length > 0)
             ) && (
-              <div className={styles.availableFiles}>
-                <div className={styles.availableFilesLabel}>Available:</div>
-                {backendStatus.data_files.map((f) => (
-                  <span key={f} className={styles.availableFile}>{f}</span>
-                ))}
-                {backendStatus.curve_files.map((f) => (
-                  <span key={f} className={styles.availableFile}>{f}</span>
-                ))}
-                {backendStatus.expt_files.map((f) => (
-                  <span key={f} className={styles.availableFile}>{f}</span>
-                ))}
-                {backendStatus.model_files?.map((f) => (
-                  <span key={f} className={styles.availableFile}>{f}</span>
-                ))}
-              </div>
-            )}
+                <div className={styles.availableFiles}>
+                  <div className={styles.availableFilesLabel}>Available:</div>
+                  {backendStatus.data_files.map((f) => (
+                    <span key={f} className={styles.availableFile}>{f}</span>
+                  ))}
+                  {backendStatus.curve_files.map((f) => (
+                    <span key={f} className={styles.availableFile}>{f}</span>
+                  ))}
+                  {backendStatus.expt_files.map((f) => (
+                    <span key={f} className={styles.availableFile}>{f}</span>
+                  ))}
+                  {backendStatus.model_files?.map((f) => (
+                    <span key={f} className={styles.availableFile}>{f}</span>
+                  ))}
+                </div>
+              )}
           </div>
         </div>
       )}

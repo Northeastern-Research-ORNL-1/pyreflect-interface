@@ -78,6 +78,10 @@ def validate_limits(
         raise HTTPException(status_code=400, detail="; ".join(errors))
 
 
+# Available GPU tiers for Modal workers
+GPU_TIERS = Literal["T4", "L4", "A10G", "L40S", "A100", "A100-80GB", "H100", "H200", "B200"]
+
+
 class GenerateRequest(BaseModel):
     layers: list[FilmLayer]
     generator: GeneratorParams
@@ -87,6 +91,7 @@ class GenerateRequest(BaseModel):
     workflow: Literal["nr_sld", "sld_chi", "nr_sld_chi"] = "nr_sld"
     mode: Literal["train", "infer"] = "train"
     autoGenerateModelStats: bool = True
+    gpu: GPU_TIERS = "T4"  # GPU tier for Modal training
 
 
 class NRData(BaseModel):
