@@ -83,7 +83,7 @@ def _build_worker_image(
         "pip install --no-cache-dir --upgrade --pre refl1d",
         # Install pyreflect code without enforcing its pinned torch version.
         "pip install --no-cache-dir --upgrade --force-reinstall --no-deps "
-        "pyreflect @ https://github.com/williamQyq/pyreflect/archive/refs/heads/main.zip",
+        "'pyreflect @ https://github.com/williamQyq/pyreflect/archive/refs/heads/main.zip'",
         # Build-time sanity checks.
         "python -c \"import sys; import numpy as np; import torch; "
         "print('numpy.__version__:', np.__version__); "
