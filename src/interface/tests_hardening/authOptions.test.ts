@@ -18,16 +18,19 @@ describe('authOptions', () => {
     const updatedToken = await authOptions.callbacks!.jwt!({
       token,
       account: {},
-      profile: { id: 123 },
+      profile: { id: 123, login: 'undeemed' },
     } as never);
-    expect(updatedToken.id).toBe('123');
+    expect(updatedToken.id).toBe('undeemed');
+    expect(updatedToken.githubId).toBe('123');
 
-    const session = { user: {} } as { user: { id?: string } };
+    const session = { user: {} } as { user: { id?: string; githubId?: string } };
     const updatedSession = await authOptions.callbacks!.session!({
       session,
       token: updatedToken,
     } as never);
-    expect(updatedSession.user.id).toBe('123');
+    const user = (updatedSession as unknown as { user?: { id?: string; githubId?: string } }).user;
+    expect(user?.id).toBe('undeemed');
+    expect(user?.githubId).toBe('123');
   });
 
   it('does not overwrite token id when missing account/profile', async () => {

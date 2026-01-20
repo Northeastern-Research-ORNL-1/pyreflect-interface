@@ -132,7 +132,7 @@ export default function AppHeader({
       : 'No workers connected';
 
   const limitsTooltip = !session
-    ? 'Sign in to use limits access'
+    ? 'Sign in to check limits'
     : limitsAccessGranted
       ? 'Limits unlocked'
       : 'Limits locked';
@@ -193,7 +193,6 @@ export default function AppHeader({
             onClick={onOpenLimitsAccess}
             title={limitsTooltip}
             aria-label="Limits access"
-            disabled={!session}
             style={
               limitsAccessGranted
                 ? { borderColor: '#10b981', color: '#10b981' }
@@ -331,7 +330,6 @@ export default function AppHeader({
                   setShowActionsMenu(false);
                   setShowJsonMenuMobile(false);
                 }}
-                disabled={!session}
                 title={limitsTooltip}
               >
                 {limitsAccessGranted ? (
