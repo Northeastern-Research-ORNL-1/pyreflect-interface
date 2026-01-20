@@ -90,15 +90,59 @@ def delete_model_file(hf: HuggingFaceIntegration, model_id: str) -> bool:
 
 
 def get_remote_model_info(hf: HuggingFaceIntegration, model_id: str) -> dict[str, Any]:
+    """
+    Get information about a model file on Hugging Face.
+    
+    Returns dict with:
+    - size_mb: file size in MB (None if not found or error)
+    - source: "huggingface" if HF is configured, "unknown" otherwise
+    - error: error message if something went wrong (optional)
+    """
     if not hf.available or not hf.api or not hf.repo_id:
-        return {"size_mb": None, "source": "unknown"}
+        return {"size_mb": None, "source": "unknown", "error": "HF not available"}
+    
+    file_path = f"{model_id}.pth"
+    
+    # Try multiple methods to check if file exists and get its size
+    # Method 1: Use file_exists (simpler, but doesn't give size)
+    try:
+        if hasattr(hf.api, "file_exists"):
+            exists = hf.api.file_exists(
+                repo_id=hf.repo_id,
+                filename=file_path,
+                repo_type="dataset",
+            )
+            if not exists:
+                return {"size_mb": None, "source": "huggingface", "error": "not_found"}
+    except Exception as exc:
+        # If file_exists fails, try get_paths_info as fallback
+        print(f"HF file_exists check failed for {model_id}, trying get_paths_info: {exc}")
+    
+    # Method 2: Use get_paths_info (gives size information)
     try:
         paths = hf.api.get_paths_info(
-            repo_id=hf.repo_id, paths=[f"{model_id}.pth"], repo_type="dataset"
+            repo_id=hf.repo_id, paths=[file_path], repo_type="dataset"
         )
-        if paths:
+        if paths and len(paths) > 0:
             size_mb = paths[0].size / (1024 * 1024)
             return {"size_mb": size_mb, "source": "huggingface"}
+        # Model not found on HF
+        return {"size_mb": None, "source": "huggingface", "error": "not_found"}
     except Exception as exc:
-        print(f"HF Check failed: {exc}")
-    return {"size_mb": None, "source": "unknown"}
+        error_msg = str(exc)
+        error_type = type(exc).__name__
+        print(f"HF get_paths_info failed for {model_id} (repo={hf.repo_id}): {error_type}: {error_msg}", flush=True)
+        
+        # Provide more specific error information
+        if "401" in error_msg or "Unauthorized" in error_msg:
+            error_detail = "authentication_failed"
+        elif "403" in error_msg or "Forbidden" in error_msg:
+            error_detail = "access_denied"
+        elif "404" in error_msg or "Not Found" in error_msg:
+            error_detail = "not_found"
+        elif "timeout" in error_msg.lower() or "Timeout" in error_msg:
+            error_detail = "timeout"
+        else:
+            error_detail = error_msg[:200]  # Truncate long error messages
+        
+        return {"size_mb": None, "source": "huggingface", "error": error_detail}

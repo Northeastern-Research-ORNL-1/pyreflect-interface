@@ -42,6 +42,9 @@ export default function LimitsAccessModal({
   const canInteract = hasSession;
   const showGetMyCode = isAdmin;
 
+  // Only show limitSource if it adds information (not redundant with statusLabel)
+  const showLimitSource = limitSource && limitSource !== 'whitelist' && limitSource !== 'local_dev';
+
   return (
     <div className="modal-overlay">
       <div className="modal-content" style={{ maxWidth: '420px' }}>
@@ -49,7 +52,7 @@ export default function LimitsAccessModal({
 
         <div style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)' }}>
           Status: <span style={{ color: 'var(--text-primary)' }}>{statusLabel}</span>
-          {limitSource ? ` (${limitSource})` : ''}
+          {showLimitSource ? ` (${limitSource})` : ''}
         </div>
 
         {!hasSession ? (
@@ -88,9 +91,6 @@ export default function LimitsAccessModal({
               GET MY CODE
             </button>
           )}
-          <button className="btn btn--outline" onClick={onClear} disabled={!canInteract}>
-            CLEAR
-          </button>
           <button className="btn btn--outline" onClick={onApply} disabled={!canInteract}>
             REFRESH
           </button>

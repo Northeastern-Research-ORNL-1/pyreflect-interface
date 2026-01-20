@@ -106,6 +106,8 @@ def run_training_job(
         logs.append(message)
         if max_log_lines > 0 and len(logs) > max_log_lines:
             del logs[: len(logs) - max_log_lines]
+        # Also print to stdout so Modal captures logs in real-time
+        print(message, flush=True)
         set_meta({"logs": logs})
 
     def update_progress(epoch: int, total: int, train_loss: float, val_loss: float) -> None:
