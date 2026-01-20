@@ -41,18 +41,22 @@ TORCH_INDEX_URL = "https://download.pytorch.org/whl/cu124"
 # Older stable CUDA 12.4 wheels often top out at sm_90, which produces:
 #   "sm_100 is not compatible with the current PyTorch installation"
 # We use a newer CUDA runtime wheel for B200 to ensure sm_100 cubins are present.
-TORCH_INDEX_URL_B200 = "https://download.pytorch.org/whl/cu126"
+TORCH_INDEX_URL_B200 = "https://download.pytorch.org/whl/nightly/cu126"
 
 
-def _build_worker_image(*, torch_index_url: str) -> modal.Image:
+def _build_worker_image(*, torch_index_url: str, torch_pre: bool = False) -> modal.Image:
+    img = modal.Image.debian_slim(python_version="3.11").pip_install("numpy>=2.1.0")
+
+    # IMPORTANT: PyPI `torch` is often CPU-only. Install a CUDA wheel explicitly so
+    # the Modal GPU is actually used.
+    if torch_pre:
+        # Nightly builds are pre-releases, so we must allow pre-release resolution.
+        img = img.run_commands(f"pip install --pre torch --index-url {torch_index_url}")
+    else:
+        img = img.pip_install("torch", index_url=torch_index_url)
+
     return (
-        modal.Image.debian_slim(python_version="3.11")
-        # Align with backend requirements (NumPy 2.x) and keep Torch interop compatible.
-        .pip_install("numpy>=2.1.0")
-        # IMPORTANT: PyPI `torch` is often CPU-only. Install a CUDA wheel explicitly so
-        # the Modal GPU is actually used.
-        .pip_install("torch", index_url=torch_index_url)
-        .pip_install(
+        img.pip_install(
             "redis",
             "rq",
             "scipy",
@@ -72,7 +76,7 @@ def _build_worker_image(*, torch_index_url: str) -> modal.Image:
 
 
 image = _build_worker_image(torch_index_url=TORCH_INDEX_URL)
-image_b200 = _build_worker_image(torch_index_url=TORCH_INDEX_URL_B200)
+image_b200 = _build_worker_image(torch_index_url=TORCH_INDEX_URL_B200, torch_pre=True)
 
 def _normalize_redis_url(value: str) -> str:
     """
