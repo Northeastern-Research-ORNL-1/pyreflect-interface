@@ -50,30 +50,48 @@ def _build_worker_image(
 ) -> modal.Image:
     img = (
         modal.Image.debian_slim(python_version="3.11")
-        .pip_install("numpy>=2.1.0")
+        # Match upstream pyreflect pin.
+        .pip_install("numpy==2.1.0")
         .pip_install(
             "redis",
             "rq",
-            "scipy",
-            "scikit-learn",
             "python-dotenv",
             "requests",
             "pymongo",
             "huggingface_hub",
-            # Install the same pyreflect build as the backend (the PyPI `pyreflect`
-            # package is a different project and is missing required modules).
-            "pyreflect @ https://github.com/williamQyq/pyreflect/archive/refs/heads/main.zip",
         )
     )
 
-    # Install torch LAST so no later dependency resolution can downgrade it.
+    # NOTE: The upstream `pyreflect` project pins `torch==2.5.1` in its metadata.
+    # That build does not include sm_100 kernels, so it cannot run on B200.
+    # We install `pyreflect` with `--no-deps` and manage its dependencies explicitly,
+    # so we can run a CUDA 13 torch build while still using pyreflect's code.
+
     torch_packages = "torch torchvision" if install_torchvision else "torch"
     pre_flag = "--pre " if torch_pre else ""
     img = img.run_commands(
-        "pip uninstall -y torch torchvision torchaudio || true",
+        # Start clean (prevents a dependency from "sticking" to cu12 builds).
+        "pip uninstall -y torch torchvision torchaudio numpy || true",
+        # Keep numpy pinned to what pyreflect expects.
+        "pip install --no-cache-dir --upgrade --force-reinstall numpy==2.1.0",
+        # Install CUDA 13 torch wheels.
         f"pip install --no-cache-dir --upgrade --force-reinstall {pre_flag}{torch_packages} --index-url {torch_index_url}",
-        # Build-time sanity check: ensure torch wheel is CUDA 13+.
-        "python -c \"import sys, torch; v=getattr(getattr(torch,'version',None),'cuda',None); print('torch.__version__:', torch.__version__); print('torch.version.cuda:', v); major=int(str(v).split('.')[0]) if v else 0; sys.exit(0 if major>=13 else 1)\"",
+        # Re-pin numpy in case the torch install pulled a newer one.
+        "pip install --no-cache-dir --upgrade --force-reinstall numpy==2.1.0",
+        # Install pyreflect runtime deps (excluding torch/numpy) and allow prereleases for refl1d.
+        "pip install --no-cache-dir --upgrade opencv-python pandas seaborn scikit-learn scipy typer pyyaml llvmlite numba refnx tqdm allpairspy",
+        "pip install --no-cache-dir --upgrade --pre refl1d",
+        # Install pyreflect code without enforcing its pinned torch version.
+        "pip install --no-cache-dir --upgrade --force-reinstall --no-deps "
+        "pyreflect @ https://github.com/williamQyq/pyreflect/archive/refs/heads/main.zip",
+        # Build-time sanity checks.
+        "python -c \"import sys; import numpy as np; import torch; "
+        "print('numpy.__version__:', np.__version__); "
+        "print('torch.__version__:', torch.__version__); "
+        "v=getattr(getattr(torch,'version',None),'cuda',None); "
+        "print('torch.version.cuda:', v); "
+        "major=int(str(v).split('.')[0]) if v else 0; "
+        "sys.exit(0 if (np.__version__=='2.1.0' and major>=13) else 1)\"",
     )
 
     # Add local files last (Modal best practice; avoids rebuilds).
@@ -404,6 +422,75 @@ def torch_diagnostics_b200():
         out["nvidia-smi"] = subprocess.check_output(["nvidia-smi"], text=True, stderr=subprocess.STDOUT)
     except Exception as exc:
         out["nvidia-smi"] = f"error: {exc}"
+
+    print(out)
+    return out
+
+
+@app.function(
+    image=image_b200,
+    gpu="B200",
+    timeout=10 * 60,
+)
+def pyreflect_diagnostics_b200():
+    """Sanity-check pyreflect imports against the installed torch build."""
+    import importlib
+    import traceback
+
+    try:
+        from importlib import metadata as importlib_metadata
+    except Exception:  # pragma: no cover
+        import importlib_metadata  # type: ignore
+
+    import torch
+
+    out: dict[str, object] = {
+        "torch.__version__": getattr(torch, "__version__", None),
+        "torch.version.cuda": getattr(getattr(torch, "version", None), "cuda", None),
+    }
+
+    # Basic CUDA execution test (catches arch mismatches early).
+    try:
+        if torch.cuda.is_available():
+            x = torch.tensor([1.0, 2.0, 3.0], device="cuda")
+            out["cuda_tensor_ok"] = bool((x * 2).sum().item() == 12.0)
+        else:
+            out["cuda_tensor_ok"] = False
+    except Exception as exc:
+        out["cuda_tensor_ok"] = f"error: {exc}"
+
+    try:
+        out["pyreflect.version"] = importlib_metadata.version("pyreflect")
+    except Exception as exc:
+        out["pyreflect.version"] = f"error: {exc}"
+
+    checks: list[tuple[str, str, str | None]] = [
+        ("pyreflect", "pyreflect", None),
+        (
+            "pyreflect.input.reflectivity_data_generator",
+            "pyreflect.input.reflectivity_data_generator",
+            "ReflectivityDataGenerator",
+        ),
+        ("pyreflect.input.data_processor", "pyreflect.input.data_processor", "DataProcessor"),
+        ("pyreflect.models.cnn", "pyreflect.models.cnn", "CNN"),
+        ("pyreflect.config.runtime", "pyreflect.config.runtime", "DEVICE"),
+        ("pyreflect.pipelines.reflectivity_pipeline", "pyreflect.pipelines", "reflectivity_pipeline"),
+        (
+            "pyreflect.pipelines.train_autoencoder_mlp_chi_pred",
+            "pyreflect.pipelines",
+            "train_autoencoder_mlp_chi_pred",
+        ),
+        ("pyreflect.pipelines.sld_profile_pred_chi", "pyreflect.pipelines", "sld_profile_pred_chi"),
+    ]
+
+    for label, module_name, attr in checks:
+        try:
+            mod = importlib.import_module(module_name)
+            if attr:
+                getattr(mod, attr)
+            out[f"import:{label}"] = True
+        except Exception as exc:
+            out[f"import:{label}"] = f"error: {exc}\n{traceback.format_exc()}"
 
     print(out)
     return out
