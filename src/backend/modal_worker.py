@@ -192,7 +192,7 @@ def run_rq_worker_burst(lock_value: str):
 
 @app.function(
     image=poller_image,
-    cpu=1.0,
+    cpu=0.125,
     secrets=[modal.Secret.from_name("pyreflect-redis")],
 )
 def poll_queue():
@@ -207,7 +207,7 @@ def poll_queue():
 
 @app.function(
     image=poller_image,
-    cpu=1.0,
+    cpu=0.125,
     secrets=[modal.Secret.from_name("pyreflect-redis")],
 )
 @modal.fastapi_endpoint(method="POST")
