@@ -181,8 +181,15 @@ export default function ParameterPanel({
         layerBound: newBounds,
       });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- Intentionally only sync when bounds/layers change; JSON comparison prevents loops
-  }, [layerBounds, filmLayers]);
+  }, [
+    layerBounds,
+    filmLayers,
+    buildLayerBoundsPayload,
+    generatorParams,
+    onGeneratorParamsChange,
+    hasAnyBounds,
+    derivedNumFilmLayers,
+  ]);
 
   // Clear all bounds
   const clearAllBounds = useCallback(() => {
@@ -546,7 +553,7 @@ export default function ParameterPanel({
             <div className="section__header">
               <h3 className="section__title">
                 Film Layers
-                <InfoTooltip hint={"Film layers define a synthetic stack (materials + thickness) for training data generation.\n\nDrag the triangle handles on each slider to set min/max bounds for synthetic variation.\n\nExample from notebook:\n  substrate roughness: [1.18, 1.52]\n  siox thickness: [9.7, 14.6]\n  layer SLD: [0.85, 4.49]"} />
+                <InfoTooltip hint={"Film layers define a synthetic stack (materials and thickness) used for training data generation. Use the slider handles to set minimum and maximum bounds for each layer parameter."} />
               </h3>
               <div className={styles.layerActions}>
                 {hasAnyBounds && (

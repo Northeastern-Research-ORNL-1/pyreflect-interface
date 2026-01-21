@@ -123,6 +123,14 @@ def validate_layer_bounds(
             ),
         )
 
+    # Define parameter constraints based on FilmLayer field constraints
+    param_constraints = {
+        "sld": (0, 10),
+        "isld": (0, 1),
+        "thickness": (0, 1000),
+        "roughness": (0, 200),
+    }
+
     max_i = len(layers) - 1
     for entry in gen_params.layerBound:
         if entry.i > max_i:
@@ -136,6 +144,17 @@ def validate_layer_bounds(
                 status_code=400,
                 detail=(
                     f"layerBound.bounds must be [min,max] with min<=max (got {entry.bounds})"
+                ),
+            )
+        
+        # Validate bound values respect FilmLayer field constraints
+        min_allowed, max_allowed = param_constraints[entry.par]
+        if lo < min_allowed or hi > max_allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"layerBound.bounds for '{entry.par}' must be within "
+                    f"[{min_allowed}, {max_allowed}] (got [{lo}, {hi}])"
                 ),
             )
 

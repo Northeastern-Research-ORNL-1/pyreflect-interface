@@ -142,3 +142,67 @@ def test_validate_layer_bounds_accepts_valid_payload() -> None:
         ],
     )
     validate_layer_bounds(layers, gen)
+
+
+def test_validate_layer_bounds_rejects_bounds_outside_constraints() -> None:
+    from service.schemas import (
+        FilmLayer,
+        GeneratorParams,
+        LayerBound,
+        validate_layer_bounds,
+    )
+
+    layers = [
+        FilmLayer(name="substrate", sld=2.0, isld=0.0, thickness=0.0, roughness=1.0),
+        FilmLayer(name="siox", sld=3.0, isld=0.0, thickness=10.0, roughness=2.0),
+        FilmLayer(name="layer_1", sld=4.0, isld=0.0, thickness=50.0, roughness=3.0),
+        FilmLayer(name="air", sld=0.0, isld=0.0, thickness=0.0, roughness=0.0),
+    ]
+    
+    # Test SLD bounds outside allowed range [0, 10]
+    gen = GeneratorParams(
+        numCurves=1,
+        numFilmLayers=1,
+        layerBound=[LayerBound(i=2, par="sld", bounds=(-1.0, 15.0))],
+    )
+    with pytest.raises(HTTPException) as exc:
+        validate_layer_bounds(layers, gen)
+    assert exc.value.status_code == 400
+    assert "must be within" in str(exc.value.detail)
+    assert "sld" in str(exc.value.detail)
+    
+    # Test thickness bounds outside allowed range [0, 1000]
+    gen = GeneratorParams(
+        numCurves=1,
+        numFilmLayers=1,
+        layerBound=[LayerBound(i=2, par="thickness", bounds=(10.0, 1500.0))],
+    )
+    with pytest.raises(HTTPException) as exc:
+        validate_layer_bounds(layers, gen)
+    assert exc.value.status_code == 400
+    assert "must be within" in str(exc.value.detail)
+    assert "thickness" in str(exc.value.detail)
+    
+    # Test isld bounds outside allowed range [0, 1]
+    gen = GeneratorParams(
+        numCurves=1,
+        numFilmLayers=1,
+        layerBound=[LayerBound(i=2, par="isld", bounds=(0.0, 2.0))],
+    )
+    with pytest.raises(HTTPException) as exc:
+        validate_layer_bounds(layers, gen)
+    assert exc.value.status_code == 400
+    assert "must be within" in str(exc.value.detail)
+    assert "isld" in str(exc.value.detail)
+    
+    # Test roughness bounds outside allowed range [0, 200]
+    gen = GeneratorParams(
+        numCurves=1,
+        numFilmLayers=1,
+        layerBound=[LayerBound(i=2, par="roughness", bounds=(0.0, 300.0))],
+    )
+    with pytest.raises(HTTPException) as exc:
+        validate_layer_bounds(layers, gen)
+    assert exc.value.status_code == 400
+    assert "must be within" in str(exc.value.detail)
+    assert "roughness" in str(exc.value.detail)
