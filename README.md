@@ -7,7 +7,7 @@ A minimal, monochrome web interface for the [pyreflect](https://github.com/willi
 
 ## Version
 
-- **v0.1.2** — Production hardening + whitelist-only higher limits.
+- **v0.1.2** — Production hardening + whitelist-only higher limits, checkpoints, and controls.
 - **v0.1.1** — GitHub auth, explore/history sidebar, download bundle support, and GPU compute.
 
 ## Live Deployment
@@ -30,7 +30,8 @@ The hosted deployment runs with the full stack enabled: Redis job queue + Modal 
 - **Timing + Warnings**: Generation/training/inference timings and backend warnings streamed to console
 - **Data Upload**: Drag-and-drop upload for `.npy` datasets and `.pth` model weights
 - **Background Jobs**: Redis + RQ queue for non-blocking training runs
-- **GPU Training**: Modal T4 burst workers (spin up on demand, scale to zero)
+- **Controls**: Buttons for stop, cancel, resume, pause, etc. for each job.
+- **GPU Training**: Modal GPU burst workers (spin up on demand, scale to zero)
 - **Checkpointing**: Periodic checkpoint saves to HuggingFace for crash recovery and pause/resume
 - **Cloud Storage**: Hugging Face model artifacts + MongoDB history persistence
 - **State Persistence**: Parameters and results persist across browser refreshes
