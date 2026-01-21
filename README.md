@@ -11,8 +11,8 @@ Neutron reflectivity is an experimental technique used to study the internal str
 
 ## Version
 
-- **v0.1.2** — Production hardening + whitelist-only higher limits, checkpoints, and controls.
-- **v0.1.1** — GitHub auth, explore/history sidebar, download bundle support, and GPU compute.
+- **v0.1.2** 01/20/2026 — Production hardening + whitelist-only higher limits, checkpoints, and controls.
+- **v0.1.1** 01/14/2026 — GitHub auth, explore/history sidebar, download bundle support, and GPU compute.
 
 ## Live Deployment
 
