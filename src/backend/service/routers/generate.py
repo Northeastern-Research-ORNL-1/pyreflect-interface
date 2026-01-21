@@ -71,7 +71,6 @@ async def generate_stream(
     validate_limits(request.generator, request.training, limits=effective_limits)
     validate_layer_bounds(request.layers, request.generator)
     if not PYREFLECT.available:
-
         def error_stream():
             yield 'event: error\ndata: "pyreflect not available. Please install pyreflect dependencies."\n\n'
 
