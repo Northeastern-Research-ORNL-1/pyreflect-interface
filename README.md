@@ -1,5 +1,7 @@
 # PyReflect Interface
 
+<img width="1509" height="863" alt="image" src="https://github.com/user-attachments/assets/29265a61-2937-434f-9b3b-370494500c08" />
+
 A minimal, monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyreflect) neutron reflectivity analysis package.
 
 ![Interface Preview](https://img.shields.io/badge/status-live-black)
