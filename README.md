@@ -14,6 +14,7 @@ A minimal, monochrome web interface for the [pyreflect](https://github.com/willi
 
 - App: `https://pyreflect.shlawg.com`
 - API: `https://api.shlawg.com`
+- Object Storage: `https://huggingface.co/datasets/Northeastern-Research-ORNL-1/models/tree/main`
 
 The hosted deployment runs with the full stack enabled: Redis job queue + Modal GPU burst workers, MongoDB history persistence, and Hugging Face model storage.
 
@@ -30,6 +31,7 @@ The hosted deployment runs with the full stack enabled: Redis job queue + Modal 
 - **Data Upload**: Drag-and-drop upload for `.npy` datasets and `.pth` model weights
 - **Background Jobs**: Redis + RQ queue for non-blocking training runs
 - **GPU Training**: Modal T4 burst workers (spin up on demand, scale to zero)
+- **Checkpointing**: Periodic checkpoint saves to HuggingFace for crash recovery and pause/resume
 - **Cloud Storage**: Hugging Face model artifacts + MongoDB history persistence
 - **State Persistence**: Parameters and results persist across browser refreshes
 - **Reset + Collapse**: One-click reset to example defaults and per-layer collapse/expand controls
@@ -101,6 +103,7 @@ flowchart LR
 
     subgraph Queue["Redis + RQ"]
         RQ[(training queue)]
+        Meta[(job meta)]
     end
 
     subgraph Modal["Modal GPU"]
@@ -108,10 +111,18 @@ flowchart LR
         Worker[T4 GPU Worker]
     end
 
+    subgraph Checkpoints["HuggingFace"]
+        HFModels[(Models Repo)]
+        HFCheckpoints[(Checkpoints Repo)]
+    end
+
     API --> RQ
     API -->|trigger| Poller
     Poller -->|spawn| Worker
     Worker -->|consume| RQ
+    Worker -->|save/load| HFCheckpoints
+    Worker -->|upload model| HFModels
+    Worker <-->|progress| Meta
     API --> Pipeline
     API --> DataStore
 ```
@@ -333,6 +344,237 @@ sequenceDiagram
     F->>F: Render: solid=groundTruth, dashed=predicted
 ```
 
+## API Endpoints
+
+### Core Endpoints
+
+| Endpoint        | Method | Description                    |
+|-----------------|--------|--------------------------------|
+| `/api/health`   | GET    | Health check                   |
+| `/api/limits`   | GET    | Current limits + access status |
+| `/api/defaults` | GET    | Default parameters             |
+| `/api/status`   | GET    | Backend status and data files  |
+
+### Generation
+
+| Endpoint               | Method | Description                            |
+|------------------------|--------|----------------------------------------|
+| `/api/generate`        | POST   | Generate NR/SLD curves (non-streaming) |
+| `/api/generate/stream` | POST   | Generate with SSE log stream           |
+
+### History
+
+| Endpoint            | Method | Description                             |
+|---------------------|--------|-----------------------------------------|
+| `/api/history`      | GET    | List saved generations                  |
+| `/api/history`      | POST   | Save a generation manually              |
+| `/api/history/{id}` | GET    | Get full details of a save              |
+| `/api/history/{id}` | PATCH  | Rename a saved generation               |
+| `/api/history/{id}` | DELETE | Delete a saved generation and its model |
+
+### Models
+
+| Endpoint                      | Method | Description                      |
+|-------------------------------|--------|----------------------------------|
+| `/api/models/upload`          | POST   | Receive model upload from worker |
+| `/api/models/{model_id}`      | GET    | Download a saved model           |
+| `/api/models/{model_id}`      | DELETE | Delete a local model file        |
+| `/api/models/{model_id}/info` | GET    | Get model size and source        |
+| `/api/upload`                 | POST   | Upload files (+ optional roles)  |
+
+### Jobs
+
+| Endpoint                         | Method | Description                            |
+|----------------------------------|--------|----------------------------------------|
+| `/api/jobs/submit`               | POST   | Submit job to queue (non-blocking)     |
+| `/api/jobs/{job_id}`             | GET    | Get job status, progress, and result   |
+| `/api/jobs/{job_id}`             | DELETE | Cancel a queued job                    |
+| `/api/jobs/{job_id}/name`        | PATCH  | Rename a queued job                    |
+| `/api/jobs/{job_id}/retry`       | POST   | Retry a failed/finished job            |
+| `/api/jobs/{job_id}/stop`        | POST   | Stop job immediately (no checkpoint)   |
+| `/api/jobs/{job_id}/pause`       | POST   | Pause job and save checkpoint          |
+| `/api/jobs/{job_id}/delete`      | DELETE | Delete a job record (non-running only) |
+| `/api/jobs/{job_id}/claim`       | POST   | Attach a job to a user (login mid-run) |
+| `/api/jobs/purge`                | DELETE | Delete non-running jobs for a user     |
+| `/api/jobs/{job_id}/force-purge` | POST   | Force purge a zombie job (admin)       |
+
+### Checkpoints
+
+| Endpoint                           | Method | Description                     |
+|------------------------------------|--------|---------------------------------|
+| `/api/checkpoints`                 | GET    | List all available checkpoints  |
+| `/api/checkpoints/{job_id}/resume` | POST   | Resume training from checkpoint |
+| `/api/checkpoints/{job_id}`        | DELETE | Delete a checkpoint             |
+
+### Queue
+
+| Endpoint             | Method | Description                         |
+|----------------------|--------|-------------------------------------|
+| `/api/queue`         | GET    | Queue status and worker info        |
+| `/api/queue/spawn`   | POST   | Trigger remote worker spawn (debug) |
+| `/api/queue/cleanup` | POST   | Trigger stale job cleanup (admin)   |
+
+## Job Lifecycle
+
+### Zombie Prevention
+
+The system includes automatic detection and cleanup of "zombie" jobs - jobs that get stuck in "started" state when their worker dies unexpectedly (Modal container killed, OOM, heartbeat timeout, etc.).
+
+```mermaid
+flowchart TB
+    subgraph Normal["Normal Job Flow"]
+        Submit[Job Submitted]
+        Queue[(Redis Queue)]
+        Worker[Modal GPU Worker]
+        Complete[Job Complete]
+    end
+
+    subgraph Failure["Worker Death (Zombie Scenario)"]
+        Started[Job Started]
+        Death[Worker Dies]
+        Zombie[Zombie Job<br/>stuck in 'started']
+    end
+
+    subgraph Detection["Automatic Cleanup"]
+        Cleanup[Stale Job Detector<br/>runs every 60s]
+        Check{updated_at<br/>older than 10min?}
+        Purge[Purge from Redis]
+        MarkFailed[Mark as Failed]
+    end
+
+    Submit --> Queue --> Worker --> Complete
+    
+    Started --> Death --> Zombie
+    Zombie --> Cleanup
+    Cleanup --> Check
+    Check -->|Yes| Purge --> MarkFailed
+    Check -->|No| Wait[Keep Monitoring]
+```
+
+Workers update `job.meta.updated_at` every ~1 second during execution. The stale job detector:
+
+1. Scans the started registry (`rq:wip:training`, `rq:started:training`)
+2. Checks each job's `meta.updated_at` timestamp
+3. If older than `STALE_JOB_THRESHOLD_S` (default: 600 seconds / 10 minutes), marks it as stale
+4. Purges stale jobs from Redis registries and marks them as failed
+
+| Environment Variable           | Default | Description                              |
+|--------------------------------|---------|------------------------------------------|
+| `STALE_JOB_THRESHOLD_S`        | 600     | Seconds before a job is considered stale |
+| `STALE_JOB_CLEANUP_INTERVAL_S` | 60      | How often the cleanup task runs          |
+
+Manual cleanup (admin only):
+
+```bash
+# Dry-run: see what would be cleaned
+curl -X POST "http://localhost:8000/api/queue/cleanup?dry_run=true" \
+  -H "X-Admin-Token: YOUR_ADMIN_TOKEN"
+
+# Actually clean up stale jobs
+curl -X POST "http://localhost:8000/api/queue/cleanup" \
+  -H "X-Admin-Token: YOUR_ADMIN_TOKEN"
+
+# Force purge a specific job
+curl -X POST "http://localhost:8000/api/jobs/JOB_ID/force-purge" \
+  -H "X-Admin-Token: YOUR_ADMIN_TOKEN"
+```
+
+### Graceful Stop
+
+The `/api/jobs/{job_id}/stop` endpoint:
+
+1. Sets `meta.stop_requested = true` (checked by worker between phases/epochs)
+2. Sends RQ `stop-job` command to kill the workhorse process immediately
+3. Removes job from queue/started registries
+4. Updates meta to show "stopped" status in UI
+
+This handles both graceful stops (worker sees flag) and hard stops (worker process killed).
+
+### Checkpointing & Resume
+
+Training jobs can be paused and resumed across worker restarts or crashes. Checkpoints are stored on HuggingFace Hub in a dedicated dataset repo.
+
+```mermaid
+flowchart TB
+    subgraph Training["Training Loop"]
+        Epoch[Epoch N]
+        Check{N % 5 == 0?}
+        Save[Save Checkpoint to HF]
+        Continue[Continue Training]
+    end
+
+    subgraph Pause["Pause Flow"]
+        PauseBtn[User clicks Pause]
+        SetFlag[Set pause_requested in Redis]
+        Worker[Worker checks flag]
+        SaveImmediate[Save checkpoint immediately]
+        Exit[Exit with status: paused]
+    end
+
+    subgraph Resume["Resume Flow"]
+        ResumeBtn[User clicks Resume]
+        NewJob[Create new job with same params]
+        LoadCheckpoint[Load checkpoint from HF]
+        RestoreState[Restore model + optimizer state]
+        ContinueFrom[Continue from epoch N]
+    end
+
+    subgraph Storage["HuggingFace Hub"]
+        HFRepo[(Checkpoints Repo<br/>job_id.pth)]
+    end
+
+    Epoch --> Check
+    Check -->|Yes| Save --> Continue
+    Check -->|No| Continue
+    Save --> HFRepo
+
+    PauseBtn --> SetFlag --> Worker --> SaveImmediate --> HFRepo
+    SaveImmediate --> Exit
+
+    ResumeBtn --> NewJob --> LoadCheckpoint
+    HFRepo --> LoadCheckpoint
+    LoadCheckpoint --> RestoreState --> ContinueFrom
+```
+
+Each checkpoint (`{job_id}.pth`) contains:
+
+| Field                   | Description                           |
+|-------------------------|---------------------------------------|
+| `epoch`                 | Last completed epoch number           |
+| `model_state_dict`      | Full model weights                    |
+| `optimizer_state_dict`  | Optimizer state (Adam momentum, etc.) |
+| `train_losses`          | Training loss history                 |
+| `val_losses`            | Validation loss history               |
+| `best_val_loss`         | Best validation loss seen             |
+| `nr_stats`, `sld_stats` | Normalization statistics              |
+
+**Pause vs Stop:**
+
+| Action    | Saves Checkpoint? | Can Resume? | Use Case               |
+|-----------|-------------------|-------------|------------------------|
+| **Pause** | Yes               | Yes         | Want to continue later |
+| **Stop**  | No                | No          | Abandon training       |
+
+**Configuration:**
+
+| Environment Variable        | Default | Description                              |
+|-----------------------------|---------|------------------------------------------|
+| `CHECKPOINT_EVERY_N_EPOCHS` | 5       | Save checkpoint every N epochs           |
+| `HF_CHECKPOINT_REPO_ID`     | -       | HuggingFace dataset repo for checkpoints |
+
+The checkpoint repo should be a HuggingFace **dataset** type repo (e.g., `org/checkpoints`).
+
+**UI Controls:**
+
+Running jobs show two buttons:
+- **Pause** (yellow): Saves checkpoint and stops gracefully
+- **Stop** (red): Stops immediately without saving
+
+Failed/paused jobs with checkpoints show:
+- **Resume** (green): Continue training from last checkpoint
+- **Retry**: Start fresh from epoch 0
+- **Delete**: Remove job from queue
+
 ## Local Setup
 
 ### Prerequisites
@@ -413,6 +655,7 @@ uv run modal secret create --force pyreflect-redis \
   REDIS_URL="redis://:PASSWORD@YOUR_PUBLIC_REDIS_HOST:6379" \
   HF_TOKEN="hf_..." \
   HF_REPO_ID="your-username/pyreflect-models" \
+  HF_CHECKPOINT_REPO_ID="your-username/checkpoints" \
   MODEL_STORAGE="hf" \
   MODAL_TRIGGER_TOKEN="change-me" \
   MONGODB_URI="mongodb+srv://..."  # Optional: enables history persistence from Modal
@@ -554,7 +797,11 @@ START_LOCAL_RQ_WORKER=false
 MONGODB_URI=mongodb+srv://...
 HF_TOKEN=hf_...
 HF_REPO_ID=your-username/pyreflect-models
+HF_CHECKPOINT_REPO_ID=your-username/checkpoints
 MODEL_STORAGE=hf
+
+# Checkpointing (for pause/resume)
+CHECKPOINT_EVERY_N_EPOCHS=5
 
 # Optional: override individual limits
 MAX_CURVES=5000
@@ -663,122 +910,6 @@ Files from `pyreflect/datasets/` can be uploaded:
 - `normalization_stat.npy` - Normalization statistics
 - `trained_nr_sld_model_no_dropout.pth` - Pretrained CNN model
 - `X_train_5_layers.npy`, `y_train_5_layers.npy` - Training data
-
-## API Endpoints
-
-| Endpoint                      | Method | Description                             |
-|-------------------------------|--------|-----------------------------------------|
-| `/api/health`                 | GET    | Health check                            |
-| `/api/limits`                 | GET    | Current limits + access status          |
-| `/api/defaults`               | GET    | Default parameters                      |
-| `/api/generate`               | POST   | Generate NR/SLD curves (non-streaming)  |
-| `/api/generate/stream`        | POST   | Generate with SSE log stream            |
-| `/api/status`                 | GET    | Backend status and data files           |
-| `/api/upload`                 | POST   | Upload files (+ optional roles)         |
-| `/api/history`                | GET    | List saved generations                  |
-| `/api/history`                | POST   | Save a generation manually              |
-| `/api/history/{id}`           | GET    | Get full details of a save              |
-| `/api/history/{id}`           | PATCH  | Rename a saved generation               |
-| `/api/history/{id}`           | DELETE | Delete a saved generation and its model |
-| `/api/models/upload`          | POST   | Receive model upload from remote worker |
-| `/api/models/{model_id}`      | GET    | Download a saved model                  |
-| `/api/models/{model_id}`      | DELETE | Delete a local model file               |
-| `/api/models/{model_id}/info` | GET    | Get model size and source               |
-| `/api/jobs/submit`            | POST   | Submit job to queue (non-blocking)      |
-| `/api/jobs/{job_id}`          | GET    | Get job status, progress, and result    |
-| `/api/jobs/{job_id}`          | DELETE | Cancel a queued job                     |
-| `/api/jobs/{job_id}/name`     | PATCH  | Rename a queued job                     |
-| `/api/jobs/{job_id}/retry`    | POST   | Retry a failed/finished job             |
-| `/api/jobs/{job_id}/stop`     | POST   | Request a running job stop              |
-| `/api/jobs/{job_id}/delete`   | DELETE | Delete a job record (non-running only)  |
-| `/api/jobs/{job_id}/claim`    | POST   | Attach a job to a user (login mid-run)  |
-| `/api/jobs/purge`             | DELETE | Delete non-running jobs for a user      |
-| `/api/queue`                  | GET    | Queue status and worker info            |
-| `/api/queue/spawn`            | POST   | Trigger remote worker spawn (debug)     |
-| `/api/queue/cleanup`          | POST   | Trigger stale job cleanup (admin)       |
-| `/api/jobs/{job_id}/force-purge` | POST | Force purge a zombie job (admin)     |
-
-### Job Lifecycle and Zombie Prevention
-
-The system includes automatic detection and cleanup of "zombie" jobs - jobs that get stuck in "started" state when their worker dies unexpectedly (Modal container killed, OOM, heartbeat timeout, etc.).
-
-#### How It Works
-
-```mermaid
-flowchart TB
-    subgraph Normal["Normal Job Flow"]
-        Submit[Job Submitted]
-        Queue[(Redis Queue)]
-        Worker[Modal GPU Worker]
-        Complete[Job Complete]
-    end
-
-    subgraph Failure["Worker Death (Zombie Scenario)"]
-        Started[Job Started]
-        Death[Worker Dies]
-        Zombie[Zombie Job<br/>stuck in 'started']
-    end
-
-    subgraph Detection["Automatic Cleanup"]
-        Cleanup[Stale Job Detector<br/>runs every 60s]
-        Check{updated_at<br/>older than 10min?}
-        Purge[Purge from Redis]
-        MarkFailed[Mark as Failed]
-    end
-
-    Submit --> Queue --> Worker --> Complete
-    
-    Started --> Death --> Zombie
-    Zombie --> Cleanup
-    Cleanup --> Check
-    Check -->|Yes| Purge --> MarkFailed
-    Check -->|No| Wait[Keep Monitoring]
-```
-
-#### Detection Mechanism
-
-Workers update `job.meta.updated_at` every ~1 second during execution. The stale job detector:
-
-1. Scans the started registry (`rq:wip:training`, `rq:started:training`)
-2. Checks each job's `meta.updated_at` timestamp
-3. If older than `STALE_JOB_THRESHOLD_S` (default: 600 seconds / 10 minutes), marks it as stale
-4. Purges stale jobs from Redis registries and marks them as failed
-
-#### Configuration
-
-| Environment Variable | Default | Description |
-|---------------------|---------|-------------|
-| `STALE_JOB_THRESHOLD_S` | 600 | Seconds before a job is considered stale |
-| `STALE_JOB_CLEANUP_INTERVAL_S` | 60 | How often the cleanup task runs |
-
-#### Manual Cleanup
-
-For immediate cleanup (admin only):
-
-```bash
-# Dry-run: see what would be cleaned
-curl -X POST "http://localhost:8000/api/queue/cleanup?dry_run=true" \
-  -H "X-Admin-Token: YOUR_ADMIN_TOKEN"
-
-# Actually clean up stale jobs
-curl -X POST "http://localhost:8000/api/queue/cleanup" \
-  -H "X-Admin-Token: YOUR_ADMIN_TOKEN"
-
-# Force purge a specific job
-curl -X POST "http://localhost:8000/api/jobs/JOB_ID/force-purge" \
-  -H "X-Admin-Token: YOUR_ADMIN_TOKEN"
-```
-
-#### Graceful Stop
-
-The `/api/jobs/{job_id}/stop` endpoint:
-
-1. Sets `meta.stop_requested = true` (checked by worker between phases/epochs)
-2. Sends RQ `stop-job` command to kill the workhorse process immediately
-3. Removes job from queue/started registries
-4. Updates meta to show "stopped" status in UI
-
-This handles both graceful stops (worker sees flag) and hard stops (worker process killed).
 
 ## Technology Stack
 
