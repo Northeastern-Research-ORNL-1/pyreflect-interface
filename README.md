@@ -2,7 +2,9 @@
 
 <img width="1509" height="863" alt="image" src="https://github.com/user-attachments/assets/29265a61-2937-434f-9b3b-370494500c08" />
 
-A minimal, monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyreflect) neutron reflectivity analysis package.
+A minimal, monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyreflect) neutron reflectivity analysis package. 
+
+Neutron reflectivity is an experimental technique used to study the internal structure of thin films and layered materials at the nanometer scale, with applications in batteries, semiconductors, polymers, magnetic materials, and surface chemistry. Experiments measure how neutrons reflect off a material, but translating that data into a meaningful depth profile is a difficult inverse problem that traditionally requires expert knowledge and slow, manual fitting. pyreflect uses machine learning to automate and accelerate this process by learning the relationship between measured reflectivity curves and underlying material structure. This interface makes that capability accessible and interactive, enabling faster analysis, easier exploration of material behavior, and quicker real-world scientific and engineering decisions.
 
 ![Interface Preview](https://img.shields.io/badge/status-live-black)
 ![Version](https://img.shields.io/badge/version-v0.1.2-black)
