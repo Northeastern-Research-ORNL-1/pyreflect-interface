@@ -3,11 +3,19 @@ from __future__ import annotations
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from ..schemas import GenerateRequest, GenerateResponse, validate_limits
+from ..schemas import (
+    GenerateRequest,
+    GenerateResponse,
+    validate_layer_bounds,
+    validate_limits,
+)
 from ..services.limits_access import get_effective_limits
 from ..services.pyreflect_runtime import PYREFLECT
 from ..services.real_data import generate_with_real_data_streaming
-from ..services.synthetic import generate_with_pyreflect, generate_with_pyreflect_streaming
+from ..services.synthetic import (
+    generate_with_pyreflect,
+    generate_with_pyreflect_streaming,
+)
 
 router = APIRouter()
 
@@ -19,17 +27,21 @@ async def generate(
 ):
     if request.dataSource == "real":
         raise HTTPException(
-            status_code=400, detail="Real data mode is only supported on /api/generate/stream"
+            status_code=400,
+            detail="Real data mode is only supported on /api/generate/stream",
         )
     effective_limits, _, _ = get_effective_limits(user_id=x_user_id)
     validate_limits(request.generator, request.training, limits=effective_limits)
+    validate_layer_bounds(request.layers, request.generator)
     if not PYREFLECT.available:
         raise HTTPException(
             status_code=503,
             detail="pyreflect not available. Please install pyreflect dependencies.",
         )
     try:
-        return generate_with_pyreflect(request.layers, request.generator, request.training)
+        return generate_with_pyreflect(
+            request.layers, request.generator, request.training
+        )
     except Exception as exc:
         import traceback
 
@@ -57,6 +69,7 @@ async def generate_stream(
 
     effective_limits, _, _ = get_effective_limits(user_id=x_user_id)
     validate_limits(request.generator, request.training, limits=effective_limits)
+    validate_layer_bounds(request.layers, request.generator)
     if not PYREFLECT.available:
         def error_stream():
             yield 'event: error\ndata: "pyreflect not available. Please install pyreflect dependencies."\n\n'

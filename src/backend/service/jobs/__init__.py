@@ -295,11 +295,30 @@ def run_training_job(
             mongo_uri = None
 
     # Extract parameters
+    from ..schemas import FilmLayer, GeneratorParams, validate_layer_bounds
+
     gen_params = job_params.get("generator", {})
     train_params = job_params.get("training", {})
+    layer_desc_payload = job_params.get("layers", [])
 
-    num_curves = gen_params.get("numCurves", 1000)
-    num_film_layers = gen_params.get("numFilmLayers", 3)
+    # Coerce generator params so layerBound (if present) is validated/normalized.
+    gen_params_model = GeneratorParams(**gen_params)
+    layer_models: list[FilmLayer] = []
+    try:
+        if isinstance(layer_desc_payload, list):
+            layer_models = [FilmLayer(**layer) for layer in layer_desc_payload]
+    except Exception as exc:
+        raise RuntimeError(f"Invalid layers payload: {exc}") from exc
+
+    try:
+        validate_layer_bounds(layer_models, gen_params_model)
+    except Exception as exc:
+        # validate_layer_bounds raises HTTPException; normalize to RuntimeError for workers.
+        detail = getattr(exc, "detail", None)
+        raise RuntimeError(str(detail or exc)) from exc
+
+    num_curves = gen_params_model.numCurves
+    num_film_layers = gen_params_model.numFilmLayers
     epochs = train_params.get("epochs", 50)
     batch_size = train_params.get("batchSize", 32)
     layers = train_params.get("layers", [512, 256, 128])
@@ -317,7 +336,17 @@ def run_training_job(
         set_meta({"status": "generating"})
 
         gen_start = time.perf_counter()
-        data_generator = ReflectivityDataGenerator(num_layers=num_film_layers)
+        layer_desc = None
+        layer_bound = None
+        if gen_params_model.layerBound:
+            layer_desc = layer_desc_payload
+            layer_bound = [b.model_dump() for b in gen_params_model.layerBound]
+
+        data_generator = ReflectivityDataGenerator(
+            num_layers=num_film_layers,
+            layer_desc=layer_desc,
+            layer_bound=layer_bound,
+        )
 
         # Generation can be extremely slow (refl1d loops). Generate in chunks so we
         # can honor stop requests and provide basic progress.
