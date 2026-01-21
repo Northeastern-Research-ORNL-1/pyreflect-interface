@@ -23,7 +23,7 @@ The hosted deployment runs with the full stack enabled: Redis job queue + Modal 
 ## Features
 
 - **Adjustable Parameters**: Film layers (SLD, thickness, roughness), generator settings, training configuration
-- **Ground Truth vs Predicted**: NR and SLD charts show both ground truth (solid) and model predictions (dashed)
+- **Ground Truth vs Predicted**: NR and SLD charts show both ground truth and model predictions
 - **Graph Visualization**: Downloadable & interactive NR curves, SLD profiles, training loss, Chi parameter plots
 - **Monochrome Design**: Clean black/white aesthetic with JetBrains Mono font
 - **Real-time Updates**: Instant parameter feedback with generate-on-demand
