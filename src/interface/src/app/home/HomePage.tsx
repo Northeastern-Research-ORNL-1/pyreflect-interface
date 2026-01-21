@@ -328,6 +328,12 @@ export default function HomePage() {
   useEffect(() => {
     setGeneratorParams((prev) => {
       const maxLayers = filmLayers.length;
+      const boundsEnabled = Boolean(prev.layerBound && prev.layerBound.length > 0);
+      if (boundsEnabled) {
+        const derived = Math.max(0, filmLayers.length - 3);
+        if (prev.numFilmLayers === derived) return prev;
+        return { ...prev, numFilmLayers: derived };
+      }
       if (prev.numFilmLayers <= maxLayers) return prev;
       return { ...prev, numFilmLayers: maxLayers };
     });

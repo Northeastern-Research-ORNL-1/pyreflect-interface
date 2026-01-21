@@ -6,9 +6,18 @@ export interface FilmLayer {
   roughness: number;
 }
 
+export type LayerBoundParam = 'sld' | 'isld' | 'thickness' | 'roughness';
+
+export interface LayerBound {
+  i: number;
+  par: LayerBoundParam;
+  bounds: [number, number];
+}
+
 export interface GeneratorParams {
   numCurves: number;
   numFilmLayers: number;
+  layerBound?: LayerBound[];
 }
 
 export interface TrainingParams {

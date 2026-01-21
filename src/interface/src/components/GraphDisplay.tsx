@@ -179,6 +179,7 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
   if (!data) {
     return (
       <div className={styles.empty}>
+        <strong>CLICK ON THE EXPLORE BUTTON ON TOP TO CHECK PROGRESS AND LOAD PREVIOUS JOBS</strong><br />
         <div className={styles.emptyIcon}>◇</div>
         <p>Adjust parameters and click <strong>GENERATE</strong> to visualize results</p>
       </div>
