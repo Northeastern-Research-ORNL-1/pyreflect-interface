@@ -33,7 +33,7 @@ from ..integrations.redis_queue import (
     get_queue_info,
     normalize_redis_url,
 )
-from ..schemas import GenerateRequest, validate_limits
+from ..schemas import GenerateRequest, validate_layer_bounds, validate_limits
 from ..services.limits_access import get_effective_limits
 from ..services.guards import require_admin_token, require_user_id
 from ..services.rate_limit import limit_jobs_submit
@@ -204,6 +204,7 @@ async def submit_job(
     # Validate limits (may be unlocked for whitelisted users)
     effective_limits, _, _ = get_effective_limits(user_id=x_user_id)
     validate_limits(request.generator, request.training, limits=effective_limits)
+    validate_layer_bounds(request.layers, request.generator)
 
     # Build job parameters
     job_params = {
