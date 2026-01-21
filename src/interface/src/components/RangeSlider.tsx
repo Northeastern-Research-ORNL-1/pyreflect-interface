@@ -68,7 +68,7 @@ export default function RangeSlider({
       const percent = clamp((clientX - rect.left) / rect.width, 0, 1);
       return snap(min + percent * range);
     },
-    [min, range, snap, value]
+    [min, range, snap]
   );
 
   const handlePointerDown = useCallback(
