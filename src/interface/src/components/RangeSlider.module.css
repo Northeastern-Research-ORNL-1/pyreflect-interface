@@ -1,0 +1,148 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+}
+
+.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.track {
+  position: relative;
+  height: 20px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+}
+
+.range {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(100, 150, 200, 0.3);
+  border-left: 2px solid rgba(100, 150, 200, 0.8);
+  border-right: 2px solid rgba(100, 150, 200, 0.8);
+  pointer-events: none;
+}
+
+.handle {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  cursor: grab;
+  z-index: 2;
+  touch-action: none;
+}
+
+.handle:active,
+.handleActive {
+  cursor: grabbing;
+  z-index: 4;
+}
+
+/* Center value handle */
+.handleValue {
+  width: 10px;
+  height: 20px;
+  background: var(--text-primary);
+  border: none;
+  z-index: 3;
+}
+
+.handleValue:hover {
+  background: var(--color-gray-300);
+}
+
+/* Bound handles - triangular/arrow shape */
+.handleBound {
+  width: 12px;
+  height: 20px;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+}
+
+.handleGrip {
+  width: 0;
+  height: 0;
+  border-top: 8px solid transparent;
+  border-bottom: 8px solid transparent;
+}
+
+/* Left handle points left */
+.handleLeft .handleGrip {
+  border-right: 8px solid var(--color-gray-500);
+  margin-right: 2px;
+}
+
+.handleLeft:hover .handleGrip,
+.handleLeft.handleActive .handleGrip {
+  border-right-color: var(--text-primary);
+}
+
+/* Right handle points right */
+.handleRight .handleGrip {
+  border-left: 8px solid var(--color-gray-500);
+  margin-left: 2px;
+}
+
+.handleRight:hover .handleGrip,
+.handleRight.handleActive .handleGrip {
+  border-left-color: var(--text-primary);
+}
+
+/* Inactive (no bounds set) - more subtle */
+.handleInactive .handleGrip {
+  opacity: 0.4;
+}
+
+.handleInactive:hover .handleGrip {
+  opacity: 1;
+}
+
+/* Position inactive handles at edges near value */
+.handleLeft.handleInactive {
+  transform: translate(-100%, -50%);
+  margin-left: -6px;
+}
+
+.handleRight.handleInactive {
+  transform: translate(0%, -50%);
+  margin-left: 6px;
+}
+
+.boundsInfo {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  margin-left: 2px;
+}
+
+.boundsLabel {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+.clearButton {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+  opacity: 0.5;
+}
+
+.clearButton:hover {
+  color: var(--text-primary);
+  opacity: 1;
+}
