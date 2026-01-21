@@ -7,6 +7,7 @@ They should NOT depend on any web request context.
 
 from __future__ import annotations
 
+import copy
 import json
 import time
 import uuid
@@ -521,8 +522,9 @@ def run_training_job(
                     cpu_state = {
                         k: v.detach().cpu() for k, v in model.state_dict().items()
                     }
-                    opt_state = optimizer.state_dict()
-                    # Move optimizer state tensors to CPU too
+                    # Deep copy optimizer state and move tensors to CPU
+                    # (must copy to avoid mutating optimizer's internal state)
+                    opt_state = copy.deepcopy(optimizer.state_dict())
                     for state in opt_state.get("state", {}).values():
                         for k, v in state.items():
                             if hasattr(v, "cpu"):
@@ -578,7 +580,9 @@ def run_training_job(
         if hf and hf.api and job:
             try:
                 cpu_state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
-                opt_state = optimizer.state_dict()
+                # Deep copy optimizer state and move tensors to CPU
+                # (must copy to avoid mutating optimizer's internal state)
+                opt_state = copy.deepcopy(optimizer.state_dict())
                 for state in opt_state.get("state", {}).values():
                     for k, v in state.items():
                         if hasattr(v, "cpu"):
