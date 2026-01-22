@@ -214,7 +214,7 @@ async def download_model(
         )
 
     if HF_REPO_ID:
-        hf_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/models/{model_id}/{model_id}.pth"
+        hf_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/models/models/{model_id}/{model_id}.pth"
         return RedirectResponse(url=hf_url)
 
     raise HTTPException(status_code=404, detail="Model not found locally or on Hugging Face")
@@ -283,7 +283,9 @@ async def get_training_data(
     _require_model_access(model_id, x_user_id, http_request=http_request, allow_hf_fallback=True)
 
     if HF_REPO_ID:
-        hf_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/models/{model_id}/{file_type}.npy"
+        # Map file_type to HF filenames (nr_train -> nr_train.npy, sld_train -> sld_train.npy)
+        file_name = f"{file_type}.npy"
+        hf_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/models/models/{model_id}/{file_name}"
         return RedirectResponse(url=hf_url)
 
     raise HTTPException(status_code=404, detail="Training data not available")
