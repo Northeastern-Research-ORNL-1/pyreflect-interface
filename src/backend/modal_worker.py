@@ -60,6 +60,7 @@ def _build_worker_image(
             "pymongo",
             "huggingface_hub",
             "pydantic",
+            "fastapi",
         )
     )
 
