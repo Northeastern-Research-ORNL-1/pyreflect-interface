@@ -217,7 +217,25 @@ async def download_model(
 
     if HF_REPO_ID:
         hf_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/models/{model_id}/{model_id}.pth"
-        return RedirectResponse(url=hf_url)
+        
+        # Proxy the file instead of redirecting to avoid CORS issues with HF's CDN
+        try:
+            hf_response = requests.get(hf_url, stream=True, timeout=300)
+            if hf_response.status_code == 200:
+                return StreamingResponse(
+                    hf_response.iter_content(chunk_size=1024 * 1024),
+                    media_type="application/octet-stream",
+                    headers={
+                        "Content-Disposition": f"attachment; filename=pyreflect_model_{model_id[:8]}.pth",
+                        "Content-Length": hf_response.headers.get("Content-Length", ""),
+                    },
+                )
+            elif hf_response.status_code == 404:
+                raise HTTPException(status_code=404, detail="Model not found on HuggingFace")
+            else:
+                raise HTTPException(status_code=502, detail=f"HuggingFace returned {hf_response.status_code}")
+        except requests.RequestException as exc:
+            raise HTTPException(status_code=502, detail=f"Failed to fetch from HuggingFace: {exc}")
 
     raise HTTPException(status_code=404, detail="Model not found locally or on Hugging Face")
 
