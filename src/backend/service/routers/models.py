@@ -286,6 +286,35 @@ async def get_model_info(
     return {"size_mb": None, "source": "unknown"}
 
 
+@router.get("/models/{model_id}/training-data-info")
+async def get_training_data_info(
+    model_id: str,
+    http_request: Request,
+    x_user_id: str | None = Header(default=None),
+):
+    """Get training data file sizes from HuggingFace."""
+    if not model_id or "/" in model_id or "\\" in model_id:
+        raise HTTPException(status_code=400, detail="Invalid model ID")
+
+    _require_model_access(model_id, x_user_id, http_request=http_request, allow_hf_fallback=True)
+    
+    result = {"nr_size_mb": None, "sld_size_mb": None}
+    
+    if HF_REPO_ID:
+        for file_type, key in [("nr_train", "nr_size_mb"), ("sld_train", "sld_size_mb")]:
+            hf_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/models/{model_id}/{file_type}.npy"
+            try:
+                head_res = requests.head(hf_url, timeout=10, allow_redirects=True)
+                if head_res.status_code == 200:
+                    content_length = head_res.headers.get("Content-Length")
+                    if content_length:
+                        result[key] = int(content_length) / (1024 * 1024)
+            except Exception:
+                pass
+    
+    return result
+
+
 @router.get("/models/{model_id}/training-data/{file_type}")
 async def get_training_data(
     model_id: str,
