@@ -218,7 +218,8 @@ async def download_model(
     if HF_REPO_ID:
         hf_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/models/{model_id}/{model_id}.pth"
         
-        # Proxy the file instead of redirecting to avoid CORS issues with HF's CDN
+        # Proxy the file (fallback behavior).
+        # Note: Frontend should use the URL returned by /models/{id}/info for distinct direct downloads.
         try:
             hf_response = requests.get(hf_url, stream=True, timeout=300)
             if hf_response.status_code == 200:
@@ -277,13 +278,16 @@ async def get_model_info(
     local_path = MODELS_DIR / f"{model_id}.pth"
     if local_path.exists():
         size_mb = local_path.stat().st_size / (1024 * 1024)
-        return {"size_mb": size_mb, "source": "local"}
+        return {"size_mb": size_mb, "source": "local", "download_url": None}
 
     hf = getattr(http_request.app.state, "hf", None)
     if hf and hf.repo_id:
-        return get_remote_model_info(hf, model_id)
+        info = get_remote_model_info(hf, model_id)
+        # Add direct download URL for frontend use (bypassing backend proxy)
+        info["download_url"] = f"https://huggingface.co/datasets/{hf.repo_id}/resolve/main/models/{model_id}/{model_id}.pth"
+        return info
 
-    return {"size_mb": None, "source": "unknown"}
+    return {"size_mb": None, "source": "unknown", "download_url": None}
 
 
 @router.get("/models/{model_id}/training-data-info")
@@ -298,11 +302,20 @@ async def get_training_data_info(
 
     _require_model_access(model_id, x_user_id, http_request=http_request, allow_hf_fallback=True)
     
-    result = {"nr_size_mb": None, "sld_size_mb": None}
+    result = {
+        "nr_size_mb": None, 
+        "sld_size_mb": None,
+        "nr_url": None,
+        "sld_url": None
+    }
     
     if HF_REPO_ID:
-        for file_type, key in [("nr_train", "nr_size_mb"), ("sld_train", "sld_size_mb")]:
+        for file_type, key, url_key in [
+            ("nr_train", "nr_size_mb", "nr_url"), 
+            ("sld_train", "sld_size_mb", "sld_url")
+        ]:
             hf_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/models/{model_id}/{file_type}.npy"
+            result[url_key] = hf_url
             try:
                 head_res = requests.head(hf_url, timeout=10, allow_redirects=True)
                 if head_res.status_code == 200:
@@ -336,7 +349,8 @@ async def get_training_data(
         file_name = f"{file_type}.npy"
         hf_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/models/{model_id}/{file_name}"
         
-        # Proxy the file instead of redirecting to avoid CORS issues with HF's CDN
+        # Proxy the file (fallback behavior).
+        # Note: Frontend should use the URL returned by /models/{id}/training-data-info for distinct direct downloads.
         try:
             hf_response = requests.get(hf_url, stream=True, timeout=60)
             if hf_response.status_code == 200:
