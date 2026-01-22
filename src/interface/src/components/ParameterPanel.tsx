@@ -1464,7 +1464,7 @@ export default function ParameterPanel({
                       {stripLabelSuffix(uploadRequirementLabels[role])}
                     </span>
                     <span className={`${styles.mappingValue} ${exists ? styles.mappingOk : styles.mappingMissing}`}>
-                      {path ? stripKnownExtension(path) : 'Not set'}
+                      {exists ? (path ? stripKnownExtension(path) : 'Not set') : 'DNE'}
                     </span>
                   </div>
                 );
