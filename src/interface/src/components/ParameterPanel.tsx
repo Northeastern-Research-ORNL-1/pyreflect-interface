@@ -622,15 +622,33 @@ export default function ParameterPanel({
                     <div className={styles.layerParams}>
                       <div className="control">
                         <div className="control__label">
-                          <span>SLD<InfoTooltip hint={"Scattering Length Density (×10⁻⁶ Å⁻²).\n\nDrag ◀ ▶ handles to set bounds.\nNotebook example: siox fixed [3.47, 3.47], material layers vary [0.85, 4.49]"} /></span>
-                          <EditableValue
-                            value={layer.sld}
-                            onChange={(v) => updateLayer(index, 'sld', v)}
-                            min={0}
-                            max={10}
-                            step={0.01}
-                            decimals={2}
-                          />
+                          <span>SLD<InfoTooltip hint={"Scattering Length Density (×10⁻⁶ Å⁻²).\n\nDrag ◀ ▶ handles or edit [min] value [max] to set bounds."} /></span>
+                          <div className={styles.valueWithBounds}>
+                            <EditableValue
+                              value={getBounds(index, 'sld').min ?? layer.sld}
+                              onChange={(v) => setBounds(index, 'sld', v, getBounds(index, 'sld').max)}
+                              min={0}
+                              max={layer.sld}
+                              step={0.01}
+                              decimals={2}
+                            />
+                            <EditableValue
+                              value={layer.sld}
+                              onChange={(v) => updateLayer(index, 'sld', v)}
+                              min={0}
+                              max={10}
+                              step={0.01}
+                              decimals={2}
+                            />
+                            <EditableValue
+                              value={getBounds(index, 'sld').max ?? layer.sld}
+                              onChange={(v) => setBounds(index, 'sld', getBounds(index, 'sld').min, v)}
+                              min={layer.sld}
+                              max={10}
+                              step={0.01}
+                              decimals={2}
+                            />
+                          </div>
                         </div>
                         <RangeSlider
                           value={layer.sld}
@@ -647,16 +665,36 @@ export default function ParameterPanel({
 
                       <div className="control">
                         <div className="control__label">
-                          <span>Thickness (Å)<InfoTooltip hint={"Layer thickness in Angstroms.\n\nDrag ◀ ▶ handles to set bounds.\nNotebook example: siox [9.7, 14.6], material [117, 240]"} /></span>
-                          <EditableValue
-                            value={layer.thickness}
-                            onChange={(v) => updateLayer(index, 'thickness', v)}
-                            min={0}
-                            max={2000}
-                            step={1}
-                            decimals={0}
-                            disabled={index === 0 || index === filmLayers.length - 1}
-                          />
+                          <span>Thickness (Å)<InfoTooltip hint={"Layer thickness in Angstroms.\n\nDrag ◀ ▶ handles or edit [min] value [max] to set bounds."} /></span>
+                          <div className={styles.valueWithBounds}>
+                            <EditableValue
+                              value={getBounds(index, 'thickness').min ?? layer.thickness}
+                              onChange={(v) => setBounds(index, 'thickness', v, getBounds(index, 'thickness').max)}
+                              min={0}
+                              max={layer.thickness}
+                              step={1}
+                              decimals={0}
+                              disabled={index === 0 || index === filmLayers.length - 1}
+                            />
+                            <EditableValue
+                              value={layer.thickness}
+                              onChange={(v) => updateLayer(index, 'thickness', v)}
+                              min={0}
+                              max={2000}
+                              step={1}
+                              decimals={0}
+                              disabled={index === 0 || index === filmLayers.length - 1}
+                            />
+                            <EditableValue
+                              value={getBounds(index, 'thickness').max ?? layer.thickness}
+                              onChange={(v) => setBounds(index, 'thickness', getBounds(index, 'thickness').min, v)}
+                              min={layer.thickness}
+                              max={2000}
+                              step={1}
+                              decimals={0}
+                              disabled={index === 0 || index === filmLayers.length - 1}
+                            />
+                          </div>
                         </div>
                         <RangeSlider
                           value={layer.thickness}
@@ -674,15 +712,33 @@ export default function ParameterPanel({
 
                       <div className="control">
                         <div className="control__label">
-                          <span>Roughness (Å)<InfoTooltip hint={"Interfacial roughness in Angstroms.\n\nDrag ◀ ▶ handles to set bounds.\nNotebook example: substrate [1.18, 1.52], material [43, 110]"} /></span>
-                          <EditableValue
-                            value={layer.roughness}
-                            onChange={(v) => updateLayer(index, 'roughness', v)}
-                            min={0}
-                            max={500}
-                            step={0.5}
-                            decimals={1}
-                          />
+                          <span>Roughness (Å)<InfoTooltip hint={"Interfacial roughness in Angstroms.\n\nDrag ◀ ▶ handles or edit [min] value [max] to set bounds."} /></span>
+                          <div className={styles.valueWithBounds}>
+                            <EditableValue
+                              value={getBounds(index, 'roughness').min ?? layer.roughness}
+                              onChange={(v) => setBounds(index, 'roughness', v, getBounds(index, 'roughness').max)}
+                              min={0}
+                              max={layer.roughness}
+                              step={0.5}
+                              decimals={1}
+                            />
+                            <EditableValue
+                              value={layer.roughness}
+                              onChange={(v) => updateLayer(index, 'roughness', v)}
+                              min={0}
+                              max={500}
+                              step={0.5}
+                              decimals={1}
+                            />
+                            <EditableValue
+                              value={getBounds(index, 'roughness').max ?? layer.roughness}
+                              onChange={(v) => setBounds(index, 'roughness', getBounds(index, 'roughness').min, v)}
+                              min={layer.roughness}
+                              max={500}
+                              step={0.5}
+                              decimals={1}
+                            />
+                          </div>
                         </div>
                         <RangeSlider
                           value={layer.roughness}
@@ -699,15 +755,33 @@ export default function ParameterPanel({
 
                       <div className="control">
                         <div className="control__label">
-                          <span>iSLD<InfoTooltip hint={"Imaginary SLD (absorption).\nTypically 0 for most materials.\n\nDrag ◀ ▶ handles to set bounds if needed."} /></span>
-                          <EditableValue
-                            value={layer.isld}
-                            onChange={(v) => updateLayer(index, 'isld', v)}
-                            min={0}
-                            max={1}
-                            step={0.001}
-                            decimals={3}
-                          />
+                          <span>iSLD<InfoTooltip hint={"Imaginary SLD (absorption).\nTypically 0 for most materials.\n\nDrag ◀ ▶ handles or edit [min] value [max] to set bounds."} /></span>
+                          <div className={styles.valueWithBounds}>
+                            <EditableValue
+                              value={getBounds(index, 'isld').min ?? layer.isld}
+                              onChange={(v) => setBounds(index, 'isld', v, getBounds(index, 'isld').max)}
+                              min={0}
+                              max={layer.isld}
+                              step={0.001}
+                              decimals={3}
+                            />
+                            <EditableValue
+                              value={layer.isld}
+                              onChange={(v) => updateLayer(index, 'isld', v)}
+                              min={0}
+                              max={1}
+                              step={0.001}
+                              decimals={3}
+                            />
+                            <EditableValue
+                              value={getBounds(index, 'isld').max ?? layer.isld}
+                              onChange={(v) => setBounds(index, 'isld', getBounds(index, 'isld').min, v)}
+                              min={layer.isld}
+                              max={1}
+                              step={0.001}
+                              decimals={3}
+                            />
+                          </div>
                         </div>
                         <RangeSlider
                           value={layer.isld}
