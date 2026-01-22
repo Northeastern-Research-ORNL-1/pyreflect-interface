@@ -203,8 +203,11 @@ async def submit_job(
 
     # Validate limits (may be unlocked for whitelisted users)
     effective_limits, _, _ = get_effective_limits(user_id=x_user_id)
-    validate_limits(request.generator, request.training, limits=effective_limits)
-    validate_layer_bounds(request.layers, request.generator)
+    try:
+        validate_limits(request.generator, request.training, limits=effective_limits)
+        validate_layer_bounds(request.layers, request.generator)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
     # Build job parameters
     job_params = {
