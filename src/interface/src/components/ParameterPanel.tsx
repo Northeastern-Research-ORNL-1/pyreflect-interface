@@ -709,7 +709,7 @@ export default function ParameterPanel({
                   type="button"
                   style={{ height: '28px', padding: '0 8px', fontSize: '11px' }}
                 >
-                  + ADD
+                  ADD
                 </button>
                 
               </div>
