@@ -26,6 +26,8 @@ type BundleEstimate = {
   pngExpandedBytes: number;
   modelBytes: number | null;
   modelSource?: string | null;
+  nrDataBytes: number | null;
+  sldDataBytes: number | null;
   totalBytes: number | null;
   estimating: boolean;
 };
@@ -55,6 +57,8 @@ export function useDownloadBundle({
     includePngNormal: true,
     includePngExpanded: true,
     includeModel: true,
+    includeNrData: false,
+    includeSldData: false,
   });
   const [exportPngs, setExportPngs] = useState<ExportPngs | null>(null);
   const [shouldCapturePngs, setShouldCapturePngs] = useState(false);
@@ -65,6 +69,8 @@ export function useDownloadBundle({
     pngExpandedBytes: 0,
     modelBytes: null,
     modelSource: null,
+    nrDataBytes: null,
+    sldDataBytes: null,
     totalBytes: null,
     estimating: false,
   });
@@ -96,6 +102,8 @@ export function useDownloadBundle({
       includePngNormal: true,
       includePngExpanded: true,
       includeModel: Boolean(payload.result.model_id),
+      includeNrData: false,
+      includeSldData: false,
     });
     bundlePngCacheRef.current = null;
   }, []);
@@ -198,24 +206,39 @@ export function useDownloadBundle({
 
       let modelBytes: number | null = null;
       let modelSource: string | null = null;
-      if (bundleSelection.includeModel && bundlePayload.result.model_id) {
-        try {
-          const res = await fetch(`${apiUrl}/api/models/${bundlePayload.result.model_id}/info`, {
-            headers: userId ? { 'X-User-ID': userId } : undefined,
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (typeof data.size_mb === 'number') {
-              modelBytes = data.size_mb * 1024 * 1024;
+      let nrDataBytes: number | null = null;
+      let sldDataBytes: number | null = null;
+      
+      if (bundlePayload.result.model_id) {
+        // Fetch model info
+        if (bundleSelection.includeModel) {
+          try {
+            const res = await fetch(`${apiUrl}/api/models/${bundlePayload.result.model_id}/info`, {
+              headers: userId ? { 'X-User-ID': userId } : undefined,
+            });
+            if (res.ok) {
+              const data = await res.json();
+              if (typeof data.size_mb === 'number') {
+                modelBytes = data.size_mb * 1024 * 1024;
+              }
+              modelSource = data.source || null;
             }
-            modelSource = data.source || null;
+          } catch {
+            modelSource = null;
           }
-        } catch {
-          modelSource = null;
+        }
+        
+        // Training data sizes are unknown (stored on HuggingFace)
+        // Show as "Unknown" in the UI
+        if (bundleSelection.includeNrData) {
+          nrDataBytes = null;
+        }
+        if (bundleSelection.includeSldData) {
+          sldDataBytes = null;
         }
       }
 
-      const totalBytes = jsonBytes + pngBytes + (modelBytes ?? 0);
+      const totalBytes = jsonBytes + pngBytes + (modelBytes ?? 0) + (nrDataBytes ?? 0) + (sldDataBytes ?? 0);
 
       if (cancelled) return;
       setBundleEstimate({
@@ -225,6 +248,8 @@ export function useDownloadBundle({
         pngExpandedBytes,
         modelBytes,
         modelSource,
+        nrDataBytes,
+        sldDataBytes,
         totalBytes,
         estimating: false,
       });
@@ -392,6 +417,48 @@ export function useDownloadBundle({
           }
         } else if (bundleSelection.includeModel && !resolvedResult.model_id) {
           addLog('No model file associated with this run.');
+        }
+
+        // Download NR training data
+        if (bundleSelection.includeNrData && resolvedResult.model_id) {
+          if (!userId) {
+            addLog('Sign in to download NR training data.');
+          } else {
+            try {
+              const nrRes = await fetch(`${apiUrl}/api/models/${resolvedResult.model_id}/training-data/nr_train`, {
+                headers: { 'X-User-ID': userId },
+              });
+              if (nrRes.ok) {
+                const nrBuffer = await nrRes.arrayBuffer();
+                files[`nr_train_${resolvedResult.model_id}.npy`] = new Uint8Array(nrBuffer);
+              } else {
+                addLog('NR training data not found.');
+              }
+            } catch {
+              addLog('Failed to fetch NR training data.');
+            }
+          }
+        }
+
+        // Download SLD training data
+        if (bundleSelection.includeSldData && resolvedResult.model_id) {
+          if (!userId) {
+            addLog('Sign in to download SLD training data.');
+          } else {
+            try {
+              const sldRes = await fetch(`${apiUrl}/api/models/${resolvedResult.model_id}/training-data/sld_train`, {
+                headers: { 'X-User-ID': userId },
+              });
+              if (sldRes.ok) {
+                const sldBuffer = await sldRes.arrayBuffer();
+                files[`sld_train_${resolvedResult.model_id}.npy`] = new Uint8Array(sldBuffer);
+              } else {
+                addLog('SLD training data not found.');
+              }
+            } catch {
+              addLog('Failed to fetch SLD training data.');
+            }
+          }
         }
 
         const zipData = await new Promise<Uint8Array>((resolve, reject) => {

@@ -18,22 +18,8 @@ Neutron reflectivity is an experimental technique used to study the internal str
 
 - App: `https://pyreflect.shlawg.com`
 - API: `https://api.shlawg.com`
-- Object Storage: `https://huggingface.co/datasets/Northeastern-Research-ORNL-1/models/tree/main`
 
 The hosted deployment runs with the full stack enabled: Redis job queue + Modal GPU burst workers, MongoDB history persistence, and Hugging Face model storage.
-
-### Model Storage Structure
-
-Each training run creates a folder on HuggingFace with all artifacts bundled together:
-
-```
-models/{model_id}/
-├── {model_id}.pth     # Trained CNN model weights
-├── nr_train.npy       # NR curves (N × 2 × 308)
-└── sld_train.npy      # SLD profiles (N × 2 × 900)
-```
-
-The `.npy` training data files are uploaded immediately after data generation (before training begins), so even if training fails, the generated data is preserved and can be reused.
 
 ## Pipelines
 
@@ -51,7 +37,7 @@ The `.npy` training data files are uploaded immediately after data generation (b
 - **Timing + Warnings**: Generation/training/inference timings and backend warnings streamed to console
 - **Data Upload**: Drag-and-drop upload for `.npy` datasets and `.pth` model weights
 - **Background Jobs**: Redis + RQ queue for non-blocking training runs
-- **Controls**: Buttons for stop, cancel, resume, pause, etc. for each job.
+- **Controls**: Buttons for stop, cancel, resume, pause, download, etc. for each job.
 - **GPU Training**: Modal GPU burst workers (spin up on demand, scale to zero)
 - **Checkpointing**: Periodic checkpoint saves to HuggingFace for crash recovery and pause/resume
 - **Cloud Storage**: Hugging Face model artifacts + MongoDB history persistence
@@ -91,6 +77,25 @@ pyreflect-interface/
 ```
 
 > **Note**: The `pyreflect` package is installed directly from [GitHub](https://github.com/williamQyq/pyreflect) rather than bundled in this repo.
+
+### Model Storage Structure
+
+Each training run creates a folder on HuggingFace with all artifacts bundled together:
+
+```
+models/{model_id}/
+├── {model_id}.pth     # Trained CNN model weights
+├── nr_train.npy       # NR curves (N × 2 × 308)
+└── sld_train.npy      # SLD profiles (N × 2 × 900)
+```
+
+> Object Storage: `https://huggingface.co/datasets/Northeastern-Research-ORNL-1/models/tree/main`
+
+The `.npy` training data files are uploaded immediately after data generation (before training begins). This ensures:
+
+1.  **Fault Tolerance**: If training fails (e.g., OOM, timeout), the generated data is preserved.
+2.  **Retry Efficiency**: Retries can reuse the existing `.npy` files instead of regenerating them.
+3.  **Data Reuse**: Datasets can be downloaded and shared between team members or used for external analysis.
 
 ## Architecture
 
