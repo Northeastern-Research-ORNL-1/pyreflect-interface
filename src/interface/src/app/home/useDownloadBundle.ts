@@ -228,13 +228,24 @@ export function useDownloadBundle({
           }
         }
         
-        // Training data sizes are unknown (stored on HuggingFace)
-        // Show as "Unknown" in the UI
-        if (bundleSelection.includeNrData) {
-          nrDataBytes = null;
-        }
-        if (bundleSelection.includeSldData) {
-          sldDataBytes = null;
+        // Fetch training data info if needed
+        if (bundleSelection.includeNrData || bundleSelection.includeSldData) {
+          try {
+            const res = await fetch(`${apiUrl}/api/models/${bundlePayload.result.model_id}/training-data-info`, {
+              headers: userId ? { 'X-User-ID': userId } : undefined,
+            });
+            if (res.ok) {
+              const data = await res.json();
+              if (bundleSelection.includeNrData && typeof data.nr_size_mb === 'number') {
+                nrDataBytes = data.nr_size_mb * 1024 * 1024;
+              }
+              if (bundleSelection.includeSldData && typeof data.sld_size_mb === 'number') {
+                sldDataBytes = data.sld_size_mb * 1024 * 1024;
+              }
+            }
+          } catch {
+            // usage of null indicates unknown size
+          }
         }
       }
 
@@ -405,15 +416,19 @@ export function useDownloadBundle({
           if (!userId) {
             addLog('Sign in to download model file.');
           } else {
-            const modelRes = await fetch(`${apiUrl}/api/models/${resolvedResult.model_id}`, {
-              headers: { 'X-User-ID': userId },
-            });
-          if (modelRes.ok) {
-            const modelBuffer = await modelRes.arrayBuffer();
-            files[`model_${resolvedResult.model_id}.pth`] = new Uint8Array(modelBuffer);
-          } else {
-            addLog('Model file not found for this run.');
-          }
+            try {
+              const modelRes = await fetch(`${apiUrl}/api/models/${resolvedResult.model_id}`, {
+                headers: { 'X-User-ID': userId },
+              });
+              if (modelRes.ok) {
+                const modelBuffer = await modelRes.arrayBuffer();
+                files[`model_${resolvedResult.model_id}.pth`] = new Uint8Array(modelBuffer);
+              } else {
+                addLog('Model file not found for this run.');
+              }
+            } catch {
+              addLog('Failed to fetch model file.');
+            }
           }
         } else if (bundleSelection.includeModel && !resolvedResult.model_id) {
           addLog('No model file associated with this run.');
