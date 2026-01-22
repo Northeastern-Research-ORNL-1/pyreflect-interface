@@ -214,7 +214,7 @@ async def download_model(
         )
 
     if HF_REPO_ID:
-        hf_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/{model_id}.pth"
+        hf_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/models/{model_id}/{model_id}.pth"
         return RedirectResponse(url=hf_url)
 
     raise HTTPException(status_code=404, detail="Model not found locally or on Hugging Face")

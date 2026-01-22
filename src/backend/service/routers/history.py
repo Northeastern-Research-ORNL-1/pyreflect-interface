@@ -81,7 +81,7 @@ async def get_history(http_request: Request, x_user_id: str | None = Header(defa
         doc["is_local"] = model_id in local_model_ids
         if model_id and HF_REPO_ID:
             doc["hf_url"] = (
-                f"https://huggingface.co/datasets/{HF_REPO_ID}/blob/main/{model_id}.pth"
+                f"https://huggingface.co/datasets/{HF_REPO_ID}/tree/main/models/{model_id}"
             )
         history.append(doc)
     return history

@@ -58,7 +58,7 @@ def run_training_job(
         SPLIT_RATIO,
         WEIGHT_DECAY,
     )
-    from ..integrations.huggingface import HuggingFaceIntegration, upload_model
+    from ..integrations.huggingface import HuggingFaceIntegration, upload_model, upload_training_data
     from ..services.checkpointing import (
         Checkpoint,
         delete_checkpoint,
@@ -326,6 +326,10 @@ def run_training_job(
 
     total_start = time.perf_counter()
 
+    # Generate model_id upfront so it can be used for both .npy and .pth files
+    model_id = str(uuid.uuid4())
+    log(f"Model bundle ID: {model_id}")
+
     try:
         # =====================
         # Data Generation
@@ -392,6 +396,20 @@ def run_training_job(
         log(f"Generation took {gen_time:.2f}s")
 
         _raise_if_stopped("post_generation")
+
+        # =====================
+        # Upload Training Data (if HF configured)
+        # =====================
+        if hf and storage_mode == "hf":
+            log("Uploading training data to Hugging Face...")
+            set_meta({"status": "uploading_training_data"})
+            try:
+                if upload_training_data(hf, nr_curves, sld_curves, model_id):
+                    log(f"Training data uploaded to models/{model_id}/")
+                else:
+                    log("Warning: Training data upload failed")
+            except Exception as exc:
+                log(f"Warning: Could not upload training data: {exc}")
 
         # =====================
         # Preprocessing
@@ -668,8 +686,6 @@ def run_training_job(
         cpu_state_dict = model.state_dict()
 
     import io
-
-    model_id = str(uuid.uuid4())
 
     model_path: Path | None = None
     model_size_mb: float | None = None

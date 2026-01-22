@@ -62,9 +62,10 @@ def upload_model(hf: HuggingFaceIntegration, file_path: Any, model_id: str) -> b
         except Exception:
             pass
 
+        # Use folder structure: models/{model_id}/{model_id}.pth
         hf.api.upload_file(
             path_or_fileobj=file_path,
-            path_in_repo=f"{model_id}.pth",
+            path_in_repo=f"models/{model_id}/{model_id}.pth",
             repo_id=hf.repo_id,
             repo_type="dataset",
         )
@@ -74,13 +75,76 @@ def upload_model(hf: HuggingFaceIntegration, file_path: Any, model_id: str) -> b
         return False
 
 
+def upload_training_data(
+    hf: HuggingFaceIntegration,
+    nr_curves: Any,
+    sld_curves: Any,
+    model_id: str,
+) -> bool:
+    """
+    Upload training data (.npy files) to HF in the model's folder.
+    
+    Files are saved as:
+    - models/{model_id}/nr_train.npy
+    - models/{model_id}/sld_train.npy
+    """
+    if not hf.available or not hf.api or not hf.repo_id:
+        return False
+    
+    try:
+        import io
+        import numpy as np
+        
+        # Ensure repo exists
+        try:
+            hf.api.create_repo(
+                repo_id=hf.repo_id, repo_type="dataset", exist_ok=True, private=False
+            )
+        except Exception:
+            pass
+        
+        # Upload NR curves
+        nr_buffer = io.BytesIO()
+        np.save(nr_buffer, nr_curves)
+        nr_size_mb = nr_buffer.tell() / (1024 * 1024)
+        nr_buffer.seek(0)
+        
+        print(f"Uploading nr_train.npy ({nr_size_mb:.2f} MB) to HF Hub...")
+        hf.api.upload_file(
+            path_or_fileobj=nr_buffer,
+            path_in_repo=f"models/{model_id}/nr_train.npy",
+            repo_id=hf.repo_id,
+            repo_type="dataset",
+        )
+        
+        # Upload SLD curves
+        sld_buffer = io.BytesIO()
+        np.save(sld_buffer, sld_curves)
+        sld_size_mb = sld_buffer.tell() / (1024 * 1024)
+        sld_buffer.seek(0)
+        
+        print(f"Uploading sld_train.npy ({sld_size_mb:.2f} MB) to HF Hub...")
+        hf.api.upload_file(
+            path_or_fileobj=sld_buffer,
+            path_in_repo=f"models/{model_id}/sld_train.npy",
+            repo_id=hf.repo_id,
+            repo_type="dataset",
+        )
+        
+        print(f"Training data uploaded to models/{model_id}/")
+        return True
+    except Exception as exc:
+        print(f"Error uploading training data to Hugging Face: {exc}")
+        return False
+
+
 def delete_model_file(hf: HuggingFaceIntegration, model_id: str) -> bool:
     if not hf.available or not hf.api or not hf.repo_id:
         return False
     try:
         hf.api.delete_file(
             repo_id=hf.repo_id,
-            path_in_repo=f"{model_id}.pth",
+            path_in_repo=f"models/{model_id}/{model_id}.pth",
             repo_type="dataset",
         )
         return True
@@ -101,7 +165,7 @@ def get_remote_model_info(hf: HuggingFaceIntegration, model_id: str) -> dict[str
     if not hf.available or not hf.api or not hf.repo_id:
         return {"size_mb": None, "source": "unknown", "error": "HF not available"}
     
-    file_path = f"{model_id}.pth"
+    file_path = f"models/{model_id}/{model_id}.pth"
     
     # Try multiple methods to check if file exists and get its size
     # Method 1: Use file_exists (simpler, but doesn't give size)
