@@ -229,6 +229,7 @@ export default function HomePage() {
     requestAutoCapture,
     resetPngs,
     setExportPngs,
+    downloadProgress,
   } = downloads;
 
   const saveToHistory = useCallback(
@@ -244,6 +245,7 @@ export default function HomePage() {
           result: { ...resultRest, name: data.name },
           name: data.name,
         };
+
 
         const res = await fetch(`${API_URL}/api/history`, {
           method: 'POST',
@@ -691,6 +693,7 @@ export default function HomePage() {
         onImportJson={handleImportJSON}
         onExportJson={handleExportAll}
         onDownloadBundle={handleDownloadBundleClick}
+        downloadProgress={downloadProgress}
       />
 
       <main className="main">
