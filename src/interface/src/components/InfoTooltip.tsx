@@ -6,9 +6,11 @@ import styles from './InfoTooltip.module.css';
 
 interface InfoTooltipProps {
   hint: string;
+  children?: React.ReactNode;
+  className?: string;
 }
 
-export default function InfoTooltip({ hint }: InfoTooltipProps) {
+export default function InfoTooltip({ hint, children, className }: InfoTooltipProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0 });
   const iconRef = useRef<HTMLSpanElement>(null);
@@ -37,11 +39,12 @@ export default function InfoTooltip({ hint }: InfoTooltipProps) {
     <>
       <span 
         ref={iconRef}
-        className={styles.container}
+        className={className ?? (children ? undefined : styles.container)}
+        style={children ? { display: 'inline-flex' } : undefined}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={() => setIsVisible(false)}
       >
-        <span className={styles.icon}>ⓘ</span>
+        {children || <span className={styles.icon}>ⓘ</span>}
       </span>
       {tooltip}
     </>
