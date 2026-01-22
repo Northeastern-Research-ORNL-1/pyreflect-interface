@@ -57,8 +57,8 @@ export function useDownloadBundle({
     includePngNormal: true,
     includePngExpanded: true,
     includeModel: true,
-    includeNrData: false,
-    includeSldData: false,
+    includeNrData: true,
+    includeSldData: true,
   });
   const [exportPngs, setExportPngs] = useState<ExportPngs | null>(null);
   const [shouldCapturePngs, setShouldCapturePngs] = useState(false);
@@ -102,8 +102,8 @@ export function useDownloadBundle({
       includePngNormal: true,
       includePngExpanded: true,
       includeModel: Boolean(payload.result.model_id),
-      includeNrData: false,
-      includeSldData: false,
+      includeNrData: Boolean(payload.result.model_id),
+      includeSldData: Boolean(payload.result.model_id),
     });
     bundlePngCacheRef.current = null;
   }, []);
