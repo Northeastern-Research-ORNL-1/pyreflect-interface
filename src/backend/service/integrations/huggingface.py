@@ -138,6 +138,73 @@ def upload_training_data(
         return False
 
 
+def download_training_data(
+    hf: HuggingFaceIntegration, model_id: str
+) -> tuple[Any, Any] | None:
+    """
+    Download existing training data (.npy files) from HuggingFace.
+    
+    Used by retry jobs to reuse previously generated training data instead
+    of regenerating from scratch.
+    
+    Args:
+        hf: HuggingFace integration instance
+        model_id: The model ID whose training data to download
+        
+    Returns:
+        Tuple of (nr_curves, sld_curves) as numpy arrays, or None if not found
+    """
+    if not hf.available or not hf.api or not hf.repo_id:
+        return None
+    
+    try:
+        import numpy as np
+        from huggingface_hub import hf_hub_download
+        
+        nr_path = f"models/{model_id}/nr_train.npy"
+        sld_path = f"models/{model_id}/sld_train.npy"
+        
+        # Check if files exist first
+        try:
+            if hasattr(hf.api, "file_exists"):
+                nr_exists = hf.api.file_exists(
+                    repo_id=hf.repo_id, filename=nr_path, repo_type="dataset"
+                )
+                sld_exists = hf.api.file_exists(
+                    repo_id=hf.repo_id, filename=sld_path, repo_type="dataset"
+                )
+                if not nr_exists or not sld_exists:
+                    print(f"Training data not found on HF for {model_id}")
+                    return None
+        except Exception:
+            # If file_exists check fails, try downloading anyway
+            pass
+        
+        print(f"Downloading nr_train.npy from HF for {model_id}...")
+        nr_local = hf_hub_download(
+            repo_id=hf.repo_id,
+            filename=nr_path,
+            repo_type="dataset",
+        )
+        
+        print(f"Downloading sld_train.npy from HF for {model_id}...")
+        sld_local = hf_hub_download(
+            repo_id=hf.repo_id,
+            filename=sld_path,
+            repo_type="dataset",
+        )
+        
+        nr_curves = np.load(nr_local)
+        sld_curves = np.load(sld_local)
+        
+        print(f"Loaded training data: NR shape={nr_curves.shape}, SLD shape={sld_curves.shape}")
+        return nr_curves, sld_curves
+        
+    except Exception as exc:
+        print(f"Failed to download training data from HF: {exc}")
+        return None
+
+
 def delete_model_file(hf: HuggingFaceIntegration, model_id: str) -> bool:
     if not hf.available or not hf.api or not hf.repo_id:
         return False

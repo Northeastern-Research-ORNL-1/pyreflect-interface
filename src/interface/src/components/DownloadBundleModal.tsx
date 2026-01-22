@@ -8,6 +8,8 @@ export type BundleSelection = {
   includePngNormal: boolean;
   includePngExpanded: boolean;
   includeModel: boolean;
+  includeNrData: boolean;
+  includeSldData: boolean;
 };
 
 type BundleEstimate = {
@@ -16,6 +18,8 @@ type BundleEstimate = {
   pngExpandedBytes: number;
   modelBytes: number | null;
   modelSource?: string | null;
+  nrDataBytes: number | null;
+  sldDataBytes: number | null;
   totalBytes: number | null;
   estimating: boolean;
 };
@@ -51,7 +55,9 @@ export default function DownloadBundleModal({
     selection.includeJson ||
     selection.includePngNormal ||
     selection.includePngExpanded ||
-    (selection.includeModel && hasModel);
+    (selection.includeModel && hasModel) ||
+    (selection.includeNrData && hasModel) ||
+    (selection.includeSldData && hasModel);
 
   return (
     <>
@@ -145,6 +151,58 @@ export default function DownloadBundleModal({
                   ? selection.includeModel
                     ? estimate.modelBytes !== null
                       ? formatBytes(estimate.modelBytes)
+                      : estimate.estimating
+                        ? 'Estimating...'
+                        : 'Unknown'
+                    : 'Not selected'
+                  : 'Not available'}
+              </span>
+            </label>
+            <label className="download-option">
+              <span className="download-option__label">
+                <input
+                  type="checkbox"
+                  className="download-checkbox"
+                  checked={selection.includeNrData}
+                  disabled={!hasModel}
+                  onChange={(e) => onSelectionChange({ includeNrData: e.target.checked })}
+                />
+                <span className="download-option__text">
+                  NR Data (.npy)
+                  <InfoTooltip hint="Neutron reflectivity training curves used to train this model." />
+                </span>
+              </span>
+              <span className="download-option__size">
+                {hasModel
+                  ? selection.includeNrData
+                    ? estimate.nrDataBytes !== null
+                      ? formatBytes(estimate.nrDataBytes)
+                      : estimate.estimating
+                        ? 'Estimating...'
+                        : 'Unknown'
+                    : 'Not selected'
+                  : 'Not available'}
+              </span>
+            </label>
+            <label className="download-option">
+              <span className="download-option__label">
+                <input
+                  type="checkbox"
+                  className="download-checkbox"
+                  checked={selection.includeSldData}
+                  disabled={!hasModel}
+                  onChange={(e) => onSelectionChange({ includeSldData: e.target.checked })}
+                />
+                <span className="download-option__text">
+                  SLD Data (.npy)
+                  <InfoTooltip hint="Scattering length density profiles used to train this model." />
+                </span>
+              </span>
+              <span className="download-option__size">
+                {hasModel
+                  ? selection.includeSldData
+                    ? estimate.sldDataBytes !== null
+                      ? formatBytes(estimate.sldDataBytes)
                       : estimate.estimating
                         ? 'Estimating...'
                         : 'Unknown'

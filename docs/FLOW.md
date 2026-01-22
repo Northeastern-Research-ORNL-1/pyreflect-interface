@@ -50,8 +50,8 @@ flowchart TD
 
     UI --> Layers --> RDG
     UI --> Params --> RDG
-    RDG --> NR --> NPY_NR["💡 Optional: Save nr_train.npy"]
-    RDG --> SLD --> NPY_SLD["💡 Optional: Save sld_train.npy"]
+    RDG --> NR --> NPY_NR["Save nr_train.npy"]
+    RDG --> SLD --> NPY_SLD["Save sld_train.npy"]
     NR --> Log --> Norm --> Split --> CNN
     SLD --> Norm
     CNN <--> Loss
@@ -98,8 +98,8 @@ flowchart LR
     RDG --> Refl1d --> NR
     Refl1d --> SLD
 
-    NR -.->|"💾 Optional"| NPY1[("nr_train.npy")]
-    SLD -.->|"💾 Optional"| NPY2[("sld_train.npy")]
+    NR -.-> NPY1[("nr_train.npy")]
+    SLD -.-> NPY2[("sld_train.npy")]
 ```
 
 > **💡 Note:** The generated `.npy` files can optionally be saved for reuse in "Real Data" mode or external training.
@@ -201,14 +201,19 @@ The `.npy` files are uploaded immediately after data generation (before training
 ```mermaid
 flowchart LR
     TestNR["Test NR Curve<br/>(from split)"]
+    TestSLD["Test SLD<br/>(Ground Truth)"]
     Model["Trained CNN"]
     PredSLD["Predicted SLD"]
     Denorm["Denormalize"]
     CompNR["compute_nr_from_sld()"]
+    Sample["Sample (50 points)"]
 
     TestNR --> Model --> PredSLD --> Denorm
     Denorm --> CompNR
     Denorm --> Metrics["MSE, R², MAE"]
+
+    Denorm --> Sample
+    TestSLD --> Sample
 
     subgraph Result["Result Object"]
         NRData["nr: {q, groundTruth, computed}"]
@@ -220,7 +225,9 @@ flowchart LR
 
     CompNR --> NRData
     Denorm --> SLDData
+    TestSLD --> SLDData
     Metrics --> Met
+    Sample --> Chi
 ```
 
 ---
@@ -236,37 +243,3 @@ flowchart LR
 | `model output`   | `(batch, 2, 900)` | Predicted SLD profile      |
 
 ---
-
-## Optional: Save .npy Files
-
-The synthetic generation creates NR/SLD arrays in memory. To save them for later reuse:
-
-### Current Behavior
-
-- Arrays are generated → used for training → **discarded**
-- Only the trained model is persisted
-
-### Proposed Enhancement
-
-Add a `saveTrainingData` option to the generate request:
-
-```json
-{
-  "layers": [...],
-  "generator": { "numCurves": 1000, ... },
-  "training": { "epochs": 10, ... },
-  "saveTrainingData": true  // NEW: Save .npy files
-}
-```
-
-This would:
-
-1. Save `nr_train.npy` and `sld_train.npy` to a user-specific directory
-2. Upload to Hugging Face Hub (if configured)
-3. Return download URLs in the response
-
-**Use cases:**
-
-- Reuse training data across multiple experiments
-- Share datasets between team members
-- Use in "Real Data" mode with pre-generated synthetic data

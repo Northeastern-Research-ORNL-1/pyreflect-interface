@@ -500,12 +500,41 @@ async def retry_job(job_id: str, http_request: Request):
         old_name = (
             meta.get("name") if meta.get("name") else (old_job.kwargs or {}).get("name")
         )
+        
+        # Extract model_id from old job for training data reuse
+        # The model_id may be in the job result (if training progressed far enough to upload .npy)
+        # or in the job meta if set during the job
+        reuse_model_id = None
+        try:
+            # First check job result
+            old_result = None
+            try:
+                latest = old_job.latest_result()
+                if latest and hasattr(latest, "return_value"):
+                    old_result = latest.return_value
+            except Exception:
+                pass
+            if old_result is None:
+                try:
+                    old_result = old_job.result
+                except Exception:
+                    pass
+            
+            if isinstance(old_result, dict):
+                reuse_model_id = old_result.get("model_id")
+            
+            # Fall back to meta if not in result
+            if not reuse_model_id:
+                reuse_model_id = meta.get("model_id")
+        except Exception:
+            pass
 
         new_job = rq.queue.enqueue(
             run_training_job,
             job_params,
             user_id=old_user_id,
             name=old_name,
+            reuse_model_id=reuse_model_id,
             job_timeout=RQ_JOB_TIMEOUT,
             result_ttl=3600,
         )
@@ -514,6 +543,8 @@ async def retry_job(job_id: str, http_request: Request):
             new_job.meta["user_id"] = old_user_id
             new_job.meta["name"] = old_name
             new_job.meta["retried_from"] = job_id
+            if reuse_model_id:
+                new_job.meta["reuse_model_id"] = reuse_model_id
             new_job.save_meta()
         except Exception:
             pass
