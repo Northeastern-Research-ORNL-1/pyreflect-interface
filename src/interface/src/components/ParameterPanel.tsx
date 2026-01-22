@@ -405,8 +405,17 @@ export default function ParameterPanel({
   };
 
   const addLayer = () => {
+    // Find the next layer number by looking at existing layer names
+    const existingNumbers = filmLayers
+      .map((l) => {
+        const match = l.name.match(/^layer_(\d+)$/);
+        return match ? parseInt(match[1], 10) : 0;
+      })
+      .filter((n) => n > 0);
+    const nextNumber = existingNumbers.length > 0 ? Math.max(...existingNumbers) + 1 : 1;
+
     const newLayer: FilmLayer = {
-      name: `layer_${filmLayers.length - 1}`,
+      name: `layer_${nextNumber}`,
       sld: 3.0,
       isld: 0,
       thickness: 100,
