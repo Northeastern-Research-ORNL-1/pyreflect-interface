@@ -25,6 +25,7 @@ The hosted deployment runs with the full stack enabled: Redis job queue + Modal 
 ## Features
 
 - **Adjustable Parameters**: Film layers (SLD, thickness, roughness), generator settings, training configuration
+- **Manual Layer Bounds**: Set min/max variation ranges per layer parameter for synthetic data generation (notebook-parity `layer_bound` support)
 - **Ground Truth vs Predicted**: NR and SLD charts show both ground truth and model predictions
 - **Graph Visualization**: Downloadable & interactive NR curves, SLD profiles, training loss, Chi parameter plots
 - **Real-time Updates**: Instant parameter feedback with generate-on-demand
@@ -897,6 +898,33 @@ CORS_ORIGINS=http://localhost:3000,https://your-app.vercel.app
    - Use **COLLAPSE/EXPAND** to manage long film layer lists
    - Export individual graphs as CSV or all data as JSON
    - Charts show model predictions compared to ground truth after training
+
+4. **Layer Bounds** (for synthetic data):
+
+   Each layer parameter (SLD, thickness, roughness, iSLD) supports optional min/max bounds that control the variation range during synthetic curve generation. This matches the `layer_bound` functionality in pyreflect notebooks.
+
+   **Setting bounds:**
+   - **Drag handles**: Use the ◀ ▶ arrow handles on either side of the slider
+   - **Type values**: Edit the `[min]` and `[max]` input fields directly (shown as `[min] value [max]` above each slider)
+
+   **Behavior:**
+   - When any bounds are set, `numFilmLayers` is locked to the current layer count
+   - The center value is constrained within the bounds
+   - Clear individual bounds by setting them back to the center value, or clear all bounds with the `×` button in the Film Layers header
+
+   **Example** (matching notebook usage):
+   ```python
+   # pyreflect notebook equivalent:
+   layer_bound = [
+       dict(i=0, par='roughness', bounds=[1.177, 1.5215]),  # substrate
+       dict(i=1, par='sld', bounds=[3.47, 3.47]),          # fixed SLD
+       dict(i=1, par='thickness', bounds=[9.72, 14.62]),
+       dict(i=2, par='sld', bounds=[3.72, 4.20]),
+       dict(i=2, par='thickness', bounds=[8.72, 98.87]),
+   ]
+   ```
+
+   In the UI, expand a layer and adjust the bounds for each parameter. The backend receives the same `layerBound` structure for the `ReflectivityDataGenerator`.
 
 ### 4. Uploading Data Files
 
