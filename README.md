@@ -2,7 +2,7 @@
 
 <img width="1509" height="863" alt="image" src="https://github.com/user-attachments/assets/29265a61-2937-434f-9b3b-370494500c08" />
 
-A minimal, monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyreflect) neutron reflectivity analysis package. 
+A minimal, monochrome web interface for the [pyreflect](https://github.com/williamQyq/pyreflect) neutron reflectivity analysis package.
 
 Neutron reflectivity is an experimental technique used to study the internal structure of thin films and layered materials at the nanometer scale, with applications in batteries, semiconductors, polymers, magnetic materials, and surface chemistry. Experiments measure how neutrons reflect off a material, but translating that data into a meaningful depth profile is a difficult inverse problem that traditionally requires expert knowledge and slow, manual fitting. pyreflect uses machine learning to automate and accelerate this process by learning the relationship between measured reflectivity curves and underlying material structure. This interface makes that capability accessible and interactive, enabling faster analysis, easier exploration of material behavior, and quicker real-world scientific and engineering decisions.
 
@@ -11,16 +11,19 @@ Neutron reflectivity is an experimental technique used to study the internal str
 
 ## Version
 
-- **v0.1.2** 01/20/2026 — Production hardening + whitelist-only higher limits, checkpoints, and controls.
+- **v0.1.2** 01/21/2026 — Model bundles (.npy + .pth) on HuggingFace, pipeline documentation, production hardening + whitelist-only higher limits, checkpoints, and controls.
 - **v0.1.1** 01/14/2026 — GitHub auth, explore/history sidebar, download bundle support, and GPU compute.
 
 ## Live Deployment
 
 - App: `https://pyreflect.shlawg.com`
 - API: `https://api.shlawg.com`
-- Object Storage: `https://huggingface.co/datasets/Northeastern-Research-ORNL-1/models/tree/main`
 
 The hosted deployment runs with the full stack enabled: Redis job queue + Modal GPU burst workers, MongoDB history persistence, and Hugging Face model storage.
+
+## Pipelines
+
+> See [docs/FLOW.md](docs/FLOW.md) for a detailed pipeline diagram.
 
 ## Features
 
@@ -34,7 +37,7 @@ The hosted deployment runs with the full stack enabled: Redis job queue + Modal 
 - **Timing + Warnings**: Generation/training/inference timings and backend warnings streamed to console
 - **Data Upload**: Drag-and-drop upload for `.npy` datasets and `.pth` model weights
 - **Background Jobs**: Redis + RQ queue for non-blocking training runs
-- **Controls**: Buttons for stop, cancel, resume, pause, etc. for each job.
+- **Controls**: Buttons for stop, cancel, resume, pause, download, etc. for each job.
 - **GPU Training**: Modal GPU burst workers (spin up on demand, scale to zero)
 - **Checkpointing**: Periodic checkpoint saves to HuggingFace for crash recovery and pause/resume
 - **Cloud Storage**: Hugging Face model artifacts + MongoDB history persistence
@@ -44,7 +47,7 @@ The hosted deployment runs with the full stack enabled: Redis job queue + Modal 
 ### Limits
 
 | Parameter     | Local   | Production |
-|---------------|---------|------------|
+| ------------- | ------- | ---------- |
 | Curves        | 100,000 | 5,000      |
 | Epochs        | 1,000   | 50         |
 | Batch Size    | 512     | 64         |
@@ -74,6 +77,25 @@ pyreflect-interface/
 ```
 
 > **Note**: The `pyreflect` package is installed directly from [GitHub](https://github.com/williamQyq/pyreflect) rather than bundled in this repo.
+
+### Model Storage Structure
+
+Each training run creates a folder on HuggingFace with all artifacts bundled together:
+
+```
+models/{model_id}/
+├── {model_id}.pth     # Trained CNN model weights
+├── nr_train.npy       # NR curves (N × 2 × 308)
+└── sld_train.npy      # SLD profiles (N × 2 × 900)
+```
+
+> Object Storage: `https://huggingface.co/datasets/Northeastern-Research-ORNL-1/models/tree/main`
+
+The `.npy` training data files are uploaded immediately after data generation (before training begins). This ensures:
+
+1.  **Fault Tolerance**: If training fails (e.g., OOM, timeout), the generated data is preserved.
+2.  **Retry Efficiency**: Retries can reuse the existing `.npy` files instead of regenerating them.
+3.  **Data Reuse**: Datasets can be downloaded and shared between team members or used for external analysis.
 
 ## Architecture
 
@@ -157,204 +179,25 @@ flowchart LR
     Backend --> PyReflect
 ```
 
-### Data Flow
+### Data Flow & Training Pipeline
 
-```mermaid
-flowchart TB
-    subgraph Input["User Input"]
-        Layers[Film Layers]
-        GenParams[Generator Params]
-        TrainParams[Training Params]
-    end
-
-    subgraph Generation["refl1d Curve Generation"]
-        Model[ReflectivityModel]
-        Calc[refl1d.Experiment]
-        GTData["Ground Truth Data<br/>NR + SLD pairs"]
-    end
-
-    subgraph Training["CNN Training"]
-        Split[Train/Val Split 80/20]
-        CNNTrain["CNN learns: NR → SLD"]
-    end
-
-    subgraph Inference["Test Inference"]
-        TestSample["Test Sample from Val Set"]
-        GTNR["Ground Truth NR<br/>(from refl1d)"]
-        GTSLD["Ground Truth SLD<br/>(from refl1d)"]
-        CNNPred["CNN Prediction"]
-        PredSLD["Predicted SLD<br/>(from CNN)"]
-    end
-
-    subgraph Charts["Visualization"]
-        NRChart["NR Chart<br/>── Ground Truth (refl1d)<br/>╌╌ Computed (same*)"]
-        SLDChart["SLD Chart<br/>── Ground Truth (refl1d)<br/>╌╌ Predicted (CNN)"]
-        ChiChart["Chi Scatter<br/>Ground Truth SLD vs Predicted SLD"]
-    end
-
-    Layers & GenParams --> Model --> Calc --> GTData
-    GTData --> Split --> CNNTrain
-    TrainParams --> CNNTrain
-
-    GTData --> TestSample
-    TestSample --> GTNR & GTSLD
-    GTNR --> CNNPred --> PredSLD
-
-    GTNR --> NRChart
-    GTSLD --> SLDChart
-    PredSLD --> SLDChart
-    GTSLD --> ChiChart
-    PredSLD --> ChiChart
-```
+For detailed diagrams of the data generation, preprocessing, training, model saving, and inference phases, see [docs/FLOW.md](docs/FLOW.md).
 
 #### Data Sources
 
 | Field             | Source | Description                                              |
-|-------------------|--------|----------------------------------------------------------|
+| ----------------- | ------ | -------------------------------------------------------- |
 | `nr.groundTruth`  | refl1d | True reflectivity from physics simulation                |
 | `nr.computed`     | refl1d | Same as groundTruth (future: compute from predicted SLD) |
 | `sld.groundTruth` | refl1d | True SLD profile from physics simulation                 |
 | `sld.predicted`   | CNN    | Model prediction given the NR curve as input             |
-
-### Component Architecture
-
-#### Frontend Components
-
-```mermaid
-flowchart LR
-    subgraph Pages["App Router"]
-        Page[page.tsx]
-    end
-
-    subgraph Components["React Components"]
-        PP[ParameterPanel]
-        EV[EditableValue]
-        GD[GraphDisplay]
-        CO[ConsoleOutput]
-    end
-
-    subgraph State["State"]
-        Layers[filmLayers]
-        Params[params]
-        GraphData[graphData]
-        Logs[logs]
-    end
-
-    Page --> PP & GD & CO
-    PP --> EV
-    PP --> State
-    GD --> GraphData
-    CO --> Logs
-```
-
-#### Backend Components
-
-```mermaid
-flowchart LR
-    subgraph Endpoints["API Endpoints"]
-        Health["health"]
-        Generate["generate"]
-        Stream["generate/stream"]
-        Jobs["jobs/*"]
-    end
-
-    subgraph Models["Pydantic Models"]
-        NRModel[NRData]
-        SLDModel[SLDData]
-        GR[GenerateResponse]
-    end
-
-    subgraph Core["Core Functions"]
-        GenPR[generate_with_pyreflect]
-        Inference[CNN Inference]
-    end
-
-    Endpoints --> Core
-    Core --> Models
-```
-
-#### pyreflect Package
-
-```mermaid
-flowchart TB
-    subgraph Generation["Data Generation"]
-        RDG["ReflectivityDataGenerator"]
-        Refl1d["refl1d/refnx physics"]
-    end
-
-    subgraph Training["Model Training"]
-        CNN["CNN"]
-        AE["Autoencoder"]
-        MLP["MLP"]
-    end
-
-    subgraph Processing["Data Processing"]
-        Norm["normalize"]
-        Denorm["denormalize"]
-    end
-
-    RDG -->|"generate NR+SLD curves"| Refl1d
-    Refl1d -->|"raw data"| Norm
-    Norm -->|"normalized"| CNN
-    CNN -->|"predictions"| Denorm
-    Denorm -->|"final SLD"| Output["Output"]
-```
-
-### Training Pipeline
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant F as Frontend
-    participant B as Backend
-    participant R as refl1d
-    participant C as CNN
-
-    U->>F: Click GENERATE
-    F->>B: POST /api/generate/stream
-
-    Note over B,R: Generate Ground Truth Data
-    B->>R: ReflectivityDataGenerator.generate(N)
-    R-->>B: Ground Truth NR curves (N,2,308)
-    R-->>B: Ground Truth SLD profiles (N,2,900)
-    B-->>F: SSE: log "Generated N curves"
-
-    Note over B: Preprocessing
-    B->>B: Normalize (log₁₀, min-max)
-    B->>B: Split into Train (80%) / Val (20%)
-    B-->>F: SSE: log "Preprocessing..."
-
-    Note over B,C: Train CNN to predict SLD from NR
-    B->>C: Initialize CNN(layers, dropout)
-    loop For each epoch
-        B->>C: Input: NR curves
-        C-->>B: Output: Predicted SLD
-        B->>B: Loss = MSE(Predicted SLD, Ground Truth SLD)
-        B-->>F: SSE: progress {epoch, loss}
-    end
-    B-->>F: SSE: log "Training complete!"
-
-    Note over B,C: Inference on Test Sample
-    B->>B: Pick test sample from validation set
-    B->>C: Input: Ground Truth NR (from refl1d)
-    C-->>B: Output: Predicted SLD (from CNN)
-    B->>B: Denormalize Predicted SLD
-
-    Note over B,F: Return both for comparison
-    B-->>F: nr.groundTruth = refl1d NR
-    B-->>F: nr.computed = refl1d NR (same)
-    B-->>F: sld.groundTruth = refl1d SLD
-    B-->>F: sld.predicted = CNN output
-
-    F->>F: Render: solid=groundTruth, dashed=predicted
-```
 
 ## API Endpoints
 
 ### Core Endpoints
 
 | Endpoint        | Method | Description                    |
-|-----------------|--------|--------------------------------|
+| --------------- | ------ | ------------------------------ |
 | `/api/health`   | GET    | Health check                   |
 | `/api/limits`   | GET    | Current limits + access status |
 | `/api/defaults` | GET    | Default parameters             |
@@ -363,14 +206,14 @@ sequenceDiagram
 ### Generation
 
 | Endpoint               | Method | Description                            |
-|------------------------|--------|----------------------------------------|
+| ---------------------- | ------ | -------------------------------------- |
 | `/api/generate`        | POST   | Generate NR/SLD curves (non-streaming) |
 | `/api/generate/stream` | POST   | Generate with SSE log stream           |
 
 ### History
 
 | Endpoint            | Method | Description                             |
-|---------------------|--------|-----------------------------------------|
+| ------------------- | ------ | --------------------------------------- |
 | `/api/history`      | GET    | List saved generations                  |
 | `/api/history`      | POST   | Save a generation manually              |
 | `/api/history/{id}` | GET    | Get full details of a save              |
@@ -380,7 +223,7 @@ sequenceDiagram
 ### Models
 
 | Endpoint                      | Method | Description                      |
-|-------------------------------|--------|----------------------------------|
+| ----------------------------- | ------ | -------------------------------- |
 | `/api/models/upload`          | POST   | Receive model upload from worker |
 | `/api/models/{model_id}`      | GET    | Download a saved model           |
 | `/api/models/{model_id}`      | DELETE | Delete a local model file        |
@@ -390,7 +233,7 @@ sequenceDiagram
 ### Jobs
 
 | Endpoint                         | Method | Description                            |
-|----------------------------------|--------|----------------------------------------|
+| -------------------------------- | ------ | -------------------------------------- |
 | `/api/jobs/submit`               | POST   | Submit job to queue (non-blocking)     |
 | `/api/jobs/{job_id}`             | GET    | Get job status, progress, and result   |
 | `/api/jobs/{job_id}`             | DELETE | Cancel a queued job                    |
@@ -406,7 +249,7 @@ sequenceDiagram
 ### Checkpoints
 
 | Endpoint                           | Method | Description                     |
-|------------------------------------|--------|---------------------------------|
+| ---------------------------------- | ------ | ------------------------------- |
 | `/api/checkpoints`                 | GET    | List all available checkpoints  |
 | `/api/checkpoints/{job_id}/resume` | POST   | Resume training from checkpoint |
 | `/api/checkpoints/{job_id}`        | DELETE | Delete a checkpoint             |
@@ -414,7 +257,7 @@ sequenceDiagram
 ### Queue
 
 | Endpoint             | Method | Description                         |
-|----------------------|--------|-------------------------------------|
+| -------------------- | ------ | ----------------------------------- |
 | `/api/queue`         | GET    | Queue status and worker info        |
 | `/api/queue/spawn`   | POST   | Trigger remote worker spawn (debug) |
 | `/api/queue/cleanup` | POST   | Trigger stale job cleanup (admin)   |
@@ -448,7 +291,7 @@ flowchart TB
     end
 
     Submit --> Queue --> Worker --> Complete
-    
+
     Started --> Death --> Zombie
     Zombie --> Cleanup
     Cleanup --> Check
@@ -464,7 +307,7 @@ Workers update `job.meta.updated_at` every ~1 second during execution. The stale
 4. Purges stale jobs from Redis registries and marks them as failed
 
 | Environment Variable           | Default | Description                              |
-|--------------------------------|---------|------------------------------------------|
+| ------------------------------ | ------- | ---------------------------------------- |
 | `STALE_JOB_THRESHOLD_S`        | 600     | Seconds before a job is considered stale |
 | `STALE_JOB_CLEANUP_INTERVAL_S` | 60      | How often the cleanup task runs          |
 
@@ -544,7 +387,7 @@ flowchart TB
 Each checkpoint (`{job_id}.pth`) contains:
 
 | Field                   | Description                           |
-|-------------------------|---------------------------------------|
+| ----------------------- | ------------------------------------- |
 | `epoch`                 | Last completed epoch number           |
 | `model_state_dict`      | Full model weights                    |
 | `optimizer_state_dict`  | Optimizer state (Adam momentum, etc.) |
@@ -556,14 +399,14 @@ Each checkpoint (`{job_id}.pth`) contains:
 **Pause vs Stop:**
 
 | Action    | Saves Checkpoint? | Can Resume? | Use Case               |
-|-----------|-------------------|-------------|------------------------|
+| --------- | ----------------- | ----------- | ---------------------- |
 | **Pause** | Yes               | Yes         | Want to continue later |
 | **Stop**  | No                | No          | Abandon training       |
 
 **Configuration:**
 
 | Environment Variable        | Default | Description                              |
-|-----------------------------|---------|------------------------------------------|
+| --------------------------- | ------- | ---------------------------------------- |
 | `CHECKPOINT_EVERY_N_EPOCHS` | 5       | Save checkpoint every N epochs           |
 | `HF_CHECKPOINT_REPO_ID`     | -       | HuggingFace dataset repo for checkpoints |
 
@@ -572,10 +415,12 @@ The checkpoint repo should be a HuggingFace **dataset** type repo (e.g., `org/ch
 **UI Controls:**
 
 Running jobs show two buttons:
+
 - **Pause** (yellow): Saves checkpoint and stops gracefully
 - **Stop** (red): Stops immediately without saving
 
 Failed/paused jobs with checkpoints show:
+
 - **Resume** (green): Continue training from last checkpoint
 - **Retry**: Start fresh from epoch 0
 - **Delete**: Remove job from queue
@@ -865,7 +710,7 @@ vercel
 ### 2. Set environment variable in Vercel dashboard
 
 | Variable              | Value                                                              |
-|-----------------------|--------------------------------------------------------------------|
+| --------------------- | ------------------------------------------------------------------ |
 | `NEXT_PUBLIC_API_URL` | `https://your-backend.railway.app` (or wherever backend is hosted) |
 
 ### 3. Configure backend CORS
@@ -879,13 +724,11 @@ CORS_ORIGINS=http://localhost:3000,https://your-app.vercel.app
 ### 3. Using the Interface
 
 1. Adjust parameters in the left sidebar:
-
    - **Film Layers**: Add/remove layers, adjust SLD, thickness, roughness
    - **Generator**: Set number of curves and layers
    - **Training**: Configure batch size, epochs, dropout, etc.
 
 2. Click **GENERATE** to compute and visualize:
-
    - **NR Chart**: Ground truth (solid) vs Computed (dashed)
    - **SLD Profile**: Ground truth (solid black) vs Predicted (dashed red)
    - **Training Loss**: Training and validation loss curves
@@ -913,6 +756,7 @@ CORS_ORIGINS=http://localhost:3000,https://your-app.vercel.app
    - Clear individual bounds by setting them back to the center value, or clear all bounds with the `×` button in the Film Layers header
 
    **Example** (matching notebook usage):
+
    ```python
    # pyreflect notebook equivalent:
    layer_bound = [
