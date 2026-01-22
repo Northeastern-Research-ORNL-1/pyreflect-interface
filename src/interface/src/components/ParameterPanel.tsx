@@ -179,6 +179,28 @@ export default function ParameterPanel({
     return Object.values(layerBounds).some((b) => b.min !== null || b.max !== null);
   }, [layerBounds]);
 
+  // Sync incoming generatorParams.layerBound into local layerBounds state on mount/change
+  // This ensures that loading from saved state (which has bounds) correctly populates the UI
+  useEffect(() => {
+    // Only sync if local state is empty but prop has data (initial load),
+    // OR if we suspect a hard external reset happened that didn't go through resetAllLayers.
+    // However, syncing complex state bi-directionally is risky (infinite loops).
+    // Safest approach: Init state lazy from prop if possible, or use a ref to track if we've initialized.
+    // But since we can't change useState init easily without key-remounting, let's use an Effect that runs once or when prop significantly changes?
+    // Actually, simply parsing the prop into the map structure if the map is empty is a good start.
+    
+    if (Object.keys(layerBounds).length === 0 && generatorParams.layerBound && generatorParams.layerBound.length > 0) {
+        const newBounds: Record<string, { min: number | null; max: number | null }> = {};
+        generatorParams.layerBound.forEach((b) => {
+            newBounds[`${b.i}:${b.par}`] = {
+                min: b.bounds[0],
+                max: b.bounds[1]
+            };
+        });
+        setLayerBounds(newBounds);
+    }
+  }, [generatorParams.layerBound]); // Intentionally do NOT include layerBounds in dep array to avoid loops, or check emptiness guard.
+
   // Build layerBound array from bounds for backend
   const buildLayerBoundsPayload = useCallback((): LayerBound[] | undefined => {
     const bounds: LayerBound[] = [];
@@ -235,6 +257,30 @@ export default function ParameterPanel({
   const clearAllBounds = useCallback(() => {
     setLayerBounds({});
   }, []);
+
+  // Get default value for a layer index/field
+  const getLayerDefault = (index: number, field: keyof FilmLayer): number | string => {
+    if (index >= 0 && index < DEFAULT_LAYERS.length) {
+      return DEFAULT_LAYERS[index][field];
+    }
+    // Generic defaults for new user-added layers
+    if (field === 'sld') return 3.0;
+    if (field === 'thickness') return 100;
+    if (field === 'roughness') return 20;
+    if (field === 'isld') return 0;
+    if (field === 'name') return 'layer';
+    return 0;
+  };
+
+  // Get default bounds for a layer index/parameter
+  const getBoundDefault = (index: number, param: LayerBoundParam): { min: number | null, max: number | null } => {
+    // Look for exact match in DEFAULT_BOUNDS_LIST
+    const defaultBound = DEFAULT_BOUNDS_LIST.find(b => b.i === index && b.par === param);
+    if (defaultBound) {
+      return { min: defaultBound.bounds[0], max: defaultBound.bounds[1] };
+    }
+    return { min: null, max: null };
+  };
 
   const resetAllLayers = () => {
     // Reset each layer to its matching default from DEFAULT_LAYERS
@@ -529,23 +575,38 @@ export default function ParameterPanel({
 
   const resetLayer = (index: number) => {
     const newLayers = [...filmLayers];
-    newLayers[index] = {
-      ...newLayers[index],
-      sld: 3.0,
-      thickness: 100,
-      roughness: 20,
-      isld: 0,
-    };
+    // If we have a default for this index, use it fully
+    if (index < DEFAULT_LAYERS.length) {
+      newLayers[index] = { ...DEFAULT_LAYERS[index] };
+    } else {
+      // Keep name, reset others to generic
+      newLayers[index] = {
+        ...newLayers[index],
+        sld: 3.0,
+        thickness: 100,
+        roughness: 20,
+        isld: 0,
+      };
+    }
     onFilmLayersChange(newLayers);
     
-    // Clear bounds for this layer
+    // Reset bounds for this layer to their defaults (if any) or clear them
     setLayerBounds((prev) => {
       const next = { ...prev };
+      // First clear existing for this layer
       Object.keys(next).forEach((key) => {
         if (key.startsWith(`${index}:`)) {
           delete next[key];
         }
       });
+      // Then re-apply defaults if any
+      const pars: LayerBoundParam[] = ['sld', 'isld', 'thickness', 'roughness'];
+      for (const par of pars) {
+        const def = getBoundDefault(index, par);
+        if (def.min !== null || def.max !== null) {
+          next[`${index}:${par}`] = def;
+        }
+      }
       return next;
     });
   };
@@ -775,8 +836,9 @@ export default function ParameterPanel({
                               <button
                                 className={styles.resetBtn}
                                 onClick={() => {
-                                  updateLayer(index, 'sld', 3.0);
-                                  setBounds(index, 'sld', null, null);
+                                  updateLayer(index, 'sld', getLayerDefault(index, 'sld'));
+                                  const def = getBoundDefault(index, 'sld');
+                                  setBounds(index, 'sld', def.min, def.max);
                                 }}
                               >
                                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
@@ -839,8 +901,9 @@ export default function ParameterPanel({
                               <button
                                 className={styles.resetBtn}
                                 onClick={() => {
-                                  updateLayer(index, 'thickness', 100);
-                                  setBounds(index, 'thickness', null, null);
+                                  updateLayer(index, 'thickness', getLayerDefault(index, 'thickness'));
+                                  const def = getBoundDefault(index, 'thickness');
+                                  setBounds(index, 'thickness', def.min, def.max);
                                 }}
                                 disabled={index === 0 || index === filmLayers.length - 1}
                               >
@@ -908,8 +971,9 @@ export default function ParameterPanel({
                               <button
                                 className={styles.resetBtn}
                                 onClick={() => {
-                                  updateLayer(index, 'roughness', 20);
-                                  setBounds(index, 'roughness', null, null);
+                                  updateLayer(index, 'roughness', getLayerDefault(index, 'roughness'));
+                                  const def = getBoundDefault(index, 'roughness');
+                                  setBounds(index, 'roughness', def.min, def.max);
                                 }}
                               >
                                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
@@ -972,8 +1036,9 @@ export default function ParameterPanel({
                               <button
                                 className={styles.resetBtn}
                                 onClick={() => {
-                                  updateLayer(index, 'isld', 0);
-                                  setBounds(index, 'isld', null, null);
+                                  updateLayer(index, 'isld', getLayerDefault(index, 'isld'));
+                                  const def = getBoundDefault(index, 'isld');
+                                  setBounds(index, 'isld', def.min, def.max);
                                 }}
                               >
                                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
@@ -1446,7 +1511,10 @@ export default function ParameterPanel({
         <div className={styles.actionRow}>
           <button
             className="btn btn--outline"
-            onClick={onReset}
+            onClick={() => {
+              onReset();
+              resetAllLayers();
+            }}
             type="button"
             disabled={isUploading}
           >
