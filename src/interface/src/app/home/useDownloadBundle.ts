@@ -44,6 +44,45 @@ type UseDownloadBundleArgs = {
   onLoadSave: (params: BundleParams, result: GenerateResponse) => void;
 };
 
+// Helper to fetch with progress tracking
+async function fetchWithProgress(
+  url: string,
+  options: RequestInit,
+  onProgress: (loaded: number) => void
+): Promise<Uint8Array> {
+  const response = await fetch(url, options);
+  if (!response.ok) throw new Error(`Fetch failed: ${response.statusText}`);
+
+  const reader = response.body?.getReader();
+
+  if (!reader) {
+    const buffer = await response.arrayBuffer();
+    onProgress(buffer.byteLength);
+    return new Uint8Array(buffer);
+  }
+
+  const chunks: Uint8Array[] = [];
+  let loaded = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      chunks.push(value);
+      loaded += value.length;
+      onProgress(loaded);
+    }
+  }
+
+  const combined = new Uint8Array(loaded);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return combined;
+}
+
 export function useDownloadBundle({
   apiUrl,
   addLog,
@@ -52,6 +91,7 @@ export function useDownloadBundle({
   userId,
   onLoadSave,
 }: UseDownloadBundleArgs) {
+  const [downloadProgress, setDownloadProgress] = useState(0);
   const [showBundleConfirm, setShowBundleConfirm] = useState(false);
   const [bundlePayload, setBundlePayload] = useState<BundlePayload | null>(null);
   const [isDownloadingBundle, setIsDownloadingBundle] = useState(false);
@@ -353,6 +393,16 @@ export function useDownloadBundle({
         return;
       }
 
+      setDownloadProgress(0);
+      const totalExpected = (bundleEstimate.totalBytes && bundleEstimate.totalBytes > 0)
+        ? bundleEstimate.totalBytes
+        : 1024 * 1024 * 100;
+      const loadedBytes = { model: 0, nr: 0, sld: 0, others: 0 };
+      const updateProgress = () => {
+        const total = loadedBytes.model + loadedBytes.nr + loadedBytes.sld + loadedBytes.others;
+        setDownloadProgress(Math.min(0.99, Math.max(0, total / totalExpected)));
+      };
+
       const files: Record<string, Uint8Array> = {};
 
       try {
@@ -400,6 +450,10 @@ export function useDownloadBundle({
         // Signal that capture phase is done - overlay can dismiss now
         onCaptureComplete?.();
 
+        // Update progress for generated content
+        loadedBytes.others = (bundleEstimate.jsonBytes || 0) + (bundleEstimate.pngBytes || 0);
+        updateProgress();
+
         if (bundleSelection.includeJson) {
           const { export_pngs: _exportPngs, ...resultWithoutPngs } = resolvedResult;
           void _exportPngs;
@@ -436,22 +490,20 @@ export function useDownloadBundle({
             addLog('Sign in to download model file.');
           } else {
             try {
-              let modelRes;
-              // Use direct URL if available (faster, avoids CORS/proxy issues)
+              let url;
+              let options: RequestInit = {};
               if (bundleEstimate.modelUrl) {
-                modelRes = await fetch(bundleEstimate.modelUrl);
+                url = bundleEstimate.modelUrl;
               } else {
-                modelRes = await fetch(`${apiUrl}/api/models/${resolvedResult.model_id}`, {
-                  headers: { 'X-User-ID': userId },
-                });
+                url = `${apiUrl}/api/models/${resolvedResult.model_id}`;
+                options = { headers: { 'X-User-ID': userId } };
               }
 
-              if (modelRes.ok) {
-                const modelBuffer = await modelRes.arrayBuffer();
-                files[`model_${resolvedResult.model_id}.pth`] = new Uint8Array(modelBuffer);
-              } else {
-                addLog('Model file not found for this run.');
-              }
+              const data = await fetchWithProgress(url, options, (loaded) => {
+                loadedBytes.model = loaded;
+                updateProgress();
+              });
+              files[`model_${resolvedResult.model_id}.pth`] = data;
             } catch {
               addLog('Failed to fetch model file.');
             }
@@ -466,21 +518,20 @@ export function useDownloadBundle({
             addLog('Sign in to download NR training data.');
           } else {
             try {
-              let nrRes;
+              let url;
+              let options: RequestInit = {};
               if (bundleEstimate.nrDataUrl) {
-                nrRes = await fetch(bundleEstimate.nrDataUrl);
+                url = bundleEstimate.nrDataUrl;
               } else {
-                nrRes = await fetch(`${apiUrl}/api/models/${resolvedResult.model_id}/training-data/nr_train`, {
-                  headers: { 'X-User-ID': userId },
-                });
+                url = `${apiUrl}/api/models/${resolvedResult.model_id}/training-data/nr_train`;
+                options = { headers: { 'X-User-ID': userId } };
               }
 
-              if (nrRes.ok) {
-                const nrBuffer = await nrRes.arrayBuffer();
-                files[`nr_train_${resolvedResult.model_id}.npy`] = new Uint8Array(nrBuffer);
-              } else {
-                addLog('NR training data not found.');
-              }
+              const data = await fetchWithProgress(url, options, (loaded) => {
+                loadedBytes.nr = loaded;
+                updateProgress();
+              });
+              files[`nr_train_${resolvedResult.model_id}.npy`] = data;
             } catch {
               addLog('Failed to fetch NR training data.');
             }
@@ -493,27 +544,27 @@ export function useDownloadBundle({
             addLog('Sign in to download SLD training data.');
           } else {
             try {
-              let sldRes;
+              let url;
+              let options: RequestInit = {};
               if (bundleEstimate.sldDataUrl) {
-                sldRes = await fetch(bundleEstimate.sldDataUrl);
+                url = bundleEstimate.sldDataUrl;
               } else {
-                sldRes = await fetch(`${apiUrl}/api/models/${resolvedResult.model_id}/training-data/sld_train`, {
-                  headers: { 'X-User-ID': userId },
-                });
+                url = `${apiUrl}/api/models/${resolvedResult.model_id}/training-data/sld_train`;
+                options = { headers: { 'X-User-ID': userId } };
               }
 
-              if (sldRes.ok) {
-                const sldBuffer = await sldRes.arrayBuffer();
-                files[`sld_train_${resolvedResult.model_id}.npy`] = new Uint8Array(sldBuffer);
-              } else {
-                addLog('SLD training data not found.');
-              }
+              const data = await fetchWithProgress(url, options, (loaded) => {
+                loadedBytes.sld = loaded;
+                updateProgress();
+              });
+              files[`sld_train_${resolvedResult.model_id}.npy`] = data;
             } catch {
               addLog('Failed to fetch SLD training data.');
             }
           }
         }
 
+        setDownloadProgress(0.99);
         const zipData = await new Promise<Uint8Array>((resolve, reject) => {
           zip(files, { level: 6 }, (err, data) => {
             if (err) reject(err);
@@ -529,8 +580,13 @@ export function useDownloadBundle({
         link.click();
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
+        
+        setDownloadProgress(1.0);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        setDownloadProgress(0);
         addLog('Download bundle ready.');
       } catch (err) {
+        setDownloadProgress(0);
         const errorMsg = err instanceof Error ? err.message : 'Failed to build download bundle';
         addLog(`Download error: ${errorMsg}`);
       }
@@ -604,6 +660,7 @@ export function useDownloadBundle({
     showBundleConfirm,
     bundlePayload,
     isDownloadingBundle,
+    downloadProgress,
     bundleSelection,
     setBundleSelection,
     bundleEstimate,

@@ -35,6 +35,7 @@ type DownloadBundleModalProps = {
   onClose: () => void;
   onConfirm: () => void;
   onSelectionChange: (patch: Partial<BundleSelection>) => void;
+  progress?: number;
 };
 
 export default function DownloadBundleModal({
@@ -48,6 +49,7 @@ export default function DownloadBundleModal({
   onClose,
   onConfirm,
   onSelectionChange,
+  progress = 0,
 }: DownloadBundleModalProps) {
   if (!isOpen || !hasPayload) return null;
 
@@ -229,10 +231,19 @@ export default function DownloadBundleModal({
           <button
             className="btn"
             onClick={onConfirm}
-            style={{ padding: '6px 12px', fontSize: '11px' }}
+            style={{ 
+              padding: '6px 12px', 
+              fontSize: '11px',
+              background: isDownloading 
+                ? `linear-gradient(to right, var(--text-link) ${progress * 100}%, var(--surface-hover) ${progress * 100}%)` 
+                : undefined,
+              borderColor: isDownloading ? 'transparent' : undefined,
+              color: isDownloading ? '#fff' : undefined,
+              transition: 'background 0.2s ease',
+            }}
             disabled={!canDownload || isDownloading}
           >
-            {isDownloading ? 'BUILDING...' : 'DOWNLOAD'}
+            {isDownloading ? `DOWNLOADING ${(progress * 100).toFixed(0)}%` : 'DOWNLOAD'}
           </button>
         </div>
       </div>
