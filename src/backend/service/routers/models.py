@@ -8,7 +8,9 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi import File, Form, Header, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+
+import requests
 
 from ..config import HF_REPO_ID, IS_PRODUCTION, MAX_LOCAL_MODELS, MODELS_DIR
 from ..integrations.huggingface import get_remote_model_info
@@ -286,6 +288,24 @@ async def get_training_data(
         # Map file_type to HF filenames (nr_train -> nr_train.npy, sld_train -> sld_train.npy)
         file_name = f"{file_type}.npy"
         hf_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/models/{model_id}/{file_name}"
-        return RedirectResponse(url=hf_url)
+        
+        # Proxy the file instead of redirecting to avoid CORS issues with HF's CDN
+        try:
+            hf_response = requests.get(hf_url, stream=True, timeout=60)
+            if hf_response.status_code == 200:
+                return StreamingResponse(
+                    hf_response.iter_content(chunk_size=1024 * 1024),
+                    media_type="application/octet-stream",
+                    headers={
+                        "Content-Disposition": f"attachment; filename={file_name}",
+                        "Content-Length": hf_response.headers.get("Content-Length", ""),
+                    },
+                )
+            elif hf_response.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"Training data {file_name} not found on HuggingFace")
+            else:
+                raise HTTPException(status_code=502, detail=f"HuggingFace returned {hf_response.status_code}")
+        except requests.RequestException as exc:
+            raise HTTPException(status_code=502, detail=f"Failed to fetch from HuggingFace: {exc}")
 
     raise HTTPException(status_code=404, detail="Training data not available")
