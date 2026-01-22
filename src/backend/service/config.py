@@ -98,7 +98,11 @@ CORS_ORIGINS = [o.strip() for o in CORS_ORIGINS if o and o.strip()]
 
 # Optional: regex-based CORS allowlist (useful for subdomains like https://*.shlawg.com).
 # If set, FastAPI will allow origins matching the regex in addition to `CORS_ORIGINS`.
-CORS_ALLOW_ORIGIN_REGEX = (os.getenv("CORS_ALLOW_ORIGIN_REGEX") or "").strip() or None
+# Default: allow all *.shlawg.com subdomains for production deployment flexibility.
+CORS_ALLOW_ORIGIN_REGEX = (
+    os.getenv("CORS_ALLOW_ORIGIN_REGEX") or r"https://.*\.shlawg\.com"
+).strip() or None
+
 
 # =====================
 # Training Constants
