@@ -33,6 +33,7 @@ type AppHeaderProps = {
   onImportJson: () => void;
   onExportJson: () => void;
   onDownloadBundle: () => void;
+  downloadProgress?: number;
 };
 
 export default function AppHeader({
@@ -48,6 +49,7 @@ export default function AppHeader({
   onImportJson,
   onExportJson,
   onDownloadBundle,
+  downloadProgress = 0,
 }: AppHeaderProps) {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showActionsMenu, setShowActionsMenu] = useState(false);
@@ -302,9 +304,25 @@ export default function AppHeader({
             )}
           </div>
           {hasGraphData && (
-            <button className="header__export-btn" onClick={onDownloadBundle}>
+            <button
+              className="header__export-btn"
+              onClick={onDownloadBundle}
+              style={
+                downloadProgress > 0 && downloadProgress < 1
+                  ? {
+                      background: `linear-gradient(to right, var(--surface-hover) ${
+                        downloadProgress * 100
+                      }%, transparent ${downloadProgress * 100}%)`,
+                    }
+                  : undefined
+              }
+            >
               <span>↓</span>
-              <span className="header__btn-label">Download</span>
+              <span className="header__btn-label">
+                {downloadProgress > 0 && downloadProgress < 1
+                  ? `Loading ${(downloadProgress * 100).toFixed(0)}%`
+                  : 'Download'}
+              </span>
             </button>
           )}
         </div>
