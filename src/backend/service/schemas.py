@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from .config import LIMITS
@@ -50,6 +49,8 @@ def validate_limits(
     *,
     limits: dict[str, int | float] | None = None,
 ) -> None:
+    from fastapi import HTTPException
+
     effective_limits = limits or LIMITS
     errors: list[str] = []
     if gen_params.numCurves > effective_limits["max_curves"]:
@@ -103,6 +104,7 @@ def validate_layer_bounds(
     notebook-style `layer_desc` (including substrate, siox, and air). In this
     mode, bounds indices must refer to the same list.
     """
+    from fastapi import HTTPException
 
     if not gen_params.layerBound:
         return
