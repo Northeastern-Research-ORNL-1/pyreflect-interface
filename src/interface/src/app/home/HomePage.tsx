@@ -65,16 +65,47 @@ interface BackendStatus {
 }
 
 const DEFAULT_LAYERS: FilmLayer[] = [
-  { name: 'substrate', sld: 2.07, isld: 0, thickness: 0, roughness: 1.8 },
-  { name: 'siox', sld: 3.47, isld: 0, thickness: 12, roughness: 2.0 },
-  { name: 'layer_1', sld: 3.8, isld: 0, thickness: 50, roughness: 10 },
-  { name: 'layer_2', sld: 2.5, isld: 0, thickness: 150, roughness: 30 },
+  { name: 'substrate', sld: 2.07, isld: 0, thickness: 0, roughness: 1.35 },
+  { name: 'siox', sld: 3.47, isld: 0, thickness: 12.17, roughness: 2.05 },
+  { name: 'layer_1', sld: 3.96, isld: 0, thickness: 53.79, roughness: 20.61 },
+  { name: 'layer_2', sld: 2.37, isld: 0, thickness: 178.66, roughness: 57.26 },
+  { name: 'layer_3', sld: 3.85, isld: 0, thickness: 79.63, roughness: 21.86 },
+  { name: 'layer_4', sld: 3.24, isld: 0, thickness: 67.49, roughness: 17.57 },
+  { name: 'layer_5', sld: 2.67, isld: 0, thickness: 72.61, roughness: 76.63 },
   { name: 'air', sld: 0, isld: 0, thickness: 0, roughness: 0 },
 ];
 
 const DEFAULT_GENERATOR: GeneratorParams = {
   numCurves: 1000,
   numFilmLayers: 5,
+  layerBound: [
+    // substrate
+    { i: 0, par: 'roughness', bounds: [1.177, 1.5215] },
+    // silicon oxide layer
+    { i: 1, par: 'sld', bounds: [3.47, 3.47] },
+    { i: 1, par: 'thickness', bounds: [9.7216, 14.624] },
+    { i: 1, par: 'roughness', bounds: [1.108, 2.998] },
+    // material layer 1
+    { i: 2, par: 'sld', bounds: [3.7235, 4.197] },
+    { i: 2, par: 'thickness', bounds: [8.717, 98.867] },
+    { i: 2, par: 'roughness', bounds: [2.2571, 38.969] },
+    // material layer 2
+    { i: 3, par: 'sld', bounds: [1.6417, 3.1033] },
+    { i: 3, par: 'thickness', bounds: [117.4, 239.91] },
+    { i: 3, par: 'roughness', bounds: [19.32, 95.202] },
+    // material layer 3
+    { i: 4, par: 'sld', bounds: [3.0246, 4.6755] },
+    { i: 4, par: 'thickness', bounds: [64.482, 94.768] },
+    { i: 4, par: 'roughness', bounds: [15.713, 28.007] },
+    // material layer 4
+    { i: 5, par: 'sld', bounds: [1.501, 4.9837] },
+    { i: 5, par: 'thickness', bounds: [51.655, 83.334] },
+    { i: 5, par: 'roughness', bounds: [9.7741, 25.373] },
+    // material layer 5
+    { i: 6, par: 'sld', bounds: [0.85516, 4.4906] },
+    { i: 6, par: 'thickness', bounds: [58.479, 86.738] },
+    { i: 6, par: 'roughness', bounds: [43.155, 110.11] },
+  ],
 };
 
 const DEFAULT_TRAINING: TrainingParams = {

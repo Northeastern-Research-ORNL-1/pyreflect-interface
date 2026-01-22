@@ -29,6 +29,7 @@ def run_training_job(
     name: str | None = None,
     hf_config: dict | None = None,
     mongo_uri: str | None = None,
+    reuse_model_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Run a training job in the background.
@@ -42,6 +43,7 @@ def run_training_job(
         name: Optional job name
         hf_config: Optional HuggingFace config (repo_id). Prefer env vars (`HF_TOKEN`, `HF_REPO_ID`).
         mongo_uri: Optional MongoDB URI for saving results (falls back to `MONGODB_URI` env var)
+        reuse_model_id: Optional model ID to reuse training data from HuggingFace (for retry)
 
     Returns:
         Dict containing the training results
@@ -58,7 +60,12 @@ def run_training_job(
         SPLIT_RATIO,
         WEIGHT_DECAY,
     )
-    from ..integrations.huggingface import HuggingFaceIntegration, upload_model
+    from ..integrations.huggingface import (
+        HuggingFaceIntegration,
+        upload_model,
+        upload_training_data,
+        download_training_data,
+    )
     from ..services.checkpointing import (
         Checkpoint,
         delete_checkpoint,
@@ -326,72 +333,121 @@ def run_training_job(
 
     total_start = time.perf_counter()
 
+    # Generate model_id upfront so it can be used for both .npy and .pth files
+    model_id = str(uuid.uuid4())
+    log(f"Model bundle ID: {model_id}")
+    set_meta({"model_id": model_id}) # Persist for retry reuse
+
+
     try:
         # =====================
-        # Data Generation
+        # Try to Reuse Training Data (for retry jobs)
         # =====================
-        log(
-            f"Generating {num_curves} synthetic curves with {num_film_layers} film layers..."
-        )
-        set_meta({"status": "generating"})
+        nr_curves = None
+        sld_curves = None
+        data_reused = False
+        gen_time = 0.0
+        
+        if reuse_model_id and hf:
+            log(f"Attempting to reuse training data from models/{reuse_model_id}/...")
+            set_meta({"status": "downloading_training_data"})
+            try:
+                result = download_training_data(hf, reuse_model_id)
+                if result is not None:
+                    nr_curves, sld_curves = result
+                    # Verify the downloaded data matches expected curve count
+                    if nr_curves.shape[0] == num_curves and sld_curves.shape[0] == num_curves:
+                        data_reused = True
+                        log(f"Reusing training data from {reuse_model_id}: NR shape={nr_curves.shape}, SLD shape={sld_curves.shape}")
+                    else:
+                        log(f"Warning: Downloaded data has {nr_curves.shape[0]} curves but expected {num_curves}, regenerating...")
+                        nr_curves = None
+                        sld_curves = None
+            except Exception as exc:
+                log(f"Warning: Could not download training data: {exc}, will generate fresh data")
+        elif reuse_model_id and not hf:
+            log("Warning: reuse_model_id provided but HuggingFace not configured, will generate fresh data")
+        
+        # =====================
+        # Data Generation (if not reused)
+        # =====================
+        if not data_reused:
+            log(
+                f"Generating {num_curves} synthetic curves with {num_film_layers} film layers..."
+            )
+            set_meta({"status": "generating"})
 
-        gen_start = time.perf_counter()
-        layer_desc = None
-        layer_bound = None
-        if gen_params_model.layerBound:
-            layer_desc = layer_desc_payload
-            layer_bound = [b.model_dump() for b in gen_params_model.layerBound]
+            gen_start = time.perf_counter()
+            layer_desc = None
+            layer_bound = None
+            if gen_params_model.layerBound:
+                layer_desc = layer_desc_payload
+                layer_bound = [b.model_dump() for b in gen_params_model.layerBound]
 
-        data_generator = ReflectivityDataGenerator(
-            num_layers=num_film_layers,
-            layer_desc=layer_desc,
-            layer_bound=layer_bound,
-        )
+            data_generator = ReflectivityDataGenerator(
+                num_layers=num_film_layers,
+                layer_desc=layer_desc,
+                layer_bound=layer_bound,
+            )
 
-        # Generation can be extremely slow (refl1d loops). Generate in chunks so we
-        # can honor stop requests and provide basic progress.
-        generation_chunk_size = int(os.getenv("RQ_GENERATION_CHUNK_SIZE", "50"))
-        if generation_chunk_size <= 0:
-            generation_chunk_size = num_curves
+            # Generation can be extremely slow (refl1d loops). Generate in chunks so we
+            # can honor stop requests and provide basic progress.
+            generation_chunk_size = int(os.getenv("RQ_GENERATION_CHUNK_SIZE", "50"))
+            if generation_chunk_size <= 0:
+                generation_chunk_size = num_curves
 
-        _raise_if_stopped("generation")
-        first_n = min(num_curves, max(1, generation_chunk_size))
-        nr0, sld0 = data_generator.generate(first_n)
-
-        # pyreflect may return more curves than requested; only take what we need
-        actual_first = min(nr0.shape[0], num_curves)
-        nr0 = nr0[:actual_first]
-        sld0 = sld0[:actual_first]
-
-        # Pre-allocate full arrays to avoid holding many chunk objects.
-        nr_curves = np.empty((num_curves,) + tuple(nr0.shape[1:]), dtype=nr0.dtype)
-        sld_curves = np.empty((num_curves,) + tuple(sld0.shape[1:]), dtype=sld0.dtype)
-        nr_curves[:actual_first] = nr0
-        sld_curves[:actual_first] = sld0
-        generated = actual_first
-
-        set_meta({"generation": {"done": generated, "total": num_curves}})
-        if generated < num_curves:
-            log(f"   Generated {generated}/{num_curves} curves...")
-
-        while generated < num_curves:
             _raise_if_stopped("generation")
-            n = min(generation_chunk_size, num_curves - generated)
-            nr_chunk, sld_chunk = data_generator.generate(n)
+            first_n = min(num_curves, max(1, generation_chunk_size))
+            nr0, sld0 = data_generator.generate(first_n)
+
             # pyreflect may return more curves than requested; only take what we need
-            actual_n = min(nr_chunk.shape[0], num_curves - generated)
-            nr_curves[generated : generated + actual_n] = nr_chunk[:actual_n]
-            sld_curves[generated : generated + actual_n] = sld_chunk[:actual_n]
-            generated += actual_n
+            actual_first = min(nr0.shape[0], num_curves)
+            nr0 = nr0[:actual_first]
+            sld0 = sld0[:actual_first]
+
+            # Pre-allocate full arrays to avoid holding many chunk objects.
+            nr_curves = np.empty((num_curves,) + tuple(nr0.shape[1:]), dtype=nr0.dtype)
+            sld_curves = np.empty((num_curves,) + tuple(sld0.shape[1:]), dtype=sld0.dtype)
+            nr_curves[:actual_first] = nr0
+            sld_curves[:actual_first] = sld0
+            generated = actual_first
+
             set_meta({"generation": {"done": generated, "total": num_curves}})
-            log(f"   Generated {generated}/{num_curves} curves...")
+            if generated < num_curves:
+                log(f"   Generated {generated}/{num_curves} curves...")
 
-        gen_time = time.perf_counter() - gen_start
+            while generated < num_curves:
+                _raise_if_stopped("generation")
+                n = min(generation_chunk_size, num_curves - generated)
+                nr_chunk, sld_chunk = data_generator.generate(n)
+                # pyreflect may return more curves than requested; only take what we need
+                actual_n = min(nr_chunk.shape[0], num_curves - generated)
+                nr_curves[generated : generated + actual_n] = nr_chunk[:actual_n]
+                sld_curves[generated : generated + actual_n] = sld_chunk[:actual_n]
+                generated += actual_n
+                set_meta({"generation": {"done": generated, "total": num_curves}})
+                log(f"   Generated {generated}/{num_curves} curves...")
 
-        log(f"   Generated NR shape: {nr_curves.shape}, SLD shape: {sld_curves.shape}")
-        log(f"Generation took {gen_time:.2f}s")
+            gen_time = time.perf_counter() - gen_start
+
+            log(f"   Generated NR shape: {nr_curves.shape}, SLD shape: {sld_curves.shape}")
+            log(f"Generation took {gen_time:.2f}s")
 
         _raise_if_stopped("post_generation")
+
+        # =====================
+        # Upload Training Data (if HF configured)
+        # =====================
+        if hf and storage_mode == "hf":
+            log("Uploading training data to Hugging Face...")
+            set_meta({"status": "uploading_training_data"})
+            try:
+                if upload_training_data(hf, nr_curves, sld_curves, model_id):
+                    log(f"Training data uploaded to models/{model_id}/")
+                else:
+                    log("Warning: Training data upload failed")
+            except Exception as exc:
+                log(f"Warning: Could not upload training data: {exc}")
 
         # =====================
         # Preprocessing
@@ -668,8 +724,6 @@ def run_training_job(
         cpu_state_dict = model.state_dict()
 
     import io
-
-    model_id = str(uuid.uuid4())
 
     model_path: Path | None = None
     model_size_mb: float | None = None

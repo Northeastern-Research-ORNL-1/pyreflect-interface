@@ -214,7 +214,7 @@ async def download_model(
         )
 
     if HF_REPO_ID:
-        hf_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/{model_id}.pth"
+        hf_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/models/{model_id}/{model_id}.pth"
         return RedirectResponse(url=hf_url)
 
     raise HTTPException(status_code=404, detail="Model not found locally or on Hugging Face")
@@ -264,3 +264,26 @@ async def get_model_info(
         return get_remote_model_info(hf, model_id)
 
     return {"size_mb": None, "source": "unknown"}
+
+
+@router.get("/models/{model_id}/training-data/{file_type}")
+async def get_training_data(
+    model_id: str,
+    file_type: str,
+    http_request: Request,
+    x_user_id: str | None = Header(default=None),
+):
+    """Download training data (.npy files) for a model from HuggingFace."""
+    if not model_id or "/" in model_id or "\\" in model_id:
+        raise HTTPException(status_code=400, detail="Invalid model ID")
+
+    if file_type not in ("nr_train", "sld_train"):
+        raise HTTPException(status_code=400, detail="Invalid file type. Use 'nr_train' or 'sld_train'")
+
+    _require_model_access(model_id, x_user_id, http_request=http_request, allow_hf_fallback=True)
+
+    if HF_REPO_ID:
+        hf_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/models/{model_id}/{file_type}.npy"
+        return RedirectResponse(url=hf_url)
+
+    raise HTTPException(status_code=404, detail="Training data not available")
