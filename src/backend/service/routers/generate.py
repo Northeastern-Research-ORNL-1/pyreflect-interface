@@ -31,8 +31,11 @@ async def generate(
             detail="Real data mode is only supported on /api/generate/stream",
         )
     effective_limits, _, _ = get_effective_limits(user_id=x_user_id)
-    validate_limits(request.generator, request.training, limits=effective_limits)
-    validate_layer_bounds(request.layers, request.generator)
+    try:
+        validate_limits(request.generator, request.training, limits=effective_limits)
+        validate_layer_bounds(request.layers, request.generator)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     if not PYREFLECT.available:
         raise HTTPException(
             status_code=503,
@@ -68,8 +71,13 @@ async def generate_stream(
         )
 
     effective_limits, _, _ = get_effective_limits(user_id=x_user_id)
-    validate_limits(request.generator, request.training, limits=effective_limits)
-    validate_layer_bounds(request.layers, request.generator)
+    try:
+        validate_limits(request.generator, request.training, limits=effective_limits)
+        validate_layer_bounds(request.layers, request.generator)
+    except ValueError as exc:
+        def error_stream():
+            yield f'event: error\ndata: "{str(exc)}"\n\n'
+        return StreamingResponse(error_stream(), media_type="text/event-stream")
     if not PYREFLECT.available:
         def error_stream():
             yield 'event: error\ndata: "pyreflect not available. Please install pyreflect dependencies."\n\n'

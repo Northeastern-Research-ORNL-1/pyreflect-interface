@@ -49,8 +49,6 @@ def validate_limits(
     *,
     limits: dict[str, int | float] | None = None,
 ) -> None:
-    from fastapi import HTTPException
-
     effective_limits = limits or LIMITS
     errors: list[str] = []
     if gen_params.numCurves > effective_limits["max_curves"]:
@@ -91,7 +89,7 @@ def validate_limits(
         )
 
     if errors:
-        raise HTTPException(status_code=400, detail="; ".join(errors))
+        raise ValueError("; ".join(errors))
 
 
 def validate_layer_bounds(
@@ -104,25 +102,17 @@ def validate_layer_bounds(
     notebook-style `layer_desc` (including substrate, siox, and air). In this
     mode, bounds indices must refer to the same list.
     """
-    from fastapi import HTTPException
-
     if not gen_params.layerBound:
         return
 
     if len(layers) < 3:
-        raise HTTPException(
-            status_code=400,
-            detail="layers must include at least substrate, siox, and air",
-        )
+        raise ValueError("layers must include at least substrate, siox, and air")
 
     expected_num_layers = len(layers) - 3
     if gen_params.numFilmLayers != expected_num_layers:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "numFilmLayers must equal layers.length - 3 when layerBound is provided "
-                f"(got numFilmLayers={gen_params.numFilmLayers}, layers={len(layers)})"
-            ),
+        raise ValueError(
+            "numFilmLayers must equal layers.length - 3 when layerBound is provided "
+            f"(got numFilmLayers={gen_params.numFilmLayers}, layers={len(layers)})"
         )
 
     # Define parameter constraints based on FilmLayer field constraints
@@ -136,28 +126,19 @@ def validate_layer_bounds(
     max_i = len(layers) - 1
     for entry in gen_params.layerBound:
         if entry.i > max_i:
-            raise HTTPException(
-                status_code=400,
-                detail=f"layerBound.i out of range: {entry.i} (max {max_i})",
-            )
+            raise ValueError(f"layerBound.i out of range: {entry.i} (max {max_i})")
         lo, hi = entry.bounds
         if lo > hi:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"layerBound.bounds must be [min,max] with min<=max (got {entry.bounds})"
-                ),
+            raise ValueError(
+                f"layerBound.bounds must be [min,max] with min<=max (got {entry.bounds})"
             )
         
         # Validate bound values respect FilmLayer field constraints
         min_allowed, max_allowed = param_constraints[entry.par]
         if lo < min_allowed or hi > max_allowed:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"layerBound.bounds for '{entry.par}' must be within "
-                    f"[{min_allowed}, {max_allowed}] (got [{lo}, {hi}])"
-                ),
+            raise ValueError(
+                f"layerBound.bounds for '{entry.par}' must be within "
+                f"[{min_allowed}, {max_allowed}] (got [{lo}, {hi}])"
             )
 
 
