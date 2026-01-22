@@ -532,6 +532,38 @@
   background: var(--bg-primary);
 }
 
+.valueWithBounds {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.valueWithBounds > *:first-child,
+.valueWithBounds > *:last-child {
+  opacity: 0.6;
+  font-size: 10px;
+}
+
+.valueWithBounds > *:first-child::before {
+  content: '[';
+  color: var(--text-muted);
+  margin-right: 1px;
+}
+
+.valueWithBounds > *:first-child::after {
+  content: '';
+}
+
+.valueWithBounds > *:last-child::before {
+  content: '';
+}
+
+.valueWithBounds > *:last-child::after {
+  content: ']';
+  color: var(--text-muted);
+  margin-left: 1px;
+}
+
 .boundsGridHeader {
   display: grid;
   grid-template-columns: 1.25fr 1fr 1fr 1fr 1fr;

@@ -130,10 +130,6 @@ export default function RangeSlider({
     [disabled, getValueFromX, min, max, boundMin, boundMax, onValueChange]
   );
 
-  const clearBounds = useCallback(() => {
-    onBoundsChange(null, null);
-  }, [onBoundsChange]);
-
   return (
     <div className={`${styles.container} ${disabled ? styles.disabled : ''}`}>
       <div
@@ -182,23 +178,6 @@ export default function RangeSlider({
           <div className={styles.handleGrip} />
         </div>
       </div>
-
-      {/* Bounds indicator */}
-      {hasBounds && (
-        <div className={styles.boundsInfo}>
-          <span className={styles.boundsLabel}>
-            [{format(effectiveMin)}, {format(effectiveMax)}]
-          </span>
-          <button
-            className={styles.clearButton}
-            onClick={clearBounds}
-            title="Clear bounds"
-            type="button"
-          >
-            ×
-          </button>
-        </div>
-      )}
     </div>
   );
 }
