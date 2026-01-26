@@ -16,6 +16,83 @@ Full documentation here: https://deepwiki.com/Northeastern-Research-ORNL-1/pyref
 - **v0.1.2** 01/21/2026 — Model bundles (.npy + .pth) on HuggingFace, pipeline documentation, production hardening + whitelist-only higher limits, checkpoints, and controls.
 - **v0.1.1** 01/14/2026 — GitHub auth, explore/history sidebar, download bundle support, and GPU compute.
 
+## PyReflect Parameter Parity Roadmap
+
+This interface aims to fully expose all parameters from the [pyreflect](https://github.com/williamQyq/pyreflect) package, making them adjustable through the UI without requiring users to dig into the code.
+
+### Current Coverage
+
+| Category | Exposed | Total | Coverage |
+|----------|---------|-------|----------|
+| Film Layer Properties | 4 | 4 | ✅ 100% |
+| Generator Settings | 3 | 8 | 🔶 38% |
+| CNN Training | 4 | 7 | 🔶 57% |
+| AE/MLP (Chi Prediction) | 3 | 5 | 🔶 60% |
+| **Overall** | **14** | **24** | **58%** |
+
+### Exposed Parameters
+
+| Parameter | Location | Default | Notes |
+|-----------|----------|---------|-------|
+| `sld` | Film Layer | varies | Scattering Length Density (0–10) |
+| `isld` | Film Layer | 0 | Imaginary SLD (0–1) |
+| `thickness` | Film Layer | varies | Layer thickness in Å (0–1000) |
+| `roughness` | Film Layer | varies | Interface roughness in Å (0–200) |
+| `numCurves` | Generator | 1000 | Number of synthetic curves |
+| `numFilmLayers` | Generator | 5 | Number of material layers |
+| `layerBound` | Generator | — | Per-layer min/max bounds |
+| `batchSize` | Training | 32 | CNN training batch size |
+| `epochs` | Training | 10 | CNN training epochs |
+| `layers` | Training | 12 | CNN convolutional layers |
+| `dropout` | Training | 0.0 | CNN dropout rate |
+| `latentDim` | Training | 16 | Autoencoder latent dimension |
+| `aeEpochs` | Training | 50 | Autoencoder training epochs |
+| `mlpEpochs` | Training | 50 | MLP training epochs |
+
+### Implementation Phases
+
+#### Phase 1: Physics Parameters (Reflectivity Calculation)
+> These parameters directly affect the physics simulation via refl1d.
+
+- [ ] `qResolution` — Beam Q resolution (default: 0.0294855)
+- [ ] `qMin` — Minimum Q value (default: 0.0081 Å⁻¹)
+- [ ] `qMax` — Maximum Q value (default: 0.1975 Å⁻¹)
+- [ ] `numQPoints` — Number of Q points (default: 308)
+- [ ] `scale` — Overall intensity scale factor (default: 1.0)
+- [ ] `background` — Background signal level (default: 0.0)
+
+#### Phase 2: Training Configuration
+> Common ML hyperparameters most researchers want to tune.
+
+- [ ] `learningRate` — Optimizer learning rate (default: 0.001)
+- [ ] `validationSplit` — Train/validation split ratio (default: 0.2)
+- [ ] `optimizer` — Optimizer type: Adam, AdamW, SGD (default: Adam)
+
+#### Phase 3: Model Architecture (Advanced)
+> Architecture parameters for power users; exposed in an "Advanced" panel.
+
+- [ ] `kernelSize` — CNN Conv1d kernel size (default: 51)
+- [ ] `sldOutputPoints` — SLD profile output resolution (default: 900)
+- [ ] `vaeBeta` — VAE KL divergence weight (0 = AE, >0 = VAE)
+- [ ] `aeHiddenLayers` — Autoencoder hidden layer sizes (default: [500, 300, 200, 72])
+
+#### Phase 4: Preprocessing & Normalization
+> Data preprocessing options for experimental workflows.
+
+- [ ] `applyLogTransform` — Log10 transform NR y-axis (default: true)
+- [ ] `normalizationMethod` — 'minmax' or 'zscore' (default: minmax)
+- [ ] `clipMin` — Minimum clip value for log transform (default: 1e-8)
+
+### Progress Log
+
+| Date | Phase | Changes |
+|------|-------|---------|
+| 2026-01-26 | — | Initial roadmap created |
+| — | Phase 1 | _pending_ |
+| — | Phase 2 | _pending_ |
+| — | Phase 3 | _pending_ |
+| — | Phase 4 | _pending_ |
+
 ## Live Deployment
 
 - App: `https://pyreflect.shlawg.com`
@@ -413,21 +490,6 @@ Each checkpoint (`{job_id}.pth`) contains:
 | `HF_CHECKPOINT_REPO_ID`     | -       | HuggingFace dataset repo for checkpoints |
 
 The checkpoint repo should be a HuggingFace **dataset** type repo (e.g., `org/checkpoints`).
-
-**UI Controls:**
-
-Running jobs show two buttons:
-
-- **Pause** (yellow): Saves checkpoint and stops gracefully
-- **Stop** (red): Stops immediately without saving
-
-Failed/paused jobs with checkpoints show:
-
-- **Resume** (green): Continue training from last checkpoint
-- **Retry**: Start fresh from epoch 0
-- **Delete**: Remove job from queue
-
-## Technology Stack
 
 - **Frontend**: Next.js 16, React 19, TypeScript, Recharts
 - **Backend**: FastAPI, Pydantic, NumPy
