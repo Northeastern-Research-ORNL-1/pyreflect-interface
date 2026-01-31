@@ -1,0 +1,7 @@
+.layerParams {
+  /* existing styles */
+}
+
+.layer-item:nth-child(n+3) .layerParams {
+  display: none;
+}
