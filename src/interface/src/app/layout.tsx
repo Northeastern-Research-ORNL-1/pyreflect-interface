@@ -21,6 +21,10 @@ export default function RootLayout({
           data-pulse-key="pk_qCvxEgPqtuRY3s9chiAHaR0G2WFpBM32"
           strategy="beforeInteractive"
         />
+        <Script
+          src="https://cdn.jsdelivr.net/npm/@rrweb/record@latest/dist/record.umd.min.cjs"
+          strategy="beforeInteractive"
+        />
       </head>
       <body>
         <AuthProvider>{children}</AuthProvider>
