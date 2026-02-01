@@ -6,7 +6,7 @@ A minimal, monochrome web interface for the [pyreflect](https://github.com/willi
 
 Neutron reflectivity is an experimental technique used to study the internal structure of thin films and layered materials at the nanometer scale, with applications in batteries, semiconductors, polymers, magnetic materials, and surface chemistry. Experiments measure how neutrons reflect off a material, but translating that data into a meaningful depth profile is a difficult inverse problem that traditionally requires expert knowledge and slow, manual fitting. pyreflect uses machine learning to automate and accelerate this process by learning the relationship between measured reflectivity curves and underlying material structure. This interface makes that capability accessible and interactive, enabling faster analysis, easier exploration of material behavior, and quicker real-world scientific and engineering decisions.
 
-Full documentation here: https://deepwiki.com/Northeastern-Research-ORNL-1/pyreflect-interface/5-storage-and-persistence 
+Full documentation here: https://deepwiki.com/Northeastern-Research-ORNL-1/pyreflect-interface/5-storage-and-persistence
 
 ![Interface Preview](https://img.shields.io/badge/status-live-black)
 ![Version](https://img.shields.io/badge/version-v0.1.2-black)
@@ -22,36 +22,37 @@ This interface aims to fully expose all parameters from the [pyreflect](https://
 
 ### Current Coverage
 
-| Category | Exposed | Total | Coverage |
-|----------|---------|-------|----------|
-| Film Layer Properties | 4 | 4 | ✅ 100% |
-| Generator Settings | 3 | 8 | 🔶 38% |
-| CNN Training | 4 | 7 | 🔶 57% |
-| AE/MLP (Chi Prediction) | 3 | 5 | 🔶 60% |
-| **Overall** | **14** | **24** | **58%** |
+| Category                | Exposed | Total  | Coverage |
+| ----------------------- | ------- | ------ | -------- |
+| Film Layer Properties   | 4       | 4      | ✅ 100%  |
+| Generator Settings      | 3       | 8      | 🔶 38%   |
+| CNN Training            | 4       | 7      | 🔶 57%   |
+| AE/MLP (Chi Prediction) | 3       | 5      | 🔶 60%   |
+| **Overall**             | **14**  | **24** | **58%**  |
 
 ### Exposed Parameters
 
-| Parameter | Location | Default | Notes |
-|-----------|----------|---------|-------|
-| `sld` | Film Layer | varies | Scattering Length Density (0–10) |
-| `isld` | Film Layer | 0 | Imaginary SLD (0–1) |
-| `thickness` | Film Layer | varies | Layer thickness in Å (0–1000) |
-| `roughness` | Film Layer | varies | Interface roughness in Å (0–200) |
-| `numCurves` | Generator | 1000 | Number of synthetic curves |
-| `numFilmLayers` | Generator | 5 | Number of material layers |
-| `layerBound` | Generator | — | Per-layer min/max bounds |
-| `batchSize` | Training | 32 | CNN training batch size |
-| `epochs` | Training | 10 | CNN training epochs |
-| `layers` | Training | 12 | CNN convolutional layers |
-| `dropout` | Training | 0.0 | CNN dropout rate |
-| `latentDim` | Training | 16 | Autoencoder latent dimension |
-| `aeEpochs` | Training | 50 | Autoencoder training epochs |
-| `mlpEpochs` | Training | 50 | MLP training epochs |
+| Parameter       | Location   | Default | Notes                            |
+| --------------- | ---------- | ------- | -------------------------------- |
+| `sld`           | Film Layer | varies  | Scattering Length Density (0–10) |
+| `isld`          | Film Layer | 0       | Imaginary SLD (0–1)              |
+| `thickness`     | Film Layer | varies  | Layer thickness in Å (0–1000)    |
+| `roughness`     | Film Layer | varies  | Interface roughness in Å (0–200) |
+| `numCurves`     | Generator  | 1000    | Number of synthetic curves       |
+| `numFilmLayers` | Generator  | 5       | Number of material layers        |
+| `layerBound`    | Generator  | —       | Per-layer min/max bounds         |
+| `batchSize`     | Training   | 32      | CNN training batch size          |
+| `epochs`        | Training   | 10      | CNN training epochs              |
+| `layers`        | Training   | 12      | CNN convolutional layers         |
+| `dropout`       | Training   | 0.0     | CNN dropout rate                 |
+| `latentDim`     | Training   | 16      | Autoencoder latent dimension     |
+| `aeEpochs`      | Training   | 50      | Autoencoder training epochs      |
+| `mlpEpochs`     | Training   | 50      | MLP training epochs              |
 
 ### Implementation Phases
 
 #### Phase 1: Physics Parameters (Reflectivity Calculation)
+
 > These parameters directly affect the physics simulation via refl1d.
 
 - [ ] `qResolution` — Beam Q resolution (default: 0.0294855)
@@ -62,6 +63,7 @@ This interface aims to fully expose all parameters from the [pyreflect](https://
 - [ ] `background` — Background signal level (default: 0.0)
 
 #### Phase 2: Training Configuration
+
 > Common ML hyperparameters most researchers want to tune.
 
 - [ ] `learningRate` — Optimizer learning rate (default: 0.001)
@@ -69,6 +71,7 @@ This interface aims to fully expose all parameters from the [pyreflect](https://
 - [ ] `optimizer` — Optimizer type: Adam, AdamW, SGD (default: Adam)
 
 #### Phase 3: Model Architecture (Advanced)
+
 > Architecture parameters for power users; exposed in an "Advanced" panel.
 
 - [ ] `kernelSize` — CNN Conv1d kernel size (default: 51)
@@ -77,6 +80,7 @@ This interface aims to fully expose all parameters from the [pyreflect](https://
 - [ ] `aeHiddenLayers` — Autoencoder hidden layer sizes (default: [500, 300, 200, 72])
 
 #### Phase 4: Preprocessing & Normalization
+
 > Data preprocessing options for experimental workflows.
 
 - [ ] `applyLogTransform` — Log10 transform NR y-axis (default: true)
@@ -85,13 +89,13 @@ This interface aims to fully expose all parameters from the [pyreflect](https://
 
 ### Progress Log
 
-| Date | Phase | Changes |
-|------|-------|---------|
-| 2026-01-26 | — | Initial roadmap created |
-| — | Phase 1 | _pending_ |
-| — | Phase 2 | _pending_ |
-| — | Phase 3 | _pending_ |
-| — | Phase 4 | _pending_ |
+| Date       | Phase   | Changes                 |
+| ---------- | ------- | ----------------------- |
+| 2026-01-26 | —       | Initial roadmap created |
+| —          | Phase 1 | _pending_               |
+| —          | Phase 2 | _pending_               |
+| —          | Phase 3 | _pending_               |
+| —          | Phase 4 | _pending_               |
 
 ## Live Deployment
 
@@ -490,6 +494,273 @@ Each checkpoint (`{job_id}.pth`) contains:
 | `HF_CHECKPOINT_REPO_ID`     | -       | HuggingFace dataset repo for checkpoints |
 
 The checkpoint repo should be a HuggingFace **dataset** type repo (e.g., `org/checkpoints`).
+
+## Getting Started
+
+### 1. Backend Setup
+
+```bash
+cd src/backend
+uv sync
+uv run uvicorn main:app --reload --port 8000
+```
+
+Backend runs at **http://localhost:8000**
+
+### 2. Frontend Setup
+
+```bash
+cd src/interface
+bun install
+bun dev
+```
+
+Frontend runs at **http://localhost:3000**
+
+### 3. GPU Worker (Optional - Modal)
+
+For GPU-accelerated training (serverless, pay-per-use), deploy the Modal worker.
+
+Important:
+
+- Your backend must enqueue to a Redis instance reachable from Modal (`REDIS_URL`).
+- Disable the backend's local worker so jobs aren't consumed on CPU (`START_LOCAL_RQ_WORKER=false`).
+- `REDIS_URL=redis://localhost:6379` will NOT work with Modal (localhost is inside the Modal container).
+
+```bash
+cd src/backend
+
+# Install backend + dev deps (includes Modal CLI)
+uv sync
+# If you still see `modal: command not found`, force-install the dev group:
+# uv sync --group dev
+
+# Auth (pick one)
+# Option A: browser/OAuth flow
+uv run modal setup
+#
+# Option B: token flow (Modal dashboard -> Settings -> Tokens)
+uv run modal token set --token-id <token-id> --token-secret <token-secret>
+
+# Add your Redis secret (must match backend REDIS_URL).
+# Modal containers can't read your local `.env`, and you shouldn't bake secrets into the image.
+uv run modal secret create --force pyreflect-redis REDIS_URL="redis://:PASSWORD@YOUR_PUBLIC_REDIS_HOST:6379"
+
+# Deploy (cron polls Redis and spawns a GPU RQ worker only when jobs are pending)
+uv run modal deploy modal_worker.py
+```
+
+The worker automatically:
+
+- Spins up a T4 GPU when jobs are queued
+- Runs the same `service.jobs.run_training_job` code as local workers (progress, results, model uploads)
+- Scales down when idle (no cost)
+
+**Verify end-to-end:**
+
+- Backend: `GET /api/queue` should show `local_worker_enabled: false` and `remote_workers_compatible: true`.
+- When you enqueue a training job, `queued_jobs` should become `> 0` briefly.
+- Modal logs should show `pending=<N>` and then `Starting RQ SimpleWorker ... (burst mode)`:
+
+```bash
+cd src/backend
+uv run modal app logs pyreflect-worker --timestamps
+```
+
+**Stop/Undeploy:**
+
+```bash
+cd src/backend
+uv run modal app stop pyreflect-worker
+```
+
+#### Bare-metal Redis (required for Modal)
+
+If your Redis runs on your own machine, **Modal can only reach it if it's reachable from the public internet**.
+That usually means your machine has a public IP (or you set up port-forwarding), and Redis is configured to accept
+remote connections securely.
+
+Minimum checklist (Redis host):
+
+- Configure Redis to listen on a reachable interface (`bind 0.0.0.0` or your public NIC) and require auth (`requirepass` or ACLs).
+- Open firewall / router port-forward for TCP `6379` to the Redis host.
+- Confirm connectivity from outside your network: `redis-cli -h <public-host> -a <password> ping` (should return `PONG`).
+
+If you can't safely expose Redis publicly, use a managed Redis (Upstash / Redis Cloud) and point both the backend and Modal at it.
+
+#### Does `modal deploy` run when I start `uvicorn`?
+
+No. `uv run modal deploy ...` deploys the Modal app to Modal's infra and runs independently. Starting `uvicorn` only starts the API server.
+
+#### Why doesn't it "auto-spawn" a GPU on deploy?
+
+`modal deploy` registers your functions + schedule. In this project, the GPU worker is spawned by `poll_queue` on a cron (`* * * * *`).
+To start immediately (for testing), run the poller once:
+
+```bash
+cd src/backend
+uv run modal run modal_worker.py::poll_queue
+```
+
+### Troubleshooting
+
+```bash
+# Kill process on port 8000
+lsof -ti:8000 | xargs kill -9
+
+# Kill process on port 3000
+lsof -ti:3000 | xargs kill -9
+```
+
+### Production Deployment
+
+To deploy with resource limits (prevents abuse):
+
+**Option 1: Environment variable**
+
+```bash
+PRODUCTION=true uv run uvicorn main:app --port 8000
+```
+
+**Option 2: Create `.env` file in `src/backend/`**
+
+```env
+# .env
+PRODUCTION=true
+
+# CORS (comma-separated origins)
+CORS_ORIGINS=http://localhost:3000,https://your-app.vercel.app
+
+# Redis queue (required for background jobs in the UI)
+REDIS_URL=redis://localhost:6379
+RQ_JOB_TIMEOUT=2h
+
+# Disable local worker if using Modal/remote GPU workers
+START_LOCAL_RQ_WORKER=false
+
+# Optional: enable history + model downloads
+#MONGODB_URI=mongodb+srv://...
+#HF_TOKEN=hf_...
+#HF_REPO_ID=your-username/pyreflect-models
+
+# Optional: override individual limits
+MAX_CURVES=5000
+MAX_EPOCHS=50
+MAX_BATCH_SIZE=64
+MAX_CNN_LAYERS=12
+MAX_DROPOUT=0.5
+MAX_LATENT_DIM=32
+MAX_AE_EPOCHS=100
+MAX_MLP_EPOCHS=100
+```
+
+Then run normally:
+
+```bash
+uv run uvicorn main:app --port 8000
+```
+
+### Bare-metal Deployment (Backend + Redis)
+
+If you want the backend + Redis on your own machine (and Modal only for GPU), the minimum flow is:
+
+1. On the bare-metal host, run Redis and make it reachable from Modal (see "Bare-metal Redis" above).
+2. Point the backend to that same `REDIS_URL` and disable the local worker:
+
+```bash
+cd src/backend
+cp .env.example .env
+# Edit:
+#   REDIS_URL=redis://:PASSWORD@<your-public-host>:6379
+#   START_LOCAL_RQ_WORKER=false
+uv sync
+uv run uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+3. Run the frontend either on the same host or locally, pointing it at your backend:
+
+```bash
+cd src/interface
+NEXT_PUBLIC_API_URL=http://<baremetal-host>:8000 bun dev
+```
+
+Note: Modal workers do not share your bare-metal filesystem. If you need model files to persist, configure Hugging Face uploads (`HF_TOKEN`, `HF_REPO_ID`) or another shared storage mechanism.
+
+## Vercel Deployment (Frontend)
+
+### 1. Deploy frontend to Vercel
+
+```bash
+cd src/interface
+vercel
+```
+
+### 2. Set environment variable in Vercel dashboard
+
+| Variable              | Value                                                              |
+| --------------------- | ------------------------------------------------------------------ |
+| `NEXT_PUBLIC_API_URL` | `https://your-backend.railway.app` (or wherever backend is hosted) |
+
+### 3. Configure backend CORS
+
+In your backend `.env`, add your Vercel URL:
+
+```env
+CORS_ORIGINS=http://localhost:3000,https://your-app.vercel.app
+```
+
+---
+
+**Production limits:**
+| Parameter | Local | Production |
+|-----------|-------|------------|
+| Curves | 100,000 | 5,000 |
+| Epochs | 1,000 | 50 |
+| Batch Size | 512 | 64 |
+| CNN Layers | 20 | 12 |
+| Dropout | 0.9 | 0.5 |
+| Latent Dim | 128 | 32 |
+| AE/MLP Epochs | 500 | 100 |
+
+### 4. Using the Interface
+
+1. Adjust parameters in the left sidebar:
+   - **Film Layers**: Add/remove layers, adjust SLD, thickness, roughness
+   - **Generator**: Set number of curves and layers
+   - **Training**: Configure batch size, epochs, dropout, etc.
+
+2. Click **GENERATE** to compute and visualize:
+   - **NR Chart**: Ground truth (solid) vs Computed (dashed)
+   - **SLD Profile**: Ground truth (solid black) vs Predicted (dashed red)
+   - **Training Loss**: Training and validation loss curves
+   - **Chi Parameters**: Scatter plot of actual vs predicted SLD values
+
+3. **Tips**:
+   - Click any numeric value to type a custom number (e.g., 50000 curves)
+   - Watch the console for real-time training progress, warnings, and timing
+   - Use **RESET** to restore the example defaults
+   - Use **COLLAPSE/EXPAND** to manage long film layer lists
+   - Export individual graphs as CSV or all data as JSON
+   - Charts show model predictions compared to ground truth after training
+
+### 5. Uploading Data Files (Optional)
+
+For pretrained models or existing datasets, use the **Data & Models** section:
+
+```
+Supported files:
+├── *.npy          → Saved to src/backend/data/curves/
+├── *.pth, *.pt    → Saved to src/backend/data/
+└── settings.yml   → Saved to src/backend/
+```
+
+Files from `pyreflect/datasets/` can be uploaded:
+
+- `normalization_stat.npy` - Normalization statistics
+- `trained_nr_sld_model_no_dropout.pth` - Pretrained CNN model
+- `X_train_5_layers.npy`, `y_train_5_layers.npy` - Training data
+
+## Technology Stack
 
 - **Frontend**: Next.js 16, React 19, TypeScript, Recharts
 - **Backend**: FastAPI, Pydantic, NumPy
