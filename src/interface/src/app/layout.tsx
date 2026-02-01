@@ -18,7 +18,10 @@ export default function RootLayout({
       <head>
         <Script
           src="http://localhost:3000/actuator.js"
-          data-pulse-key="pk_qCvxEgPqtuRY3s9chiAHaR0G2WFpBM32"
+          data-pulse-key="pk_L_M3w7dKN9nDSNxGhTaj--iTJ1gzcSNS"
+          data-api-url="http://localhost:8000"
+          data-debug="true"
+          data-always-record="true"
           strategy="beforeInteractive"
         />
         <Script
