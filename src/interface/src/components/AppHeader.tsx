@@ -100,14 +100,14 @@ export default function AppHeader({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const hasGpuWorker = backendOnline && workers.some((w) => (w.name || '').toLowerCase().includes('gpu'));
-  const hasCpuWorker = backendOnline && workers.some((w) => !(w.name || '').toLowerCase().includes('gpu'));
+  const hasGpuWorker = backendOnline && Array.isArray(workers) && workers.some((w) => (w.name || '').toLowerCase().includes('gpu'));
+  const hasCpuWorker = backendOnline && Array.isArray(workers) && workers.some((w) => !(w.name || '').toLowerCase().includes('gpu'));
 
   // Modal uses burst GPU workers: most of the time there are 0 live workers even when GPU mode is configured.
   const remoteGpuEnabled =
     backendOnline && Boolean(queueStatus?.remote_workers_compatible) && queueStatus?.local_worker_enabled === false;
   const queuedJobs = queueStatus?.queued_jobs ?? 0;
-  const isSpawning = backendOnline && remoteGpuEnabled && queuedJobs > 0 && workers.length === 0;
+  const isSpawning = backendOnline && remoteGpuEnabled && queuedJobs > 0 && (!Array.isArray(workers) || workers.length === 0);
 
   const workerDotColor = !backendOnline
     ? '#6b7280'
