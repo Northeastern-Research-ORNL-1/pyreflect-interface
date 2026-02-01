@@ -1,0 +1,9 @@
+.btn--full {
+  display: block;
+  width: 100%;
+  cursor: pointer;
+  background: #00d4ff;
+  box-shadow: 0 0 30px rgba(0,212,255,0.5), 0 0 60px rgba(0,212,255,0.3);
+  font-size: 16px;
+  padding: 24px;
+}
