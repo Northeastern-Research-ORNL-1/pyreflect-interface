@@ -235,6 +235,24 @@
   background: rgba(239, 68, 68, 0.1);
 }
 
+.jobActionResume {
+  border-color: #10b981;
+  color: #10b981;
+}
+
+.jobActionResume:hover {
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.jobActionPause {
+  border-color: #f59e0b;
+  color: #f59e0b;
+}
+
+.jobActionPause:hover {
+  background: rgba(245, 158, 11, 0.1);
+}
+
 .itemSubDate {
   font-size: 10px;
   color: var(--text-muted);
@@ -422,6 +440,26 @@
 
 .popupBtnDelete:hover {
   background: #dc2626;
+}
+
+.popupBtnResume {
+  background: #10b981;
+  border-color: #10b981;
+  color: white;
+}
+
+.popupBtnResume:hover {
+  background: #059669;
+}
+
+.popupBtnPause {
+  background: #f59e0b;
+  border-color: #f59e0b;
+  color: white;
+}
+
+.popupBtnPause:hover {
+  background: #d97706;
 }
 
 @media (max-width: 640px) {

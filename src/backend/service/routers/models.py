@@ -8,7 +8,9 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi import File, Form, Header, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+
+import requests
 
 from ..config import HF_REPO_ID, IS_PRODUCTION, MAX_LOCAL_MODELS, MODELS_DIR
 from ..integrations.huggingface import get_remote_model_info
@@ -214,8 +216,27 @@ async def download_model(
         )
 
     if HF_REPO_ID:
-        hf_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/{model_id}.pth"
-        return RedirectResponse(url=hf_url)
+        hf_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/models/{model_id}/{model_id}.pth"
+        
+        # Proxy the file (fallback behavior).
+        # Note: Frontend should use the URL returned by /models/{id}/info for distinct direct downloads.
+        try:
+            hf_response = requests.get(hf_url, stream=True, timeout=300)
+            if hf_response.status_code == 200:
+                return StreamingResponse(
+                    hf_response.iter_content(chunk_size=1024 * 1024),
+                    media_type="application/octet-stream",
+                    headers={
+                        "Content-Disposition": f"attachment; filename=pyreflect_model_{model_id[:8]}.pth",
+                        "Content-Length": hf_response.headers.get("Content-Length", ""),
+                    },
+                )
+            elif hf_response.status_code == 404:
+                raise HTTPException(status_code=404, detail="Model not found on HuggingFace")
+            else:
+                raise HTTPException(status_code=502, detail=f"HuggingFace returned {hf_response.status_code}")
+        except requests.RequestException as exc:
+            raise HTTPException(status_code=502, detail=f"Failed to fetch from HuggingFace: {exc}")
 
     raise HTTPException(status_code=404, detail="Model not found locally or on Hugging Face")
 
@@ -257,10 +278,95 @@ async def get_model_info(
     local_path = MODELS_DIR / f"{model_id}.pth"
     if local_path.exists():
         size_mb = local_path.stat().st_size / (1024 * 1024)
-        return {"size_mb": size_mb, "source": "local"}
+        return {"size_mb": size_mb, "source": "local", "download_url": None}
 
     hf = getattr(http_request.app.state, "hf", None)
     if hf and hf.repo_id:
-        return get_remote_model_info(hf, model_id)
+        info = get_remote_model_info(hf, model_id)
+        # Add direct download URL for frontend use (bypassing backend proxy)
+        info["download_url"] = f"https://huggingface.co/datasets/{hf.repo_id}/resolve/main/models/{model_id}/{model_id}.pth"
+        return info
 
-    return {"size_mb": None, "source": "unknown"}
+    return {"size_mb": None, "source": "unknown", "download_url": None}
+
+
+@router.get("/models/{model_id}/training-data-info")
+async def get_training_data_info(
+    model_id: str,
+    http_request: Request,
+    x_user_id: str | None = Header(default=None),
+):
+    """Get training data file sizes from HuggingFace."""
+    if not model_id or "/" in model_id or "\\" in model_id:
+        raise HTTPException(status_code=400, detail="Invalid model ID")
+
+    _require_model_access(model_id, x_user_id, http_request=http_request, allow_hf_fallback=True)
+    
+    result = {
+        "nr_size_mb": None, 
+        "sld_size_mb": None,
+        "nr_url": None,
+        "sld_url": None
+    }
+    
+    if HF_REPO_ID:
+        for file_type, key, url_key in [
+            ("nr_train", "nr_size_mb", "nr_url"), 
+            ("sld_train", "sld_size_mb", "sld_url")
+        ]:
+            hf_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/models/{model_id}/{file_type}.npy"
+            result[url_key] = hf_url
+            try:
+                head_res = requests.head(hf_url, timeout=10, allow_redirects=True)
+                if head_res.status_code == 200:
+                    content_length = head_res.headers.get("Content-Length")
+                    if content_length:
+                        result[key] = int(content_length) / (1024 * 1024)
+            except Exception:
+                pass
+    
+    return result
+
+
+@router.get("/models/{model_id}/training-data/{file_type}")
+async def get_training_data(
+    model_id: str,
+    file_type: str,
+    http_request: Request,
+    x_user_id: str | None = Header(default=None),
+):
+    """Download training data (.npy files) for a model from HuggingFace."""
+    if not model_id or "/" in model_id or "\\" in model_id:
+        raise HTTPException(status_code=400, detail="Invalid model ID")
+
+    if file_type not in ("nr_train", "sld_train"):
+        raise HTTPException(status_code=400, detail="Invalid file type. Use 'nr_train' or 'sld_train'")
+
+    _require_model_access(model_id, x_user_id, http_request=http_request, allow_hf_fallback=True)
+
+    if HF_REPO_ID:
+        # Map file_type to HF filenames (nr_train -> nr_train.npy, sld_train -> sld_train.npy)
+        file_name = f"{file_type}.npy"
+        hf_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/models/{model_id}/{file_name}"
+        
+        # Proxy the file (fallback behavior).
+        # Note: Frontend should use the URL returned by /models/{id}/training-data-info for distinct direct downloads.
+        try:
+            hf_response = requests.get(hf_url, stream=True, timeout=60)
+            if hf_response.status_code == 200:
+                return StreamingResponse(
+                    hf_response.iter_content(chunk_size=1024 * 1024),
+                    media_type="application/octet-stream",
+                    headers={
+                        "Content-Disposition": f"attachment; filename={file_name}",
+                        "Content-Length": hf_response.headers.get("Content-Length", ""),
+                    },
+                )
+            elif hf_response.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"Training data {file_name} not found on HuggingFace")
+            else:
+                raise HTTPException(status_code=502, detail=f"HuggingFace returned {hf_response.status_code}")
+        except requests.RequestException as exc:
+            raise HTTPException(status_code=502, detail=f"Failed to fetch from HuggingFace: {exc}")
+
+    raise HTTPException(status_code=404, detail="Training data not available")

@@ -1,9 +1,24 @@
 'use client';
 
-import { useState, useRef, type ChangeEvent } from 'react';
-import { FilmLayer, GeneratorParams, TrainingParams, Limits, DEFAULT_LIMITS, DataSource, Workflow, NrSldMode, UploadRole, GpuTier, GPU_TIERS } from '@/types';
+import { useMemo, useState, useRef, useCallback, useEffect, type ChangeEvent } from 'react';
+import {
+  FilmLayer,
+  GeneratorParams,
+  TrainingParams,
+  Limits,
+  DEFAULT_LIMITS,
+  DataSource,
+  Workflow,
+  NrSldMode,
+  UploadRole,
+  GpuTier,
+  GPU_TIERS,
+  type LayerBound,
+  type LayerBoundParam,
+} from '@/types';
 import EditableValue from './EditableValue';
 import InfoTooltip from './InfoTooltip';
+import RangeSlider from './RangeSlider';
 import styles from './ParameterPanel.module.css';
 
 interface BackendStatus {
@@ -65,6 +80,46 @@ export interface ParameterPanelProps {
   onGpuChange?: (value: GpuTier) => void;
 }
 
+const DEFAULT_LAYERS: FilmLayer[] = [
+  { name: 'substrate', sld: 2.07, isld: 0, thickness: 0, roughness: 1.35 },
+  { name: 'siox', sld: 3.47, isld: 0, thickness: 12.17, roughness: 2.05 },
+  { name: 'layer_1', sld: 3.96, isld: 0, thickness: 53.79, roughness: 20.61 },
+  { name: 'layer_2', sld: 2.37, isld: 0, thickness: 178.66, roughness: 57.26 },
+  { name: 'layer_3', sld: 3.85, isld: 0, thickness: 79.63, roughness: 21.86 },
+  { name: 'layer_4', sld: 3.24, isld: 0, thickness: 67.49, roughness: 17.57 },
+  { name: 'layer_5', sld: 2.67, isld: 0, thickness: 72.61, roughness: 76.63 },
+  { name: 'air', sld: 0, isld: 0, thickness: 0, roughness: 0 },
+];
+
+const DEFAULT_BOUNDS_LIST: LayerBound[] = [
+    // substrate
+    { i: 0, par: 'roughness', bounds: [1.177, 1.5215] },
+    // silicon oxide layer
+    { i: 1, par: 'sld', bounds: [3.47, 3.47] },
+    { i: 1, par: 'thickness', bounds: [9.7216, 14.624] },
+    { i: 1, par: 'roughness', bounds: [1.108, 2.998] },
+    // material layer 1
+    { i: 2, par: 'sld', bounds: [3.7235, 4.197] },
+    { i: 2, par: 'thickness', bounds: [8.717, 98.867] },
+    { i: 2, par: 'roughness', bounds: [2.2571, 38.969] },
+    // material layer 2
+    { i: 3, par: 'sld', bounds: [1.6417, 3.1033] },
+    { i: 3, par: 'thickness', bounds: [117.4, 239.91] },
+    { i: 3, par: 'roughness', bounds: [19.32, 95.202] },
+    // material layer 3
+    { i: 4, par: 'sld', bounds: [3.0246, 4.6755] },
+    { i: 4, par: 'thickness', bounds: [64.482, 94.768] },
+    { i: 4, par: 'roughness', bounds: [15.713, 28.007] },
+    // material layer 4
+    { i: 5, par: 'sld', bounds: [1.501, 4.9837] },
+    { i: 5, par: 'thickness', bounds: [51.655, 83.334] },
+    { i: 5, par: 'roughness', bounds: [9.7741, 25.373] },
+    // material layer 5
+    { i: 6, par: 'sld', bounds: [0.85516, 4.4906] },
+    { i: 6, par: 'thickness', bounds: [58.479, 86.738] },
+    { i: 6, par: 'roughness', bounds: [43.155, 110.11] },
+];
+
 export default function ParameterPanel({
   filmLayers,
   generatorParams,
@@ -99,6 +154,173 @@ export default function ParameterPanel({
 
   const [showNamePopup, setShowNamePopup] = useState(false);
   const [generationName, setGenerationName] = useState('');
+
+  // Track independent bounds per layer/parameter
+  // Key: "layerIndex:param", Value: { min: number | null, max: number | null }
+  const [layerBounds, setLayerBounds] = useState<Record<string, { min: number | null; max: number | null }>>({});
+
+  const derivedNumFilmLayers = Math.max(0, filmLayers.length - 3);
+
+  // Get bounds for a specific layer/param
+  const getBounds = useCallback((layerIndex: number, param: LayerBoundParam): { min: number | null; max: number | null } => {
+    return layerBounds[`${layerIndex}:${param}`] || { min: null, max: null };
+  }, [layerBounds]);
+
+  // Set bounds for a specific layer/param
+  const setBounds = useCallback((layerIndex: number, param: LayerBoundParam, min: number | null, max: number | null) => {
+    setLayerBounds((prev) => ({
+      ...prev,
+      [`${layerIndex}:${param}`]: { min, max },
+    }));
+  }, []);
+
+  // Check if any bounds are set (bounds mode active)
+  const hasAnyBounds = useMemo(() => {
+    return Object.values(layerBounds).some((b) => b.min !== null || b.max !== null);
+  }, [layerBounds]);
+
+  // Sync incoming generatorParams.layerBound into local layerBounds state on mount/change
+  // This ensures that loading from saved state (which has bounds) correctly populates the UI
+  useEffect(() => {
+    // Only sync if local state is empty but prop has data (initial load),
+    // OR if we suspect a hard external reset happened that didn't go through resetAllLayers.
+    // However, syncing complex state bi-directionally is risky (infinite loops).
+    // Safest approach: Init state lazy from prop if possible, or use a ref to track if we've initialized.
+    // But since we can't change useState init easily without key-remounting, let's use an Effect that runs once or when prop significantly changes?
+    // Actually, simply parsing the prop into the map structure if the map is empty is a good start.
+    
+    if (Object.keys(layerBounds).length === 0 && generatorParams.layerBound && generatorParams.layerBound.length > 0) {
+        const newBounds: Record<string, { min: number | null; max: number | null }> = {};
+        generatorParams.layerBound.forEach((b) => {
+            newBounds[`${b.i}:${b.par}`] = {
+                min: b.bounds[0],
+                max: b.bounds[1]
+            };
+        });
+        setLayerBounds(newBounds);
+    }
+  }, [generatorParams.layerBound]); // Intentionally do NOT include layerBounds in dep array to avoid loops, or check emptiness guard.
+
+  // Build layerBound array from bounds for backend
+  const buildLayerBoundsPayload = useCallback((): LayerBound[] | undefined => {
+    const bounds: LayerBound[] = [];
+    const pars: LayerBoundParam[] = ['sld', 'isld', 'thickness', 'roughness'];
+
+    for (let i = 0; i < filmLayers.length; i++) {
+      const layer = filmLayers[i];
+      for (const par of pars) {
+        const b = layerBounds[`${i}:${par}`];
+        if (b && (b.min !== null || b.max !== null)) {
+          const value = layer[par] || 0;
+          // Use value as fallback for missing bound
+          const boundMin = b.min ?? value;
+          const boundMax = b.max ?? value;
+          bounds.push({
+            i,
+            par,
+            bounds: [boundMin, boundMax],
+          });
+        }
+      }
+    }
+
+    return bounds.length > 0 ? bounds : undefined;
+  }, [filmLayers, layerBounds]);
+
+  // Sync layerBound to generatorParams whenever bounds change
+  useEffect(() => {
+    const newBounds = buildLayerBoundsPayload();
+    const currentBounds = generatorParams.layerBound;
+
+    // Only update if bounds actually changed
+    const newJson = JSON.stringify(newBounds || null);
+    const currentJson = JSON.stringify(currentBounds || null);
+
+    if (newJson !== currentJson) {
+      onGeneratorParamsChange({
+        ...generatorParams,
+        numFilmLayers: hasAnyBounds ? derivedNumFilmLayers : generatorParams.numFilmLayers,
+        layerBound: newBounds,
+      });
+    }
+  }, [
+    layerBounds,
+    filmLayers,
+    buildLayerBoundsPayload,
+    generatorParams,
+    onGeneratorParamsChange,
+    hasAnyBounds,
+    derivedNumFilmLayers,
+  ]);
+
+  // Clear all bounds
+  const clearAllBounds = useCallback(() => {
+    setLayerBounds({});
+  }, []);
+
+  // Get default value for a layer index/field
+  const getLayerDefault = (index: number, field: keyof FilmLayer): number | string => {
+    if (index >= 0 && index < DEFAULT_LAYERS.length) {
+      return DEFAULT_LAYERS[index][field];
+    }
+    // Generic defaults for new user-added layers
+    if (field === 'sld') return 3.0;
+    if (field === 'thickness') return 100;
+    if (field === 'roughness') return 20;
+    if (field === 'isld') return 0;
+    if (field === 'name') return 'layer';
+    return 0;
+  };
+
+  // Get default bounds for a layer index/parameter
+  const getBoundDefault = (index: number, param: LayerBoundParam): { min: number | null, max: number | null } => {
+    // Look for exact match in DEFAULT_BOUNDS_LIST
+    const defaultBound = DEFAULT_BOUNDS_LIST.find(b => b.i === index && b.par === param);
+    if (defaultBound) {
+      return { min: defaultBound.bounds[0], max: defaultBound.bounds[1] };
+    }
+    return { min: null, max: null };
+  };
+
+  const resetAllLayers = () => {
+    // Reset each layer to its matching default from DEFAULT_LAYERS
+    // If exact name match not found (e.g. layer_X vs layer_Y), fallback to hard reset,
+    // but better to try to map by index if count matches, or name if unique.
+    // Given the task, let's just restore the structure entirely to DEFAULT_LAYERS?
+    // User requested "reset all layers to default values".
+    // If they added extra layers, "reset" usually means "reset values of current layers" OR "restore original state"?
+    
+    // Interpretation: "Reset values" of CURRENT layers.
+    // But defaults are specific! (e.g. siox sld=3.47).
+    // Let's restore the full DEFAULT_LAYERS stack which ensures all values are correct.
+    // If the user ADDED layers, "Resetting to default" usually implies going back to the start state.
+    // However, if they want to keep their custom layer structure but just reset numbers...
+    // The previous implementation was: sld: 3.0, thickness: 100... generic defaults.
+    // But the "Overwrite" button does exactly what loadDefaultLayers does.
+    // Let's make "Reset" do the same thing as "Overwrite" to be consistent?
+    // Or should "Reset" keep the layers but reset their values?
+    // "overwrting and resetting give different values" implies they SHOULD give the same values (or at least consistent ones).
+    // Let's make resetAllLayers simply call loadDefaultLayers() to be safe and consistent.
+    
+    loadDefaultLayers();
+  };
+
+  const loadDefaultLayers = () => {
+    onFilmLayersChange(DEFAULT_LAYERS);
+    
+    // Construct bounds dictionary from list
+    const newBounds: Record<string, { min: number | null; max: number | null }> = {};
+    DEFAULT_BOUNDS_LIST.forEach((item) => {
+        newBounds[`${item.i}:${item.par}`] = {
+            min: item.bounds[0],
+            max: item.bounds[1]
+        };
+    });
+    setLayerBounds(newBounds);
+    
+    // Expand all
+    setExpandedLayers(new Set(DEFAULT_LAYERS.map((_, index) => index)));
+  };
 
   const shouldShowTraining =
     dataSource === 'synthetic' ||
@@ -309,8 +531,17 @@ export default function ParameterPanel({
   };
 
   const addLayer = () => {
+    // Find the next layer number by looking at existing layer names
+    const existingNumbers = filmLayers
+      .map((l) => {
+        const match = l.name.match(/^layer_(\d+)$/);
+        return match ? parseInt(match[1], 10) : 0;
+      })
+      .filter((n) => n > 0);
+    const nextNumber = existingNumbers.length > 0 ? Math.max(...existingNumbers) + 1 : 1;
+
     const newLayer: FilmLayer = {
-      name: `layer_${filmLayers.length - 1}`,
+      name: `layer_${nextNumber}`,
       sld: 3.0,
       isld: 0,
       thickness: 100,
@@ -338,6 +569,44 @@ export default function ParameterPanel({
           next.add(i);
         }
       });
+      return next;
+    });
+  };
+
+  const resetLayer = (index: number) => {
+    const newLayers = [...filmLayers];
+    // If we have a default for this index, use it fully
+    if (index < DEFAULT_LAYERS.length) {
+      newLayers[index] = { ...DEFAULT_LAYERS[index] };
+    } else {
+      // Keep name, reset others to generic
+      newLayers[index] = {
+        ...newLayers[index],
+        sld: 3.0,
+        thickness: 100,
+        roughness: 20,
+        isld: 0,
+      };
+    }
+    onFilmLayersChange(newLayers);
+    
+    // Reset bounds for this layer to their defaults (if any) or clear them
+    setLayerBounds((prev) => {
+      const next = { ...prev };
+      // First clear existing for this layer
+      Object.keys(next).forEach((key) => {
+        if (key.startsWith(`${index}:`)) {
+          delete next[key];
+        }
+      });
+      // Then re-apply defaults if any
+      const pars: LayerBoundParam[] = ['sld', 'isld', 'thickness', 'roughness'];
+      for (const par of pars) {
+        const def = getBoundDefault(index, par);
+        if (def.min !== null || def.max !== null) {
+          next[`${index}:${par}`] = def;
+        }
+      }
       return next;
     });
   };
@@ -457,14 +726,41 @@ export default function ParameterPanel({
             <div className="section__header">
               <h3 className="section__title">
                 Film Layers
-                <InfoTooltip hint={"Film layers define a synthetic stack (materials + thickness) that the app uses to generate training data.\n\nReal data (.npy) skips this and uses your uploaded arrays instead."} />
+                <InfoTooltip hint={"Film layers define a synthetic stack (materials and thickness) used for training data generation. Use the slider handles to set minimum and maximum bounds for each layer parameter."} />
               </h3>
               <div className={styles.layerActions}>
+                <InfoTooltip hint="Reset all layers to default values">
+                  <button
+                    className={styles.clearBoundsBtn}
+                    onClick={resetAllLayers}
+                    type="button"
+                    style={{ width: '28px', height: '28px' }}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M18 6L6 18" />
+                      <path d="M6 6l12 12" />
+                    </svg>
+                  </button>
+                </InfoTooltip>
+                <InfoTooltip hint="Overwrite with default layers.">
+                <button
+                  className="btn btn--outline"
+                  onClick={loadDefaultLayers}
+                  type="button"
+                  style={{ height: '28px', padding: '0 8px', fontSize: '11px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                      <path d="M3 3v5h5" />
+                  </svg>
+                  
+                </button>
+                </InfoTooltip>
                 <button
                   className="btn btn--outline"
                   onClick={expandedLayers.size ? collapseAllLayers : expandAllLayers}
                   type="button"
-                  style={{ height: '28px', padding: '0 12px', fontSize: '11px' }}
+                  style={{ height: '28px', padding: '0 8px', fontSize: '11px' }}
                 >
                   {expandedLayers.size ? 'COLLAPSE' : 'EXPAND'}
                 </button>
@@ -472,11 +768,11 @@ export default function ParameterPanel({
                   className="btn btn--outline"
                   onClick={addLayer}
                   type="button"
-                  style={{ height: '28px', padding: '0 12px', fontSize: '11px' }}
+                  style={{ height: '28px', padding: '0 8px', fontSize: '11px' }}
                 >
-
-                  + ADD
+                  ADD
                 </button>
+                
               </div>
             </div>
 
@@ -501,110 +797,299 @@ export default function ParameterPanel({
                         className={styles.nameInput}
                       />
                     </div>
-                    {index !== 0 && index !== filmLayers.length - 1 && (
-                      <button
-                        className="layer-item__remove"
-                        onClick={() => removeLayer(index)}
-                        type="button"
-                      >
-                        ×
-                      </button>
-                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <InfoTooltip hint="Reset layer to defaults">
+                        <button
+                          className={styles.resetBtn}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            resetLayer(index);
+                          }}
+                          type="button"
+                          style={{ opacity: 1 }}
+                        >
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                            <path d="M3 3v5h5" />
+                          </svg>
+                        </button>
+                      </InfoTooltip>
+                      {index !== 0 && index !== filmLayers.length - 1 && (
+                        <button
+                          className="layer-item__remove"
+                          onClick={() => removeLayer(index)}
+                          type="button"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {expandedLayers.has(index) && (
                     <div className={styles.layerParams}>
                       <div className="control">
                         <div className="control__label">
-                          <span>SLD<InfoTooltip hint={"Scattering Length Density (×10⁻⁶ Å⁻²).\n\nDetermines neutron contrast of this layer."} /></span>
-                          <EditableValue
-                            value={layer.sld}
-                            onChange={(v) => updateLayer(index, 'sld', v)}
-                            min={0}
-                            max={10}
-                            step={0.01}
-                            decimals={2}
-                          />
+                          <span>SLD<InfoTooltip hint={"Scattering Length Density (×10⁻⁶ Å⁻²).\n\nDrag ◀ ▶ handles or edit [min] value [max] to set bounds."} /></span>
+                          <div className={styles.valueWrapper}>
+                            <InfoTooltip hint="Reset SLD to default">
+                              <button
+                                className={styles.resetBtn}
+                                onClick={() => {
+                                  updateLayer(index, 'sld', getLayerDefault(index, 'sld'));
+                                  const def = getBoundDefault(index, 'sld');
+                                  setBounds(index, 'sld', def.min, def.max);
+                                }}
+                              >
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                                  <path d="M3 3v5h5" />
+                                </svg>
+                              </button>
+                            </InfoTooltip>
+                            <div className={styles.valueWithBounds}>
+                              {(getBounds(index, 'sld').min !== null || getBounds(index, 'sld').max !== null) ? (
+                                <>
+                                  <EditableValue
+                                    value={getBounds(index, 'sld').min ?? layer.sld}
+                                    onChange={(v) => setBounds(index, 'sld', v, getBounds(index, 'sld').max)}
+                                    min={0}
+                                    max={layer.sld}
+                                    step={0.01}
+                                    decimals={2}
+                                  />
+                                  <EditableValue
+                                    value={getBounds(index, 'sld').max ?? layer.sld}
+                                    onChange={(v) => setBounds(index, 'sld', getBounds(index, 'sld').min, v)}
+                                    min={layer.sld}
+                                    max={10}
+                                    step={0.01}
+                                    decimals={2}
+                                  />
+                                </>
+                              ) : (
+                                <EditableValue
+                                  value={layer.sld}
+                                  onChange={(v) => updateLayer(index, 'sld', v)}
+                                  min={0}
+                                  max={10}
+                                  step={0.01}
+                                  decimals={2}
+                                />
+                              )}
+                            </div>
+                          </div>
                         </div>
-                        <input
-                          type="range"
-                          className="slider"
-                          min="0"
-                          max="6.4"
-                          step="0.01"
+                        <RangeSlider
                           value={layer.sld}
-                          onChange={(e) => updateLayer(index, 'sld', parseFloat(e.target.value))}
+                          boundMin={getBounds(index, 'sld').min}
+                          boundMax={getBounds(index, 'sld').max}
+                          min={0}
+                          max={6.4}
+                          step={0.01}
+                          decimals={2}
+                          onValueChange={(v) => updateLayer(index, 'sld', v)}
+                          onBoundsChange={(lo, hi) => setBounds(index, 'sld', lo, hi)}
                         />
                       </div>
 
                       <div className="control">
                         <div className="control__label">
-                          <span>Thickness (Å)<InfoTooltip hint={"Layer thickness in Angstroms.\n\nAffects fringe spacing in reflectivity curve."} /></span>
-                          <EditableValue
-                            value={layer.thickness}
-                            onChange={(v) => updateLayer(index, 'thickness', v)}
-                            min={0}
-                            max={2000}
-                            step={1}
-                            decimals={0}
-                            disabled={index === 0 || index === filmLayers.length - 1}
-                          />
+                          <span>Thickness (Å)<InfoTooltip hint={"Layer thickness in Angstroms.\n\nDrag ◀ ▶ handles or edit [min] value [max] to set bounds."} /></span>
+                          <div className={styles.valueWrapper}>
+                            <InfoTooltip hint="Reset Thickness to default">
+                              <button
+                                className={styles.resetBtn}
+                                onClick={() => {
+                                  updateLayer(index, 'thickness', getLayerDefault(index, 'thickness'));
+                                  const def = getBoundDefault(index, 'thickness');
+                                  setBounds(index, 'thickness', def.min, def.max);
+                                }}
+                                disabled={index === 0 || index === filmLayers.length - 1}
+                              >
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                                  <path d="M3 3v5h5" />
+                                </svg>
+                              </button>
+                            </InfoTooltip>
+                            <div className={styles.valueWithBounds}>
+                              {(getBounds(index, 'thickness').min !== null || getBounds(index, 'thickness').max !== null) ? (
+                                <>
+                                  <EditableValue
+                                    value={getBounds(index, 'thickness').min ?? layer.thickness}
+                                    onChange={(v) => setBounds(index, 'thickness', v, getBounds(index, 'thickness').max)}
+                                    min={0}
+                                    max={layer.thickness}
+                                    step={1}
+                                    decimals={0}
+                                    disabled={index === 0 || index === filmLayers.length - 1}
+                                  />
+                                  <EditableValue
+                                    value={getBounds(index, 'thickness').max ?? layer.thickness}
+                                    onChange={(v) => setBounds(index, 'thickness', getBounds(index, 'thickness').min, v)}
+                                    min={layer.thickness}
+                                    max={2000}
+                                    step={1}
+                                    decimals={0}
+                                    disabled={index === 0 || index === filmLayers.length - 1}
+                                  />
+                                </>
+                              ) : (
+                                <EditableValue
+                                  value={layer.thickness}
+                                  onChange={(v) => updateLayer(index, 'thickness', v)}
+                                  min={0}
+                                  max={2000}
+                                  step={1}
+                                  decimals={0}
+                                  disabled={index === 0 || index === filmLayers.length - 1}
+                                />
+                              )}
+                            </div>
+                          </div>
                         </div>
-                        <input
-                          type="range"
-                          className="slider"
-                          min="0"
-                          max="500"
-                          step="1"
+                        <RangeSlider
                           value={layer.thickness}
-                          onChange={(e) => updateLayer(index, 'thickness', parseFloat(e.target.value))}
+                          boundMin={getBounds(index, 'thickness').min}
+                          boundMax={getBounds(index, 'thickness').max}
+                          min={0}
+                          max={500}
+                          step={1}
+                          decimals={0}
+                          onValueChange={(v) => updateLayer(index, 'thickness', v)}
+                          onBoundsChange={(lo, hi) => setBounds(index, 'thickness', lo, hi)}
                           disabled={index === 0 || index === filmLayers.length - 1}
                         />
                       </div>
 
                       <div className="control">
                         <div className="control__label">
-                          <span>Roughness (Å)<InfoTooltip hint={"Interfacial roughness in Angstroms.\n\nSmears the interface and reduces fringe amplitude."} /></span>
-                          <EditableValue
-                            value={layer.roughness}
-                            onChange={(v) => updateLayer(index, 'roughness', v)}
-                            min={0}
-                            max={500}
-                            step={0.5}
-                            decimals={1}
-                          />
+                          <span>Roughness (Å)<InfoTooltip hint={"Interfacial roughness in Angstroms.\n\nDrag ◀ ▶ handles or edit [min] value [max] to set bounds."} /></span>
+                          <div className={styles.valueWrapper}>
+                            <InfoTooltip hint="Reset Roughness to default">
+                              <button
+                                className={styles.resetBtn}
+                                onClick={() => {
+                                  updateLayer(index, 'roughness', getLayerDefault(index, 'roughness'));
+                                  const def = getBoundDefault(index, 'roughness');
+                                  setBounds(index, 'roughness', def.min, def.max);
+                                }}
+                              >
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                                  <path d="M3 3v5h5" />
+                                </svg>
+                              </button>
+                            </InfoTooltip>
+                            <div className={styles.valueWithBounds}>
+                              {(getBounds(index, 'roughness').min !== null || getBounds(index, 'roughness').max !== null) ? (
+                                <>
+                                  <EditableValue
+                                    value={getBounds(index, 'roughness').min ?? layer.roughness}
+                                    onChange={(v) => setBounds(index, 'roughness', v, getBounds(index, 'roughness').max)}
+                                    min={0}
+                                    max={layer.roughness}
+                                    step={0.5}
+                                    decimals={1}
+                                  />
+                                  <EditableValue
+                                    value={getBounds(index, 'roughness').max ?? layer.roughness}
+                                    onChange={(v) => setBounds(index, 'roughness', getBounds(index, 'roughness').min, v)}
+                                    min={layer.roughness}
+                                    max={500}
+                                    step={0.5}
+                                    decimals={1}
+                                  />
+                                </>
+                              ) : (
+                                <EditableValue
+                                  value={layer.roughness}
+                                  onChange={(v) => updateLayer(index, 'roughness', v)}
+                                  min={0}
+                                  max={500}
+                                  step={0.5}
+                                  decimals={1}
+                                />
+                              )}
+                            </div>
+                          </div>
                         </div>
-                        <input
-                          type="range"
-                          className="slider"
-                          min="0"
-                          max="150"
-                          step="0.5"
+                        <RangeSlider
                           value={layer.roughness}
-                          onChange={(e) => updateLayer(index, 'roughness', parseFloat(e.target.value))}
+                          boundMin={getBounds(index, 'roughness').min}
+                          boundMax={getBounds(index, 'roughness').max}
+                          min={0}
+                          max={150}
+                          step={0.5}
+                          decimals={1}
+                          onValueChange={(v) => updateLayer(index, 'roughness', v)}
+                          onBoundsChange={(lo, hi) => setBounds(index, 'roughness', lo, hi)}
                         />
                       </div>
 
                       <div className="control">
                         <div className="control__label">
-                          <span>iSLD<InfoTooltip hint={"Imaginary SLD.\nRepresents absorption in the layer (typically small or zero)."} /></span>
-                          <EditableValue
-                            value={layer.isld}
-                            onChange={(v) => updateLayer(index, 'isld', v)}
-                            min={0}
-                            max={1}
-                            step={0.001}
-                            decimals={3}
-                          />
+                          <span>iSLD<InfoTooltip hint={"Imaginary SLD (absorption).\nTypically 0 for most materials.\n\nDrag ◀ ▶ handles or edit [min] value [max] to set bounds."} /></span>
+                          <div className={styles.valueWrapper}>
+                            <InfoTooltip hint="Reset iSLD to default">
+                              <button
+                                className={styles.resetBtn}
+                                onClick={() => {
+                                  updateLayer(index, 'isld', getLayerDefault(index, 'isld'));
+                                  const def = getBoundDefault(index, 'isld');
+                                  setBounds(index, 'isld', def.min, def.max);
+                                }}
+                              >
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                                  <path d="M3 3v5h5" />
+                                </svg>
+                              </button>
+                            </InfoTooltip>
+                            <div className={styles.valueWithBounds}>
+                              {(getBounds(index, 'isld').min !== null || getBounds(index, 'isld').max !== null) ? (
+                                <>
+                                  <EditableValue
+                                    value={getBounds(index, 'isld').min ?? layer.isld}
+                                    onChange={(v) => setBounds(index, 'isld', v, getBounds(index, 'isld').max)}
+                                    min={0}
+                                    max={layer.isld}
+                                    step={0.001}
+                                    decimals={3}
+                                  />
+                                  <EditableValue
+                                    value={getBounds(index, 'isld').max ?? layer.isld}
+                                    onChange={(v) => setBounds(index, 'isld', getBounds(index, 'isld').min, v)}
+                                    min={layer.isld}
+                                    max={10}
+                                    step={0.001}
+                                    decimals={3}
+                                  />
+                                </>
+                              ) : (
+                                <EditableValue
+                                  value={layer.isld}
+                                  onChange={(v) => updateLayer(index, 'isld', v)}
+                                  min={0}
+                                  max={10}
+                                  step={0.001}
+                                  decimals={3}
+                                />
+                              )}
+                            </div>
+                          </div>
                         </div>
-                        <input
-                          type="range"
-                          className="slider"
-                          min="0"
-                          max="1"
-                          step="0.001"
+                        <RangeSlider
                           value={layer.isld}
-                          onChange={(e) => updateLayer(index, 'isld', parseFloat(e.target.value))}
+                          boundMin={getBounds(index, 'isld').min}
+                          boundMax={getBounds(index, 'isld').max}
+                          min={0}
+                          max={1}
+                          step={0.001}
+                          decimals={3}
+                          onValueChange={(v) => updateLayer(index, 'isld', v)}
+                          onBoundsChange={(lo, hi) => setBounds(index, 'isld', lo, hi)}
                         />
                       </div>
                     </div>
@@ -648,14 +1133,22 @@ export default function ParameterPanel({
 
             <div className="control">
               <div className="control__label">
-                <span>Max Film Layers<InfoTooltip hint="Maximum number of film layers to include in the synthetic data generation." /></span>
+                <span>Max Film Layers<InfoTooltip hint={"Maximum number of film layers to include in the synthetic data generation.\n\nWhen any layer has a ± range set, this is locked to the actual film layer count."} /></span>
                 <EditableValue
                   value={generatorParams.numFilmLayers}
-                  onChange={(v) => onGeneratorParamsChange({ ...generatorParams, numFilmLayers: Math.min(Math.max(1, Math.round(v)), filmLayers.length) })}
+                  onChange={(v) =>
+                    onGeneratorParamsChange({
+                      ...generatorParams,
+                      numFilmLayers: hasAnyBounds
+                        ? derivedNumFilmLayers
+                        : Math.min(Math.max(1, Math.round(v)), filmLayers.length),
+                    })
+                  }
                   min={1}
                   max={filmLayers.length}
                   step={1}
                   decimals={0}
+                  disabled={hasAnyBounds}
                 />
               </div>
               <input
@@ -665,11 +1158,21 @@ export default function ParameterPanel({
                 max={filmLayers.length}
                 step="1"
                 value={generatorParams.numFilmLayers}
-                onChange={(e) => onGeneratorParamsChange({
-                  ...generatorParams,
-                  numFilmLayers: Math.min(parseInt(e.target.value), filmLayers.length)
-                })}
+                onChange={(e) =>
+                  onGeneratorParamsChange({
+                    ...generatorParams,
+                    numFilmLayers: hasAnyBounds
+                      ? derivedNumFilmLayers
+                      : Math.min(parseInt(e.target.value), filmLayers.length),
+                  })
+                }
+                disabled={hasAnyBounds}
               />
+              {hasAnyBounds && (
+                <div className={styles.deltaInfo}>
+                  Locked: layer bounds active (numFilmLayers = {derivedNumFilmLayers})
+                </div>
+              )}
             </div>
           </div>
         </>
@@ -961,7 +1464,7 @@ export default function ParameterPanel({
                       {stripLabelSuffix(uploadRequirementLabels[role])}
                     </span>
                     <span className={`${styles.mappingValue} ${exists ? styles.mappingOk : styles.mappingMissing}`}>
-                      {path ? stripKnownExtension(path) : 'Not set'}
+                      {exists ? (path ? stripKnownExtension(path) : 'Not set') : 'DNE'}
                     </span>
                   </div>
                 );
@@ -1008,7 +1511,10 @@ export default function ParameterPanel({
         <div className={styles.actionRow}>
           <button
             className="btn btn--outline"
-            onClick={onReset}
+            onClick={() => {
+              onReset();
+              resetAllLayers();
+            }}
             type="button"
             disabled={isUploading}
           >

@@ -33,6 +33,7 @@ type AppHeaderProps = {
   onImportJson: () => void;
   onExportJson: () => void;
   onDownloadBundle: () => void;
+  downloadProgress?: number;
 };
 
 export default function AppHeader({
@@ -48,6 +49,7 @@ export default function AppHeader({
   onImportJson,
   onExportJson,
   onDownloadBundle,
+  downloadProgress = 0,
 }: AppHeaderProps) {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showActionsMenu, setShowActionsMenu] = useState(false);
@@ -98,14 +100,14 @@ export default function AppHeader({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const hasGpuWorker = backendOnline && workers.some((w) => (w.name || '').toLowerCase().includes('gpu'));
-  const hasCpuWorker = backendOnline && workers.some((w) => !(w.name || '').toLowerCase().includes('gpu'));
+  const hasGpuWorker = backendOnline && Array.isArray(workers) && workers.some((w) => (w.name || '').toLowerCase().includes('gpu'));
+  const hasCpuWorker = backendOnline && Array.isArray(workers) && workers.some((w) => !(w.name || '').toLowerCase().includes('gpu'));
 
   // Modal uses burst GPU workers: most of the time there are 0 live workers even when GPU mode is configured.
   const remoteGpuEnabled =
     backendOnline && Boolean(queueStatus?.remote_workers_compatible) && queueStatus?.local_worker_enabled === false;
   const queuedJobs = queueStatus?.queued_jobs ?? 0;
-  const isSpawning = backendOnline && remoteGpuEnabled && queuedJobs > 0 && workers.length === 0;
+  const isSpawning = backendOnline && remoteGpuEnabled && queuedJobs > 0 && (!Array.isArray(workers) || workers.length === 0);
 
   const workerDotColor = !backendOnline
     ? '#6b7280'
@@ -302,9 +304,25 @@ export default function AppHeader({
             )}
           </div>
           {hasGraphData && (
-            <button className="header__export-btn" onClick={onDownloadBundle}>
+            <button
+              className="header__export-btn"
+              onClick={onDownloadBundle}
+              style={
+                downloadProgress > 0 && downloadProgress < 1
+                  ? {
+                      background: `linear-gradient(to right, var(--surface-hover) ${
+                        downloadProgress * 100
+                      }%, transparent ${downloadProgress * 100}%)`,
+                    }
+                  : undefined
+              }
+            >
               <span>↓</span>
-              <span className="header__btn-label">Download</span>
+              <span className="header__btn-label">
+                {downloadProgress > 0 && downloadProgress < 1
+                  ? `Loading ${(downloadProgress * 100).toFixed(0)}%`
+                  : 'Download'}
+              </span>
             </button>
           )}
         </div>

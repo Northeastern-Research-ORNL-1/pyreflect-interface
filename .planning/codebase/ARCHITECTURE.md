@@ -1,6 +1,6 @@
 # Architecture
 
-**Analysis Date:** 2026-01-16
+**Analysis Date:** 2026-01-20
 
 ## Pattern Overview
 
@@ -8,9 +8,11 @@
 
 **Key Characteristics:**
 - Next.js App Router UI with client components (`src/interface/src/app`, `src/interface/src/components`)
-- FastAPI backend in a single module (`src/backend/main.py`)
-- Server-Sent Events for long-running generation (`/api/generate/stream` in `src/backend/main.py`)
-- Optional persistence to MongoDB and Hugging Face (`src/backend/main.py`)
+- FastAPI backend with modular routers (`src/backend/main.py`, `src/backend/service/routers/`)
+- Server-Sent Events for long-running generation (`/api/generate/stream`)
+- Redis + RQ job queue for background training with Modal GPU workers
+- Checkpointing service for pause/resume across worker crashes
+- Optional persistence to MongoDB and Hugging Face
 
 ## Layers
 
@@ -36,25 +38,39 @@
 - Location: `src/interface/src/app/api/auth/[...nextauth]/route.ts`
 
 **API Layer:**
-- Purpose: HTTP endpoints for generation, uploads, and history
+- Purpose: HTTP endpoints for generation, uploads, jobs, and history
 - Contains: FastAPI routes and response models
-- Depends on: pyreflect pipelines, storage adapters
+- Depends on: Job queue, checkpointing service, storage adapters
 - Used by: UI via REST and SSE
-- Location: `src/backend/main.py`
+- Locations: `src/backend/main.py`, `src/backend/service/routers/`
+
+**Job Queue Layer:**
+- Purpose: Background job execution with Redis + RQ
+- Contains: Job submission, status tracking, worker coordination
+- Depends on: Redis, Modal GPU workers
+- Used by: API layer for non-blocking training
+- Locations: `src/backend/service/routers/jobs.py`, `src/backend/service/jobs/`
+
+**Checkpointing Layer:**
+- Purpose: Training state persistence for crash recovery and pause/resume
+- Contains: Checkpoint save/load/delete, HuggingFace Hub integration
+- Depends on: HuggingFace Hub API, PyTorch
+- Used by: Training job function
+- Location: `src/backend/service/services/checkpointing.py`
 
 **Processing Layer:**
 - Purpose: Curve generation, training, inference pipelines
 - Contains: pyreflect pipelines, numpy processing, streaming output
 - Depends on: pyreflect, numpy, torch
-- Used by: API endpoints
-- Location: `src/backend/main.py`
+- Used by: API endpoints and job workers
+- Locations: `src/backend/main.py`, `src/backend/service/jobs/__init__.py`
 
 **Persistence Layer:**
 - Purpose: Optional history storage and model persistence
 - Contains: MongoDB access, local filesystem storage, Hugging Face offload
 - Depends on: pymongo, filesystem, huggingface_hub
 - Used by: API endpoints
-- Location: `src/backend/main.py`, `src/backend/data/`
+- Locations: `src/backend/main.py`, `src/backend/data/`
 
 ## Data Flow
 
@@ -64,6 +80,21 @@
 3. pyreflect pipeline runs and streams logs/results
 4. UI consumes SSE events and updates charts in `src/interface/src/components/GraphDisplay.tsx`
 
+**Background Training (Queue):**
+1. UI submits job via `POST /api/jobs/submit`
+2. Backend enqueues to Redis, triggers Modal worker spawn
+3. Modal GPU worker picks up job, runs training with periodic checkpoint saves
+4. Worker updates `job.meta` in Redis every second (progress, logs)
+5. UI polls `/api/jobs/{job_id}` to show progress
+6. On completion, worker uploads model to HuggingFace, saves to MongoDB history
+
+**Pause/Resume:**
+1. User clicks Pause in UI
+2. Backend sets `pause_requested` flag in job meta
+3. Worker sees flag, saves checkpoint to HuggingFace, exits with status "paused"
+4. User clicks Resume
+5. Backend creates new job, worker loads checkpoint and continues from saved epoch
+
 **History:**
 1. UI sends `X-User-ID` header in `src/interface/src/app/page.tsx`
 2. Backend stores and fetches history via MongoDB in `src/backend/main.py`
@@ -71,6 +102,7 @@
 **State Management:**
 - Frontend: React state + localStorage (`src/interface/src/app/page.tsx`)
 - Backend: Local filesystem under `src/backend/data/` and optional MongoDB
+- Job state: Redis (RQ job meta, updated every ~1s by worker)
 
 ## Key Abstractions
 
@@ -83,6 +115,16 @@
 - Purpose: SSE progress and log streaming
 - Examples: `generate_with_pyreflect_streaming` in `src/backend/main.py`
 - Pattern: Generator yielding SSE events
+
+**Checkpoint:**
+- Purpose: Serializable training state for persistence
+- Examples: `Checkpoint` dataclass in `src/backend/service/services/checkpointing.py`
+- Pattern: Dataclass with model/optimizer state dicts, losses, epoch info
+
+**Job Functions:**
+- Purpose: Background task execution
+- Examples: `run_training_job` in `src/backend/service/jobs/__init__.py`
+- Pattern: RQ-compatible function with meta updates and checkpoint integration
 
 **UI Components:**
 - Purpose: UI modules and panels
@@ -131,5 +173,5 @@
 
 ---
 
-*Architecture analysis: 2026-01-16*
+*Architecture analysis: 2026-01-20*
 *Update when major patterns change*
