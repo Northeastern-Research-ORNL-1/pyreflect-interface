@@ -26,6 +26,11 @@ type BundleEstimate = {
   pngExpandedBytes: number;
   modelBytes: number | null;
   modelSource?: string | null;
+  modelUrl?: string | null;
+  nrDataBytes: number | null;
+  nrDataUrl?: string | null;
+  sldDataBytes: number | null;
+  sldDataUrl?: string | null;
   totalBytes: number | null;
   estimating: boolean;
 };
@@ -39,6 +44,45 @@ type UseDownloadBundleArgs = {
   onLoadSave: (params: BundleParams, result: GenerateResponse) => void;
 };
 
+// Helper to fetch with progress tracking
+async function fetchWithProgress(
+  url: string,
+  options: RequestInit,
+  onProgress: (loaded: number) => void
+): Promise<Uint8Array> {
+  const response = await fetch(url, options);
+  if (!response.ok) throw new Error(`Fetch failed: ${response.statusText}`);
+
+  const reader = response.body?.getReader();
+
+  if (!reader) {
+    const buffer = await response.arrayBuffer();
+    onProgress(buffer.byteLength);
+    return new Uint8Array(buffer);
+  }
+
+  const chunks: Uint8Array[] = [];
+  let loaded = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      chunks.push(value);
+      loaded += value.length;
+      onProgress(loaded);
+    }
+  }
+
+  const combined = new Uint8Array(loaded);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return combined;
+}
+
 export function useDownloadBundle({
   apiUrl,
   addLog,
@@ -47,6 +91,7 @@ export function useDownloadBundle({
   userId,
   onLoadSave,
 }: UseDownloadBundleArgs) {
+  const [downloadProgress, setDownloadProgress] = useState(0);
   const [showBundleConfirm, setShowBundleConfirm] = useState(false);
   const [bundlePayload, setBundlePayload] = useState<BundlePayload | null>(null);
   const [isDownloadingBundle, setIsDownloadingBundle] = useState(false);
@@ -55,6 +100,8 @@ export function useDownloadBundle({
     includePngNormal: true,
     includePngExpanded: true,
     includeModel: true,
+    includeNrData: true,
+    includeSldData: true,
   });
   const [exportPngs, setExportPngs] = useState<ExportPngs | null>(null);
   const [shouldCapturePngs, setShouldCapturePngs] = useState(false);
@@ -65,6 +112,11 @@ export function useDownloadBundle({
     pngExpandedBytes: 0,
     modelBytes: null,
     modelSource: null,
+    modelUrl: null,
+    nrDataBytes: null,
+    nrDataUrl: null,
+    sldDataBytes: null,
+    sldDataUrl: null,
     totalBytes: null,
     estimating: false,
   });
@@ -96,6 +148,8 @@ export function useDownloadBundle({
       includePngNormal: true,
       includePngExpanded: true,
       includeModel: Boolean(payload.result.model_id),
+      includeNrData: Boolean(payload.result.model_id),
+      includeSldData: Boolean(payload.result.model_id),
     });
     bundlePngCacheRef.current = null;
   }, []);
@@ -198,24 +252,60 @@ export function useDownloadBundle({
 
       let modelBytes: number | null = null;
       let modelSource: string | null = null;
-      if (bundleSelection.includeModel && bundlePayload.result.model_id) {
-        try {
-          const res = await fetch(`${apiUrl}/api/models/${bundlePayload.result.model_id}/info`, {
-            headers: userId ? { 'X-User-ID': userId } : undefined,
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (typeof data.size_mb === 'number') {
-              modelBytes = data.size_mb * 1024 * 1024;
+      let modelUrl: string | null = null;
+      let nrDataBytes: number | null = null;
+      let nrDataUrl: string | null = null;
+      let sldDataBytes: number | null = null;
+      let sldDataUrl: string | null = null;
+      
+      if (bundlePayload.result.model_id) {
+        // Fetch model info
+        if (bundleSelection.includeModel) {
+          try {
+            const res = await fetch(`${apiUrl}/api/models/${bundlePayload.result.model_id}/info`, {
+              headers: userId ? { 'X-User-ID': userId } : undefined,
+            });
+            if (res.ok) {
+              const data = await res.json();
+              if (typeof data.size_mb === 'number') {
+                modelBytes = data.size_mb * 1024 * 1024;
+              }
+              modelSource = data.source || null;
+              modelUrl = data.download_url || null;
             }
-            modelSource = data.source || null;
+          } catch {
+            modelSource = null;
           }
-        } catch {
-          modelSource = null;
+        }
+        
+        // Fetch training data info if needed
+        if (bundleSelection.includeNrData || bundleSelection.includeSldData) {
+          try {
+            const res = await fetch(`${apiUrl}/api/models/${bundlePayload.result.model_id}/training-data-info`, {
+              headers: userId ? { 'X-User-ID': userId } : undefined,
+            });
+            if (res.ok) {
+              const data = await res.json();
+              if (bundleSelection.includeNrData) {
+                if (typeof data.nr_size_mb === 'number') {
+                  nrDataBytes = data.nr_size_mb * 1024 * 1024;
+                }
+                nrDataUrl = data.nr_url || null;
+              }
+              if (bundleSelection.includeSldData) {
+                if (typeof data.sld_size_mb === 'number') {
+                  sldDataBytes = data.sld_size_mb * 1024 * 1024;
+                }
+                sldDataUrl = data.sld_url || null;
+              }
+            }
+          } catch {
+            // usage of null indicates unknown size
+          }
         }
       }
 
-      const totalBytes = jsonBytes + pngBytes + (modelBytes ?? 0);
+      const totalBytes = jsonBytes + pngBytes + (modelBytes ?? 0) + (nrDataBytes ?? 0) + (sldDataBytes ?? 0);
 
       if (cancelled) return;
       setBundleEstimate({
@@ -225,6 +315,11 @@ export function useDownloadBundle({
         pngExpandedBytes,
         modelBytes,
         modelSource,
+        modelUrl,
+        nrDataBytes,
+        nrDataUrl,
+        sldDataBytes,
+        sldDataUrl,
         totalBytes,
         estimating: false,
       });
@@ -298,6 +393,16 @@ export function useDownloadBundle({
         return;
       }
 
+      setDownloadProgress(0);
+      const totalExpected = (bundleEstimate.totalBytes && bundleEstimate.totalBytes > 0)
+        ? bundleEstimate.totalBytes
+        : 1024 * 1024 * 100;
+      const loadedBytes = { model: 0, nr: 0, sld: 0, others: 0 };
+      const updateProgress = () => {
+        const total = loadedBytes.model + loadedBytes.nr + loadedBytes.sld + loadedBytes.others;
+        setDownloadProgress(Math.min(0.99, Math.max(0, total / totalExpected)));
+      };
+
       const files: Record<string, Uint8Array> = {};
 
       try {
@@ -345,6 +450,10 @@ export function useDownloadBundle({
         // Signal that capture phase is done - overlay can dismiss now
         onCaptureComplete?.();
 
+        // Update progress for generated content
+        loadedBytes.others = (bundleEstimate.jsonBytes || 0) + (bundleEstimate.pngBytes || 0);
+        updateProgress();
+
         if (bundleSelection.includeJson) {
           const { export_pngs: _exportPngs, ...resultWithoutPngs } = resolvedResult;
           void _exportPngs;
@@ -380,20 +489,82 @@ export function useDownloadBundle({
           if (!userId) {
             addLog('Sign in to download model file.');
           } else {
-            const modelRes = await fetch(`${apiUrl}/api/models/${resolvedResult.model_id}`, {
-              headers: { 'X-User-ID': userId },
-            });
-          if (modelRes.ok) {
-            const modelBuffer = await modelRes.arrayBuffer();
-            files[`model_${resolvedResult.model_id}.pth`] = new Uint8Array(modelBuffer);
-          } else {
-            addLog('Model file not found for this run.');
-          }
+            try {
+              let url;
+              let options: RequestInit = {};
+              if (bundleEstimate.modelUrl) {
+                url = bundleEstimate.modelUrl;
+              } else {
+                url = `${apiUrl}/api/models/${resolvedResult.model_id}`;
+                options = { headers: { 'X-User-ID': userId } };
+              }
+
+              const data = await fetchWithProgress(url, options, (loaded) => {
+                loadedBytes.model = loaded;
+                updateProgress();
+              });
+              files[`model_${resolvedResult.model_id}.pth`] = data;
+            } catch {
+              addLog('Failed to fetch model file.');
+            }
           }
         } else if (bundleSelection.includeModel && !resolvedResult.model_id) {
           addLog('No model file associated with this run.');
         }
 
+        // Download NR training data
+        if (bundleSelection.includeNrData && resolvedResult.model_id) {
+          if (!userId) {
+            addLog('Sign in to download NR training data.');
+          } else {
+            try {
+              let url;
+              let options: RequestInit = {};
+              if (bundleEstimate.nrDataUrl) {
+                url = bundleEstimate.nrDataUrl;
+              } else {
+                url = `${apiUrl}/api/models/${resolvedResult.model_id}/training-data/nr_train`;
+                options = { headers: { 'X-User-ID': userId } };
+              }
+
+              const data = await fetchWithProgress(url, options, (loaded) => {
+                loadedBytes.nr = loaded;
+                updateProgress();
+              });
+              files[`nr_train_${resolvedResult.model_id}.npy`] = data;
+            } catch {
+              addLog('Failed to fetch NR training data.');
+            }
+          }
+        }
+
+        // Download SLD training data
+        if (bundleSelection.includeSldData && resolvedResult.model_id) {
+          if (!userId) {
+            addLog('Sign in to download SLD training data.');
+          } else {
+            try {
+              let url;
+              let options: RequestInit = {};
+              if (bundleEstimate.sldDataUrl) {
+                url = bundleEstimate.sldDataUrl;
+              } else {
+                url = `${apiUrl}/api/models/${resolvedResult.model_id}/training-data/sld_train`;
+                options = { headers: { 'X-User-ID': userId } };
+              }
+
+              const data = await fetchWithProgress(url, options, (loaded) => {
+                loadedBytes.sld = loaded;
+                updateProgress();
+              });
+              files[`sld_train_${resolvedResult.model_id}.npy`] = data;
+            } catch {
+              addLog('Failed to fetch SLD training data.');
+            }
+          }
+        }
+
+        setDownloadProgress(0.99);
         const zipData = await new Promise<Uint8Array>((resolve, reject) => {
           zip(files, { level: 6 }, (err, data) => {
             if (err) reject(err);
@@ -409,8 +580,13 @@ export function useDownloadBundle({
         link.click();
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
+        
+        setDownloadProgress(1.0);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        setDownloadProgress(0);
         addLog('Download bundle ready.');
       } catch (err) {
+        setDownloadProgress(0);
         const errorMsg = err instanceof Error ? err.message : 'Failed to build download bundle';
         addLog(`Download error: ${errorMsg}`);
       }
@@ -484,6 +660,7 @@ export function useDownloadBundle({
     showBundleConfirm,
     bundlePayload,
     isDownloadingBundle,
+    downloadProgress,
     bundleSelection,
     setBundleSelection,
     bundleEstimate,

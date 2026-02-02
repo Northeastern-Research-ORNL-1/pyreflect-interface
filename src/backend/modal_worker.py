@@ -59,6 +59,8 @@ def _build_worker_image(
             "requests",
             "pymongo",
             "huggingface_hub",
+            "pydantic",
+            "fastapi",
         )
     )
 

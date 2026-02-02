@@ -61,7 +61,9 @@ def generate_with_pyreflect_streaming(
         return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
     if not PYREFLECT.available or PYREFLECT.reflectivity_pipeline is None:
-        yield emit("error", "pyreflect not available. Please install pyreflect dependencies.")
+        yield emit(
+            "error", "pyreflect not available. Please install pyreflect dependencies."
+        )
         return
 
     ReflectivityDataGenerator = PYREFLECT.ReflectivityDataGenerator
@@ -71,7 +73,9 @@ def generate_with_pyreflect_streaming(
     torch = PYREFLECT.torch
     compute_nr_from_sld = PYREFLECT.compute_nr_from_sld
 
-    device, device_reason = resolve_torch_device(torch, runtime_device=runtime_device, prefer_cuda=True)
+    device, device_reason = resolve_torch_device(
+        torch, runtime_device=runtime_device, prefer_cuda=True
+    )
     if device_reason:
         yield emit("log", f"Warning: {device_reason}")
     yield emit("log", f"Device selected: {device!s}")
@@ -150,7 +154,23 @@ def generate_with_pyreflect_streaming(
     except Exception as exc:
         yield emit("log", f"Warning: Could not check/wait for local model slots: {exc}")
 
-    data_generator = ReflectivityDataGenerator(num_layers=gen_params.numFilmLayers)
+    layer_desc = None
+    layer_bound = None
+    if gen_params.layerBound:
+        layer_desc = [
+            layer.model_dump() if hasattr(layer, "model_dump") else layer
+            for layer in layers
+        ]
+        layer_bound = [
+            b.model_dump() if hasattr(b, "model_dump") else b
+            for b in gen_params.layerBound
+        ]
+
+    data_generator = ReflectivityDataGenerator(
+        num_layers=gen_params.numFilmLayers,
+        layer_desc=layer_desc,
+        layer_bound=layer_bound,
+    )
     gen_start = time.perf_counter()
     log_queue: "queue.Queue[str]" = queue.Queue()
     gen_warnings: list[warnings.WarningMessage] = []
@@ -165,8 +185,9 @@ def generate_with_pyreflect_streaming(
                 warnings.filterwarnings(
                     "ignore", message=".*data argument is deprecated.*"
                 )
-                with redirect_stdout(cast(TextIO, writer)), redirect_stderr(
-                    cast(TextIO, writer)
+                with (
+                    redirect_stdout(cast(TextIO, writer)),
+                    redirect_stderr(cast(TextIO, writer)),
                 ):
                     result = data_generator.generate(gen_params.numCurves)
             gen_warnings.extend(warn_list)
@@ -192,7 +213,10 @@ def generate_with_pyreflect_streaming(
         raise gen_error[0]
     nr_curves, sld_curves = gen_result["data"]
     gen_time = time.perf_counter() - gen_start
-    yield emit("log", f"   Generated NR shape: {nr_curves.shape}, SLD shape: {sld_curves.shape}")
+    yield emit(
+        "log",
+        f"   Generated NR shape: {nr_curves.shape}, SLD shape: {sld_curves.shape}",
+    )
     yield emit("log", f"Generation took {gen_time:.2f}s")
     for warning_msg in emit_warnings("generation", gen_warnings):
         yield warning_msg
@@ -216,16 +240,22 @@ def generate_with_pyreflect_streaming(
         "log",
         f"Training CNN model ({train_params.epochs} epochs, batch size {train_params.batchSize})...",
     )
-    model = CNN(layers=train_params.layers, dropout_prob=train_params.dropout).to(device)
+    model = CNN(layers=train_params.layers, dropout_prob=train_params.dropout).to(
+        device
+    )
     model.train()
 
-    list_arrays = DataProcessor.split_arrays(reshaped_nr, normalized_sld, size_split=SPLIT_RATIO)
+    list_arrays = DataProcessor.split_arrays(
+        reshaped_nr, normalized_sld, size_split=SPLIT_RATIO
+    )
     tensor_arrays = DataProcessor.convert_tensors(list_arrays)
     _, _, _, train_loader, valid_loader, _ = DataProcessor.get_dataloaders(
         *tensor_arrays, batch_size=train_params.batchSize
     )
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+    optimizer = torch.optim.Adam(
+        model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY
+    )
     loss_fn = torch.nn.MSELoss()
 
     epoch_list = []
@@ -261,7 +291,12 @@ def generate_with_pyreflect_streaming(
 
         yield emit(
             "progress",
-            {"epoch": epoch + 1, "total": train_params.epochs, "trainLoss": train_loss, "valLoss": val_loss},
+            {
+                "epoch": epoch + 1,
+                "total": train_params.epochs,
+                "trainLoss": train_loss,
+                "valLoss": val_loss,
+            },
         )
 
         heartbeat = maybe_heartbeat()
@@ -325,7 +360,9 @@ def generate_with_pyreflect_streaming(
                     repo_type="dataset",
                 ):
                     model_path.unlink()
-                    yield emit("log", "Verified on HF. Local model file deleted (cleanup)")
+                    yield emit(
+                        "log", "Verified on HF. Local model file deleted (cleanup)"
+                    )
                 else:
                     yield emit(
                         "log",
@@ -380,15 +417,23 @@ def generate_with_pyreflect_streaming(
                 yield warning_msg
             computed_nr = computed_r.tolist()
         except Exception as exc:
-            yield emit("log", f"Warning: Could not compute NR from predicted SLD: {exc}")
+            yield emit(
+                "log", f"Warning: Could not compute NR from predicted SLD: {exc}"
+            )
             computed_nr = gt_nr[1].tolist()
     else:
-        yield emit("log", "Warning: compute_nr_from_sld not available; using ground truth NR.")
+        yield emit(
+            "log", "Warning: compute_nr_from_sld not available; using ground truth NR."
+        )
         computed_nr = gt_nr[1].tolist()
 
     sample_indices = np.linspace(0, len(pred_sld_y) - 1, 50, dtype=int)
     chi = [
-        {"x": int(i), "predicted": float(pred_sld_y[idx]), "actual": float(gt_sld[1][idx])}
+        {
+            "x": int(i),
+            "predicted": float(pred_sld_y[idx]),
+            "actual": float(gt_sld[1][idx]),
+        }
         for i, idx in enumerate(sample_indices)
     ]
 
@@ -404,11 +449,27 @@ def generate_with_pyreflect_streaming(
     )
 
     result = {
-        "nr": {"q": gt_nr[0].tolist(), "groundTruth": gt_nr[1].tolist(), "computed": computed_nr},
-        "sld": {"z": sld_z.tolist(), "groundTruth": gt_sld[1].tolist(), "predicted": pred_sld_y.tolist()},
-        "training": {"epochs": epoch_list, "trainingLoss": train_losses, "validationLoss": val_losses},
+        "nr": {
+            "q": gt_nr[0].tolist(),
+            "groundTruth": gt_nr[1].tolist(),
+            "computed": computed_nr,
+        },
+        "sld": {
+            "z": sld_z.tolist(),
+            "groundTruth": gt_sld[1].tolist(),
+            "predicted": pred_sld_y.tolist(),
+        },
+        "training": {
+            "epochs": epoch_list,
+            "trainingLoss": train_losses,
+            "validationLoss": val_losses,
+        },
         "chi": chi,
-        "metrics": {"mse": float(final_mse), "r2": float(np.clip(r2, 0, 1)), "mae": mae},
+        "metrics": {
+            "mse": float(final_mse),
+            "r2": float(np.clip(r2, 0, 1)),
+            "mae": mae,
+        },
         "name": name,
         "model_id": model_id,
     }
@@ -450,7 +511,9 @@ def generate_with_pyreflect(
     torch = PYREFLECT.torch
     compute_nr_from_sld = PYREFLECT.compute_nr_from_sld
 
-    device, device_reason = resolve_torch_device(torch, runtime_device=runtime_device, prefer_cuda=True)
+    device, device_reason = resolve_torch_device(
+        torch, runtime_device=runtime_device, prefer_cuda=True
+    )
     if device_reason:
         print(f"Warning: {device_reason}")
     print(f"Device selected: {device!s}")
@@ -459,7 +522,23 @@ def generate_with_pyreflect(
         f"Generating {gen_params.numCurves} synthetic curves with {gen_params.numFilmLayers} film layers..."
     )
 
-    data_generator = ReflectivityDataGenerator(num_layers=gen_params.numFilmLayers)
+    layer_desc = None
+    layer_bound = None
+    if gen_params.layerBound:
+        layer_desc = [
+            layer.model_dump() if hasattr(layer, "model_dump") else layer
+            for layer in layers
+        ]
+        layer_bound = [
+            b.model_dump() if hasattr(b, "model_dump") else b
+            for b in gen_params.layerBound
+        ]
+
+    data_generator = ReflectivityDataGenerator(
+        num_layers=gen_params.numFilmLayers,
+        layer_desc=layer_desc,
+        layer_bound=layer_bound,
+    )
     nr_curves, sld_curves = data_generator.generate(gen_params.numCurves)
     print(f"   Generated NR shape: {nr_curves.shape}, SLD shape: {sld_curves.shape}")
 
@@ -481,16 +560,22 @@ def generate_with_pyreflect(
     print(
         f"Training CNN model ({train_params.epochs} epochs, batch size {train_params.batchSize})..."
     )
-    model = CNN(layers=train_params.layers, dropout_prob=train_params.dropout).to(device)
+    model = CNN(layers=train_params.layers, dropout_prob=train_params.dropout).to(
+        device
+    )
     model.train()
 
-    list_arrays = DataProcessor.split_arrays(reshaped_nr, normalized_sld, size_split=SPLIT_RATIO)
+    list_arrays = DataProcessor.split_arrays(
+        reshaped_nr, normalized_sld, size_split=SPLIT_RATIO
+    )
     tensor_arrays = DataProcessor.convert_tensors(list_arrays)
     _, _, _, train_loader, valid_loader, _ = DataProcessor.get_dataloaders(
         *tensor_arrays, batch_size=train_params.batchSize
     )
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+    optimizer = torch.optim.Adam(
+        model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY
+    )
     loss_fn = torch.nn.MSELoss()
 
     epoch_list: list[int] = []
@@ -600,7 +685,9 @@ def generate_with_pyreflect(
 
     sample_indices = np.linspace(0, len(pred_sld_y) - 1, 50, dtype=int)
     chi = [
-        ChiDataPoint(x=int(i), predicted=float(pred_sld_y[idx]), actual=float(gt_sld[1][idx]))
+        ChiDataPoint(
+            x=int(i), predicted=float(pred_sld_y[idx]), actual=float(gt_sld[1][idx])
+        )
         for i, idx in enumerate(sample_indices)
     ]
 
@@ -609,9 +696,17 @@ def generate_with_pyreflect(
     mae = float(np.mean(np.abs(pred_sld_y - gt_sld[1])))
 
     return GenerateResponse(
-        nr=NRData(q=gt_nr[0].tolist(), groundTruth=gt_nr[1].tolist(), computed=computed_nr),
-        sld=SLDData(z=sld_z.tolist(), groundTruth=gt_sld[1].tolist(), predicted=pred_sld_y.tolist()),
-        training=TrainingData(epochs=epoch_list, trainingLoss=train_losses, validationLoss=val_losses),
+        nr=NRData(
+            q=gt_nr[0].tolist(), groundTruth=gt_nr[1].tolist(), computed=computed_nr
+        ),
+        sld=SLDData(
+            z=sld_z.tolist(),
+            groundTruth=gt_sld[1].tolist(),
+            predicted=pred_sld_y.tolist(),
+        ),
+        training=TrainingData(
+            epochs=epoch_list, trainingLoss=train_losses, validationLoss=val_losses
+        ),
         chi=chi,
         metrics=Metrics(mse=float(final_mse), r2=float(np.clip(r2, 0, 1)), mae=mae),
         model_id=model_id,

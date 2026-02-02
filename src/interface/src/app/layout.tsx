@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Script from 'next/script';
 import './globals.css';
 import AuthProvider from '../components/AuthProvider';
 
@@ -14,6 +15,20 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        <Script
+          src="http://localhost:3000/actuator.js"
+          data-pulse-key="pk_L_M3w7dKN9nDSNxGhTaj--iTJ1gzcSNS"
+          data-api-url="http://localhost:8000"
+          data-debug="true"
+          data-always-record="true"
+          strategy="beforeInteractive"
+        />
+        <Script
+          src="https://cdn.jsdelivr.net/npm/@rrweb/record@latest/dist/record.umd.min.cjs"
+          strategy="beforeInteractive"
+        />
+      </head>
       <body>
         <AuthProvider>{children}</AuthProvider>
       </body>

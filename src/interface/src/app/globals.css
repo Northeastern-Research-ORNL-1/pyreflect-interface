@@ -16,6 +16,7 @@
   --color-gray-200: #d0d0d0;
   --color-gray-100: #e8e8e8;
   --color-white: #ffffff;
+  --color-red: #dc2626;
   
   /* Semantic colors */
   --bg-primary: var(--color-white);
@@ -613,7 +614,7 @@ select.control__input {
   align-items: center;
   justify-content: center;
   font-size: var(--font-size-lg);
-  color: var(--text-muted);
+  color: var(--color-red);
   background: none;
   border: none;
   cursor: pointer;

@@ -8,6 +8,8 @@ export type BundleSelection = {
   includePngNormal: boolean;
   includePngExpanded: boolean;
   includeModel: boolean;
+  includeNrData: boolean;
+  includeSldData: boolean;
 };
 
 type BundleEstimate = {
@@ -16,6 +18,8 @@ type BundleEstimate = {
   pngExpandedBytes: number;
   modelBytes: number | null;
   modelSource?: string | null;
+  nrDataBytes: number | null;
+  sldDataBytes: number | null;
   totalBytes: number | null;
   estimating: boolean;
 };
@@ -31,6 +35,7 @@ type DownloadBundleModalProps = {
   onClose: () => void;
   onConfirm: () => void;
   onSelectionChange: (patch: Partial<BundleSelection>) => void;
+  progress?: number;
 };
 
 export default function DownloadBundleModal({
@@ -44,6 +49,7 @@ export default function DownloadBundleModal({
   onClose,
   onConfirm,
   onSelectionChange,
+  progress = 0,
 }: DownloadBundleModalProps) {
   if (!isOpen || !hasPayload) return null;
 
@@ -51,7 +57,9 @@ export default function DownloadBundleModal({
     selection.includeJson ||
     selection.includePngNormal ||
     selection.includePngExpanded ||
-    (selection.includeModel && hasModel);
+    (selection.includeModel && hasModel) ||
+    (selection.includeNrData && hasModel) ||
+    (selection.includeSldData && hasModel);
 
   return (
     <>
@@ -152,6 +160,58 @@ export default function DownloadBundleModal({
                   : 'Not available'}
               </span>
             </label>
+            <label className="download-option">
+              <span className="download-option__label">
+                <input
+                  type="checkbox"
+                  className="download-checkbox"
+                  checked={selection.includeNrData}
+                  disabled={!hasModel}
+                  onChange={(e) => onSelectionChange({ includeNrData: e.target.checked })}
+                />
+                <span className="download-option__text">
+                  NR Data (.npy)
+                  <InfoTooltip hint="Neutron reflectivity training curves used to train this model." />
+                </span>
+              </span>
+              <span className="download-option__size">
+                {hasModel
+                  ? selection.includeNrData
+                    ? estimate.nrDataBytes !== null
+                      ? formatBytes(estimate.nrDataBytes)
+                      : estimate.estimating
+                        ? 'Estimating...'
+                        : 'Unknown'
+                    : 'Not selected'
+                  : 'Not available'}
+              </span>
+            </label>
+            <label className="download-option">
+              <span className="download-option__label">
+                <input
+                  type="checkbox"
+                  className="download-checkbox"
+                  checked={selection.includeSldData}
+                  disabled={!hasModel}
+                  onChange={(e) => onSelectionChange({ includeSldData: e.target.checked })}
+                />
+                <span className="download-option__text">
+                  SLD Data (.npy)
+                  <InfoTooltip hint="Scattering length density profiles used to train this model." />
+                </span>
+              </span>
+              <span className="download-option__size">
+                {hasModel
+                  ? selection.includeSldData
+                    ? estimate.sldDataBytes !== null
+                      ? formatBytes(estimate.sldDataBytes)
+                      : estimate.estimating
+                        ? 'Estimating...'
+                        : 'Unknown'
+                    : 'Not selected'
+                  : 'Not available'}
+              </span>
+            </label>
           </div>
           <div style={{ fontSize: '12px' }}>
             Total:{' '}
@@ -171,10 +231,19 @@ export default function DownloadBundleModal({
           <button
             className="btn"
             onClick={onConfirm}
-            style={{ padding: '6px 12px', fontSize: '11px' }}
+            style={{ 
+              padding: '6px 12px', 
+              fontSize: '11px',
+              background: isDownloading 
+                ? `linear-gradient(to right, var(--text-link) ${progress * 100}%, var(--surface-hover) ${progress * 100}%)` 
+                : undefined,
+              borderColor: isDownloading ? 'transparent' : undefined,
+              color: isDownloading ? '#fff' : undefined,
+              transition: 'background 0.2s ease',
+            }}
             disabled={!canDownload || isDownloading}
           >
-            {isDownloading ? 'BUILDING...' : 'DOWNLOAD'}
+            {isDownloading ? `DOWNLOADING ${(progress * 100).toFixed(0)}%` : 'DOWNLOAD'}
           </button>
         </div>
       </div>
