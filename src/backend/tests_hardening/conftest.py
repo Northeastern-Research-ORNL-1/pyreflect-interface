@@ -87,4 +87,5 @@ def app(tmp_backend_layout: dict[str, Path]) -> FastAPI:
 
 @pytest.fixture()
 def client(app: FastAPI) -> TestClient:
+    """Test client for the FastAPI app."""
     return TestClient(app)
