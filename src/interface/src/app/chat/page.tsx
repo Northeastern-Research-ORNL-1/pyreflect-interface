@@ -3,7 +3,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import WelcomeScreen from './components/WelcomeScreen';
 import Message from './components/Message';
-import ChatInput from './components/ChatInput';
 import GraphDisplay from '@/components/GraphDisplay';
 import { GenerateResponse } from '@/types';
 
@@ -34,6 +33,15 @@ interface HistoryItem {
   result: GenerateResponse;
   timestamp: Date;
   duration: number;
+}
+
+interface UploadedFile {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+  data: string | ArrayBuffer | null;
+  preview?: string[][];
 }
 
 const SLD_VALUES: Record<string, number> = {
@@ -277,7 +285,7 @@ function ParameterPanel({
         )}
       </div>
 
-      {/* Toggle Button - Always visible at bottom */}
+      {/* Toggle Button */}
       <button onClick={onToggle}
         style={{ position: 'absolute', bottom: '-32px', left: '50%', transform: 'translateX(-50%)', background: '#1a1a1a', border: '1px solid #333', borderTop: 'none', color: '#888', padding: '4px 16px', cursor: 'pointer', fontSize: '10px', fontFamily: 'monospace', display: 'flex', alignItems: 'center', gap: '6px' }}>
         <span style={{ transform: isCollapsed ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 0.3s' }}>▲</span>
@@ -375,15 +383,6 @@ function StatusBar({ history, isGenerating, lastDuration, onHistoryClick }: { hi
   );
 }
 
-interface UploadedFile {
-  id: string;
-  name: string;
-  size: number;
-  type: string;
-  data: string | ArrayBuffer | null;
-  preview?: string[][];
-}
-
 export default function ChatPage() {
   const [messages, setMessages] = useState<MessageType[]>([]);
   const [input, setInput] = useState('');
@@ -418,7 +417,6 @@ export default function ChatPage() {
           data: event.target?.result || null
         };
 
-        // Parse CSV preview
         if (file.name.endsWith('.csv') || file.type === 'text/csv') {
           const text = event.target?.result as string;
           const lines = text.split('\n').slice(0, 6);
@@ -462,7 +460,7 @@ export default function ChatPage() {
       setGraphData(result);
       
       const historyItem: HistoryItem = {
-        id: result.model_id || Math.random().toString(36).substr(2, 9),
+        id: result.model_id ?? `generation_${Date.now()}`,
         config,
         result,
         timestamp: new Date(),
@@ -511,7 +509,10 @@ export default function ChatPage() {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'nousresearch/hermes-3-llama-3.1-405b:free',
+          model: 'z-ai/glm-4.5-air:free',
+          reasoning: {
+            enabled: true
+          },
           messages: [
             { role: 'system', content: `You are PyReflect AI. Help users set up neutron reflectivity experiments. Ask ONE question at a time. When ready, output JSON with ready_to_generate: true, substrate, layers array, and environment. Common SLDs: Silicon 2.07, SiO2 3.47, Air 0, D2O 6.36, Gold 4.5, PMMA 1.0` },
             ...messages.map(m => ({ role: m.role, content: m.content })),
@@ -543,6 +544,7 @@ export default function ChatPage() {
     setGraphData(null);
     setPendingConfig(null);
     setParamsCollapsed(false);
+    setUploadedFiles([]);
   };
 
   const handleHistorySelect = (item: HistoryItem) => {
@@ -588,6 +590,7 @@ export default function ChatPage() {
               </div>
             )}
           </div>
+
           {/* Chat Input with File Upload */}
           <div style={{ borderTop: '1px solid #2a2a2a', padding: '12px 16px' }}>
             {/* Uploaded Files */}
