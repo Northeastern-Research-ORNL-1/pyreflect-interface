@@ -17,16 +17,14 @@ export default function RootLayout({
     <html lang="en">
       <head>
         <Script
-          src="http://localhost:3000/actuator.js"
-          data-pulse-key="pk_L_M3w7dKN9nDSNxGhTaj--iTJ1gzcSNS"
+          src="http://localhost:8000/actuator.js"
+          data-public-key="pk_yL8jdHHZkup30OMOjlodRWzwANCuto51"
           data-api-url="http://localhost:8000"
           data-debug="true"
           data-always-record="true"
-          strategy="beforeInteractive"
         />
         <Script
           src="https://cdn.jsdelivr.net/npm/@rrweb/record@latest/dist/record.umd.min.cjs"
-          strategy="beforeInteractive"
         />
       </head>
       <body>

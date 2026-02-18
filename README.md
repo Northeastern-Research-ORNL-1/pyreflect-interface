@@ -747,18 +747,75 @@ CORS_ORIGINS=http://localhost:3000,https://your-app.vercel.app
 
 For pretrained models or existing datasets, use the **Data & Models** section:
 
-```
-Supported files:
-├── *.npy          → Saved to src/backend/data/curves/
-├── *.pth, *.pt    → Saved to src/backend/data/
-└── settings.yml   → Saved to src/backend/
-```
+You do **not** need to manually place files in backend folders if you upload through the UI.
+Pick the correct **role** and the backend stores the file + updates `settings.yml`.
 
-Files from `pyreflect/datasets/` can be uploaded:
+For your files specifically:
 
-- `normalization_stat.npy` - Normalization statistics
-- `trained_nr_sld_model_no_dropout.pth` - Pretrained CNN model
-- `X_train_5_layers.npy`, `y_train_5_layers.npy` - Training data
+- `NR_EXP.npy` → upload as `experimental_nr`
+- `nr-5-train.npy` → upload as `nr_train`
+- `sld-5-train.npy` → upload as `sld_train`
+- `trained_nr_sld_model_no_dropout.pt` → upload as `nr_sld_model`
+- (optional) `normalization_stat.npy` → upload as `normalization_stats`
+
+Role mapping (what goes where):
+
+| Upload role | Expected content | Stored on disk | Updated `settings.yml` key |
+| ----------- | ---------------- | -------------- | -------------------------- |
+| `nr_train` | NR training curves (`.npy`) | `src/backend/data/curves/` | `nr_predict_sld.file.nr_train` |
+| `sld_train` | SLD training curves (`.npy`) | `src/backend/data/curves/` | `nr_predict_sld.file.sld_train` |
+| `experimental_nr` | Experimental NR curves (`.npy`) | `src/backend/data/expt/` | `nr_predict_sld.file.experimental_nr_file` |
+| `nr_sld_model` | NR→SLD weights (`.pth` / `.pt`) | `src/backend/data/models/` | `nr_predict_sld.models.model` |
+| `normalization_stats` | Normalization stats (`.npy` / `.npz` / `.json`) | `src/backend/data/` (saved canonical as `.npy`) | `nr_predict_sld.models.normalization_stats` |
+| `sld_chi_experimental_profile` | Experimental SLD profile (`.npy`) | `src/backend/data/` | `sld_predict_chi.file.model_experimental_sld_profile` |
+| `sld_chi_model_sld_file` | SLD→Chi SLD training file (`.npy`) | `src/backend/data/` | `sld_predict_chi.file.model_sld_file` |
+| `sld_chi_model_chi_params_file` | SLD→Chi chi-params file (`.npy`) | `src/backend/data/` | `sld_predict_chi.file.model_chi_params_file` |
+
+Shape handling and canonicalization:
+
+- Canonical schema:
+  - `nr_train`: `(N, 2, 308)`
+  - `experimental_nr`: `(N, 2, 308)`
+  - `sld_train`: `(N, 2, 900)`
+- Accepted raw variants include `(N,2,L)`, `(2,L)`, `(L,2)`, and NR `(L,3)` / `(3,L)`.
+- For 3-channel NR inputs, channel 3 is treated as uncertainty/error and dropped.
+  - This is why you can start with 3 values per point (`q, R, dR`) and end with 2 channels (`q, R`) in canonical data.
+- Hard checks run before train/infer:
+  - minimum point count
+  - finite values only (no NaN/Inf)
+  - strict NR q-range gate: `[0.0081, 0.1975]` (out-of-range is rejected)
+- If an `experimental_nr` upload fails q-range validation, the UI console now adds a targeted warning:
+  - `warning: experimental_nr q must stay in [0.0081, 0.1975]. Crop out-of-range rows, then re-upload.`
+- Curves are resampled to fixed grids (`308` NR, `900` SLD).
+- NR preprocessing remains training-compatible: `log10(clip(R, 1e-8))`.
+
+Conceptual Notes:
+
+- **Why force `308` points?**  
+  The NR model was trained to read exactly `308` input points, always in the same order on the q-axis. If input length changes, the model no longer sees the structure it learned.
+- **Why is there a q-range limit (`0.0081` to `0.1975`)?**  
+  Training data used that q window, and normalization/preprocessing were built for that same window. Staying in-range keeps inference consistent with training.
+- **Why not just use my file max q (for example `0.277`)?**  
+  Then each input index maps to a different q position than the model expects. That is a domain mismatch and can degrade predictions silently.
+- **What does auto-crop do?**  
+  It keeps only rows where `q` is inside `[0.0081, 0.1975]`, drops the rest, then resamples to `308`. This preserves model compatibility, but intentionally discards out-of-range information.
+- **Why go from 3 values to 2 values for NR?**  
+  Raw experimental files may contain `(q, R, dR)`. Canonical model input is `(q, R)` only, so `dR` (uncertainty) is dropped for this NR→SLD model path.
+
+Operational notes:
+
+- Each upload writes a local conversion report to `src/backend/data/upload_reports/`.
+- If Hugging Face storage is configured, upload lineage is published as:
+  - `uploads/{user_or_anonymous}/{upload_id}/{role}/...`
+  - containing `raw + canonical + report`.
+
+Which files are required depends on workflow/mode:
+
+- `workflow=nr_sld`, `mode=train`: `nr_train`, `sld_train` (+ `nr_sld_model` and `normalization_stats` only if auto-generate is disabled)
+- `workflow=nr_sld`, `mode=infer`: `experimental_nr`, `nr_sld_model`, `normalization_stats`
+- `workflow=nr_sld_chi`, `mode=train`: `nr_train`, `sld_train`, `sld_chi_model_sld_file`, `sld_chi_model_chi_params_file` (+ optional model/stats as above)
+- `workflow=nr_sld_chi`, `mode=infer`: `experimental_nr`, `nr_sld_model`, `normalization_stats`, `sld_chi_model_sld_file`, `sld_chi_model_chi_params_file`
+- `workflow=sld_chi`: `sld_chi_experimental_profile`, `sld_chi_model_sld_file`, `sld_chi_model_chi_params_file`
 
 ## Technology Stack
 

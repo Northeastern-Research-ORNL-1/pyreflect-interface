@@ -588,8 +588,8 @@ export default function HomePage() {
   const handleUploadFiles = useCallback(
     async (uploads: { file: File; role: UploadRole }[]) => {
       if (uploads.length === 0) return;
-      if (!sessionUserId) {
-        addLog('Please sign in to upload files.');
+      if (!sessionUserId && isProduction) {
+        addLog('Please sign in to upload files in production.');
         return;
       }
       setIsUploading(true);
@@ -602,27 +602,72 @@ export default function HomePage() {
       });
 
       try {
+        const headers: Record<string, string> = {};
+        if (sessionUserId) headers['X-User-ID'] = sessionUserId;
+
         const response = await fetch(`${API_URL}/api/upload`, {
           method: 'POST',
-          headers: {
-            'X-User-ID': sessionUserId,
-          },
+          headers,
           body: formData,
         });
 
-        if (!response.ok) throw new Error(`Upload failed: ${response.statusText}`);
+        if (!response.ok) {
+          let detail = '';
+          try {
+            const errorPayload = await response.json();
+            if (typeof errorPayload?.detail === 'string') {
+              detail = errorPayload.detail;
+            } else if (errorPayload?.detail) {
+              detail = JSON.stringify(errorPayload.detail);
+            }
+          } catch {
+            // ignore parse errors
+          }
+          const statusText = `${response.status} ${response.statusText}`.trim();
+          throw new Error(detail ? detail : `Upload failed: ${statusText}`);
+        }
 
         const result = await response.json();
         const savedCount = Array.isArray(result.saved) ? result.saved.length : 0;
-        addLog(`Uploaded ${savedCount} file(s) to backend data folder`);
+        addLog(`Uploaded ${savedCount} file(s)`);
+
+        const metaRows = Array.isArray(result.metadata) ? result.metadata : [];
+        for (const meta of metaRows) {
+          const name = typeof meta?.filename === 'string' ? meta.filename : 'file';
+          const shape = Array.isArray(meta?.shape) ? ` shape=${meta.shape.join('x')}` : '';
+          addLog(`- ${name}${shape}`);
+
+          const warnings = Array.isArray(meta?.warnings) ? meta.warnings : [];
+          for (const warning of warnings) {
+            if (typeof warning === 'string' && warning.trim()) {
+              addLog(`  warning: ${warning}`);
+            }
+          }
+        }
+
+        // Refresh status immediately so required upload indicators update without waiting.
+        try {
+          const statusRes = await fetch(`${API_URL}/api/status`, { cache: 'no-store' });
+          if (statusRes.ok) {
+            const status: BackendStatus = await statusRes.json();
+            setBackendStatus(status);
+          }
+        } catch {
+          // ignore status refresh errors
+        }
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Unknown error';
         addLog(`Upload error: ${errorMsg}`);
+        if (errorMsg.includes('NR q-range out of bounds')) {
+          addLog(
+            'warning: experimental_nr q must stay in [0.0081, 0.1975]. Crop out-of-range rows, then re-upload.'
+          );
+        }
       } finally {
         setIsUploading(false);
       }
     },
-    [addLog, sessionUserId]
+    [addLog, isProduction, sessionUserId]
   );
 
   const handleImportJSON = useCallback(() => {

@@ -120,11 +120,25 @@ def apply_upload_to_settings(settings: dict, role: str, rel_path: str) -> bool:
 
 def validate_npy_payload(role: str, payload: Any) -> dict:
     if role == "normalization_stats":
-        if isinstance(payload, np.ndarray):
-            payload = payload.item() if payload.dtype == object else payload
-        if not isinstance(payload, dict) or "x" not in payload or "y" not in payload:
-            raise ValueError("normalization_stats must be a dict with 'x' and 'y' keys")
-        return {"type": "dict"}
+        if not isinstance(payload, dict):
+            raise ValueError("normalization_stats must be a dict")
+        if "nr" not in payload or "sld" not in payload:
+            raise ValueError("normalization_stats must contain 'nr' and 'sld' keys")
+        for curve_name in ("nr", "sld"):
+            curve = payload.get(curve_name)
+            if not isinstance(curve, dict):
+                raise ValueError(f"normalization_stats['{curve_name}'] must be a dict")
+            for axis in ("x", "y"):
+                axis_stats = curve.get(axis)
+                if (
+                    not isinstance(axis_stats, dict)
+                    or "min" not in axis_stats
+                    or "max" not in axis_stats
+                ):
+                    raise ValueError(
+                        f"normalization_stats['{curve_name}']['{axis}'] must contain 'min' and 'max'"
+                    )
+        return {"type": "dict", "stats_keys": ["nr", "sld"]}
 
     if not isinstance(payload, np.ndarray):
         raise ValueError("Expected a numpy array")
