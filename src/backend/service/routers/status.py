@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
-from ..config import CURVES_DIR, DATA_DIR, EXPT_DIR, MODELS_DIR, SETTINGS_PATH
+from ..config import CURVES_DIR, DATA_DIR, EXPT_DIR, HF_REPO_ID, MODELS_DIR, SETTINGS_PATH
 from ..services.pyreflect_runtime import PYREFLECT
 from ..settings_store import load_settings, resolve_setting_path
 
@@ -61,5 +61,13 @@ async def get_status():
         "model_files": model_files,
         "settings_paths": settings_paths,
         "settings_status": settings_status,
+        "huggingface": (
+            {
+                "repo_id": HF_REPO_ID,
+                "dataset_url": f"https://huggingface.co/datasets/{HF_REPO_ID}",
+                "models_url": f"https://huggingface.co/datasets/{HF_REPO_ID}/tree/main/models",
+            }
+            if HF_REPO_ID
+            else None
+        ),
     }
-

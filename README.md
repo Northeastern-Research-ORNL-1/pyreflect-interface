@@ -817,6 +817,18 @@ Which files are required depends on workflow/mode:
 - `workflow=nr_sld_chi`, `mode=infer`: `experimental_nr`, `nr_sld_model`, `normalization_stats`, `sld_chi_model_sld_file`, `sld_chi_model_chi_params_file`
 - `workflow=sld_chi`: `sld_chi_experimental_profile`, `sld_chi_model_sld_file`, `sld_chi_model_chi_params_file`
 
+Train mode model/stats behavior:
+
+- **Auto-generate model + stats**: trains a fresh NR→SLD model and writes fresh normalization stats.
+- **Reuse existing model + stats**: skips NR→SLD retraining and uses currently configured/uploaded model + stats paths.
+- **First run: model-only bootstrap** (with reuse enabled): if normalization stats are missing, the backend derives stats once from `nr_train/sld_train`, then reuses the uploaded model.
+  - This still requires `nr_train` and `sld_train` to be present.
+
+Hugging Face quick access:
+
+- In the UI Required Uploads panel, a quick link appears (when `HF_REPO_ID` is configured) to browse model artifacts:
+  - `https://huggingface.co/datasets/{HF_REPO_ID}/tree/main/models`
+
 ## Technology Stack
 
 - **Frontend**: Next.js 16, React 19, TypeScript, Recharts

@@ -157,6 +157,8 @@ class GenerateRequest(BaseModel):
     workflow: Literal["nr_sld", "sld_chi", "nr_sld_chi"] = "nr_sld"
     mode: Literal["train", "infer"] = "train"
     autoGenerateModelStats: bool = True
+    reuseExistingModelStats: bool = False
+    reuseModelOnlyFirstRun: bool = False
     gpu: GPU_TIERS = "T4"  # GPU tier for Modal training
 
 

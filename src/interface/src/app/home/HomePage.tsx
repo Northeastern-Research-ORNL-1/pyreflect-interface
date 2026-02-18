@@ -62,6 +62,11 @@ interface BackendStatus {
       file?: Record<string, boolean>;
     };
   };
+  huggingface?: {
+    repo_id?: string;
+    dataset_url?: string;
+    models_url?: string;
+  } | null;
 }
 
 const DEFAULT_LAYERS: FilmLayer[] = [
@@ -153,6 +158,8 @@ export default function HomePage() {
   const [workflow, setWorkflow] = useState<Workflow>('nr_sld');
   const [nrSldMode, setNrSldMode] = useState<NrSldMode>('train');
   const [autoGenerateModelStats, setAutoGenerateModelStats] = useState(true);
+  const [reuseExistingModelStats, setReuseExistingModelStats] = useState(false);
+  const [reuseModelOnlyFirstRun, setReuseModelOnlyFirstRun] = useState(false);
   const [gpu, setGpu] = useState<GpuTier>('T4');
 
   const [isGenerating, setIsGenerating] = useState(false);
@@ -307,6 +314,8 @@ export default function HomePage() {
     setWorkflow('nr_sld');
     setNrSldMode('train');
     setAutoGenerateModelStats(true);
+    setReuseExistingModelStats(false);
+    setReuseModelOnlyFirstRun(false);
 
     if (typeof window !== 'undefined') {
       localStorage.removeItem(`${STORAGE_KEY}_layers`);
@@ -318,6 +327,8 @@ export default function HomePage() {
       localStorage.removeItem(`${STORAGE_KEY}_workflow`);
       localStorage.removeItem(`${STORAGE_KEY}_mode`);
       localStorage.removeItem(`${STORAGE_KEY}_autoGenerate`);
+      localStorage.removeItem(`${STORAGE_KEY}_reuseExistingModelStats`);
+      localStorage.removeItem(`${STORAGE_KEY}_reuseModelOnlyFirstRun`);
     }
   }, [closeBundleConfirm, resetPngs]);
 
@@ -332,6 +343,8 @@ export default function HomePage() {
       const storedWorkflow = localStorage.getItem(`${STORAGE_KEY}_workflow`);
       const storedMode = localStorage.getItem(`${STORAGE_KEY}_mode`);
       const storedAutoGenerate = localStorage.getItem(`${STORAGE_KEY}_autoGenerate`);
+      const storedReuseModelStats = localStorage.getItem(`${STORAGE_KEY}_reuseExistingModelStats`);
+      const storedReuseFirstRun = localStorage.getItem(`${STORAGE_KEY}_reuseModelOnlyFirstRun`);
 
       if (storedLayers) setFilmLayers(JSON.parse(storedLayers));
       if (storedGenerator) setGeneratorParams(JSON.parse(storedGenerator));
@@ -342,6 +355,8 @@ export default function HomePage() {
       if (storedWorkflow) setWorkflow(storedWorkflow as Workflow);
       if (storedMode) setNrSldMode(storedMode as NrSldMode);
       if (storedAutoGenerate !== null) setAutoGenerateModelStats(storedAutoGenerate === 'true');
+      if (storedReuseModelStats !== null) setReuseExistingModelStats(storedReuseModelStats === 'true');
+      if (storedReuseFirstRun !== null) setReuseModelOnlyFirstRun(storedReuseFirstRun === 'true');
     } catch {
       // ignore parse errors
     }
@@ -412,6 +427,16 @@ export default function HomePage() {
     if (!isHydrated) return;
     localStorage.setItem(`${STORAGE_KEY}_autoGenerate`, String(autoGenerateModelStats));
   }, [autoGenerateModelStats, isHydrated]);
+
+  useEffect(() => {
+    if (!isHydrated) return;
+    localStorage.setItem(`${STORAGE_KEY}_reuseExistingModelStats`, String(reuseExistingModelStats));
+  }, [reuseExistingModelStats, isHydrated]);
+
+  useEffect(() => {
+    if (!isHydrated) return;
+    localStorage.setItem(`${STORAGE_KEY}_reuseModelOnlyFirstRun`, String(reuseModelOnlyFirstRun));
+  }, [reuseModelOnlyFirstRun, isHydrated]);
 
   useEffect(() => {
     if (!isHydrated) return;
@@ -525,6 +550,8 @@ export default function HomePage() {
         workflow,
         mode: nrSldMode,
         autoGenerateModelStats,
+        reuseExistingModelStats,
+        reuseModelOnlyFirstRun,
         gpu,
       };
 
@@ -572,6 +599,8 @@ export default function HomePage() {
     [
       addLog,
       autoGenerateModelStats,
+      reuseExistingModelStats,
+      reuseModelOnlyFirstRun,
       dataSource,
       resetPngs,
       filmLayers,
@@ -762,10 +791,14 @@ export default function HomePage() {
             workflow={workflow}
             nrSldMode={nrSldMode}
             autoGenerateModelStats={autoGenerateModelStats}
+            reuseExistingModelStats={reuseExistingModelStats}
+            reuseModelOnlyFirstRun={reuseModelOnlyFirstRun}
             onDataSourceChange={setDataSource}
             onWorkflowChange={setWorkflow}
             onNrSldModeChange={setNrSldMode}
             onAutoGenerateModelStatsChange={setAutoGenerateModelStats}
+            onReuseExistingModelStatsChange={setReuseExistingModelStats}
+            onReuseModelOnlyFirstRunChange={setReuseModelOnlyFirstRun}
             isCollapsed={sidebarCollapsed}
             onToggleCollapse={() => setSidebarCollapsed((prev) => !prev)}
             gpu={gpu}
