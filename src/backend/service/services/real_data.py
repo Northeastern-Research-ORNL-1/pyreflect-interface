@@ -96,24 +96,60 @@ def _real_nr_sld_train_core(
         yield emit("error", "Training data files not found. Check settings.yml paths.")
         return {}
 
-    if not model_rel:
-        if not request.autoGenerateModelStats:
-            yield emit("error", "Missing model path in settings.yml (auto-generate disabled).")
+    reuse_model_only_first_run = bool(request.reuseExistingModelStats and request.reuseModelOnlyFirstRun)
+    if request.reuseExistingModelStats:
+        if not model_rel:
+            yield emit(
+                "error",
+                "Reuse existing model+stats is enabled, but model path is missing in settings.yml",
+            )
             return {}
-        model_rel = f"data/models/model_{int(time.time())}.pth"
-        settings["nr_predict_sld"]["models"]["model"] = model_rel
-    if not norm_rel:
-        if not request.autoGenerateModelStats:
-            yield emit("error", "Missing normalization stats path in settings.yml (auto-generate disabled).")
+        if not norm_rel and reuse_model_only_first_run:
+            norm_rel = "data/normalization_stat.npy"
+            settings["nr_predict_sld"]["models"]["normalization_stats"] = norm_rel
+            yield emit(
+                "log",
+                "First-run model-only reuse: normalization stats path was missing; using data/normalization_stat.npy",
+            )
+        elif not norm_rel:
+            yield emit(
+                "error",
+                "Reuse existing model+stats is enabled, but normalization stats path is missing in settings.yml",
+            )
             return {}
-        norm_rel = "data/normalization_stat.npy"
-        settings["nr_predict_sld"]["models"]["normalization_stats"] = norm_rel
+    else:
+        if not model_rel:
+            if not request.autoGenerateModelStats:
+                yield emit("error", "Missing model path in settings.yml (auto-generate disabled).")
+                return {}
+            model_rel = f"data/models/model_{int(time.time())}.pth"
+            settings["nr_predict_sld"]["models"]["model"] = model_rel
+        if not norm_rel:
+            if not request.autoGenerateModelStats:
+                yield emit("error", "Missing normalization stats path in settings.yml (auto-generate disabled).")
+                return {}
+            norm_rel = "data/normalization_stat.npy"
+            settings["nr_predict_sld"]["models"]["normalization_stats"] = norm_rel
 
     model_path = resolve_setting_path(model_rel)
     norm_path = resolve_setting_path(norm_rel)
     if model_path is None or norm_path is None:
         yield emit("error", "Invalid model or normalization stats path in settings.yml")
         return {}
+
+    if request.reuseExistingModelStats:
+        if not model_path.exists():
+            yield emit(
+                "error",
+                "Reuse existing model+stats is enabled, but the model file does not exist.",
+            )
+            return {}
+        if not norm_path.exists() and not reuse_model_only_first_run:
+            yield emit(
+                "error",
+                "Reuse existing model+stats is enabled, but normalization stats file does not exist.",
+            )
+            return {}
 
     save_settings(settings)
 
@@ -126,6 +162,23 @@ def _real_nr_sld_train_core(
         return {}
 
     yield emit("log", f"NR shape: {nr_curves.shape}, SLD shape: {sld_curves.shape}")
+    if request.reuseExistingModelStats:
+        payload = yield from _reuse_existing_nr_sld_train_model(
+            settings=settings,
+            request=request,
+            emit=emit,
+            dproc=dproc,
+            nr_file=nr_file,
+            nr_curves=nr_curves,
+            sld_curves=sld_curves,
+            model_path=model_path,
+            norm_path=norm_path,
+            reflectivity_pipeline=reflectivity_pipeline,
+            compute_nr_from_sld=compute_nr_from_sld,
+            allow_bootstrap_norm_stats=reuse_model_only_first_run,
+        )
+        return payload
+
     yield emit("log", "Preprocessing data and computing normalization stats...")
     reshaped_nr, normalized_sld = reflectivity_pipeline.preprocess(dproc, norm_path)
 
@@ -252,6 +305,100 @@ def _real_nr_sld_train_core(
     }
 
     return {"result": result, "predicted_sld": pred_sld_denorm, "model_id": model_path.stem}
+
+
+def _reuse_existing_nr_sld_train_model(
+    *,
+    settings: dict,
+    request: GenerateRequest,
+    emit,
+    dproc,
+    nr_file: Path,
+    nr_curves: np.ndarray,
+    sld_curves: np.ndarray,
+    model_path: Path,
+    norm_path: Path,
+    reflectivity_pipeline,
+    compute_nr_from_sld,
+    allow_bootstrap_norm_stats: bool,
+) -> Generator[str, None, dict]:
+    yield emit(
+        "log",
+        "Reuse existing model + stats enabled: skipping NR->SLD training and using uploaded model/stats.",
+    )
+    if allow_bootstrap_norm_stats and not norm_path.exists():
+        yield emit(
+            "log",
+            "First-run model-only reuse: normalization stats not found, generating stats from nr_train/sld_train...",
+        )
+        reflectivity_pipeline.preprocess(dproc, norm_path)
+
+    if not norm_path.exists():
+        yield emit("error", "Normalization stats file not found for model reuse.")
+        return {}
+
+    yield emit("log", "Loading existing model and normalization stats...")
+
+    layers = settings.get("nr_predict_sld", {}).get("models", {}).get("layers", request.training.layers)
+    dropout = settings.get("nr_predict_sld", {}).get("models", {}).get("dropout", request.training.dropout)
+    model = reflectivity_pipeline.load_nr_sld_model(model_path, layers=layers, dropout_prob=dropout)
+    norm_stats = reflectivity_pipeline.load_normalization_stat(norm_path)
+
+    predicted_sld_all = reflectivity_pipeline.predict_sld_from_nr(model, nr_file, norm_stats)
+
+    if isinstance(predicted_sld_all, np.ndarray) and predicted_sld_all.ndim == 2:
+        predicted_sld_all = predicted_sld_all[np.newaxis, :, :]
+    if not isinstance(predicted_sld_all, np.ndarray) or predicted_sld_all.ndim != 3:
+        yield emit("error", "Unexpected prediction shape when reusing existing model")
+        return {}
+
+    split_idx = int(len(nr_curves) * SPLIT_RATIO)
+    test_idx = min(split_idx, len(nr_curves) - 1)
+    gt_nr = nr_curves[test_idx]
+    gt_sld = sld_curves[test_idx]
+    pred_curve = predicted_sld_all[min(test_idx, predicted_sld_all.shape[0] - 1)]
+
+    pred_sld_z = pred_curve[0]
+    pred_sld_y = pred_curve[1]
+
+    computed_nr = gt_nr[1].tolist()
+    if PYREFLECT.compute_nr_available and compute_nr_from_sld is not None:
+        try:
+            pred_sld_profile = (pred_sld_z, pred_sld_y)
+            _, computed_r = compute_nr_from_sld(pred_sld_profile, Q=gt_nr[0], order="substrate_to_air")
+            computed_nr = computed_r.tolist()
+        except Exception as exc:
+            yield emit("log", f"Warning: Could not compute NR from predicted SLD: {exc}")
+
+    sample_indices = np.linspace(0, len(pred_sld_y) - 1, 50, dtype=int)
+    chi = [
+        {"x": int(i), "predicted": float(pred_sld_y[idx]), "actual": float(gt_sld[1][idx])}
+        for i, idx in enumerate(sample_indices)
+    ]
+
+    mse = float(np.mean((pred_sld_y - gt_sld[1]) ** 2))
+    sld_var = float(np.var(gt_sld[1]))
+    r2 = 1 - (mse / sld_var) if sld_var > 0 else 0.0
+    mae = float(np.mean(np.abs(pred_sld_y - gt_sld[1])))
+    model_size_mb = model_path.stat().st_size / (1024 * 1024)
+
+    result = {
+        "nr": {"q": gt_nr[0].tolist(), "groundTruth": gt_nr[1].tolist(), "computed": computed_nr},
+        "sld": {
+            "z": gt_sld[0].tolist(),
+            "groundTruth": gt_sld[1].tolist(),
+            "predicted": pred_sld_y.tolist(),
+        },
+        "training": {"epochs": [], "trainingLoss": [], "validationLoss": []},
+        "chi": chi,
+        "metrics": {"mse": mse, "r2": float(np.clip(r2, 0, 1)), "mae": mae},
+        "name": request.name,
+        "model_id": model_path.stem,
+        "model_size_mb": model_size_mb,
+    }
+
+    predicted_for_chi = pred_curve[np.newaxis, :, :]
+    return {"result": result, "predicted_sld": predicted_for_chi, "model_id": model_path.stem}
 
 
 def _run_real_nr_sld_train(
