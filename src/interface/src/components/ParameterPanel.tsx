@@ -1398,6 +1398,15 @@ export default function ParameterPanel({
         <div className="section">
           <div className="section__header">
             <h3 className="section__title">Data & Models</h3>
+            <a
+              href="https://huggingface.co/Northeastern-Research-ORNL-1"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn btn--outline"
+              style={{ height: '26px', padding: '0 8px', fontSize: '11px', display: 'inline-flex', alignItems: 'center' }}
+            >
+              Hugging Face
+            </a>
           </div>
 
           <div className={styles.uploadArea}>
