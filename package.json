@@ -1,1 +1,12 @@
-{}
+{
+  "scripts": {
+    "dev": "cd src/interface && bun run dev",
+    "build": "cd src/interface && bun run build",
+    "start": "cd src/interface && bun run start",
+    "typecheck": "cd src/interface && bun run typecheck",
+    "test": "cd src/interface && bun run test"
+  },
+  "dependencies": {
+    "@vercel/analytics": "^1.6.1"
+  }
+}
