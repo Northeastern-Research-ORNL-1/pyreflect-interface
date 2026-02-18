@@ -789,19 +789,6 @@ Shape handling and canonicalization:
 - Curves are resampled to fixed grids (`308` NR, `900` SLD).
 - NR preprocessing remains training-compatible: `log10(clip(R, 1e-8))`.
 
-Quick plain-language explanation (ELI10):
-
-- **Why force `308` points?**  
-  The NR model was trained to read exactly `308` input points, always in the same order on the q-axis. If input length changes, the model no longer sees the structure it learned.
-- **Why is there a q-range limit (`0.0081` to `0.1975`)?**  
-  Training data used that q window, and normalization/preprocessing were built for that same window. Staying in-range keeps inference consistent with training.
-- **Why not just use my file max q (for example `0.277`)?**  
-  Then each input index maps to a different q position than the model expects. That is a domain mismatch and can degrade predictions silently.
-- **What does auto-crop do?**  
-  It keeps only rows where `q` is inside `[0.0081, 0.1975]`, drops the rest, then resamples to `308`. This preserves model compatibility, but intentionally discards out-of-range information.
-- **Why go from 3 values to 2 values for NR?**  
-  Raw experimental files may contain `(q, R, dR)`. Canonical model input is `(q, R)` only, so `dR` (uncertainty) is dropped for this NR→SLD model path.
-
 Operational notes:
 
 - Each upload writes a local conversion report to `src/backend/data/upload_reports/`.
