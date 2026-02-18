@@ -119,11 +119,58 @@ async function callGenerateAPI(config: GenerationConfig): Promise<GenerateRespon
 }
 
 function extractJSON(text: string): any | null {
-  const fenceMatch = text.match(/```json\s*([\s\S]*?)\s*```/);
-  if (fenceMatch) { try { return JSON.parse(fenceMatch[1]); } catch { return null; } }
+  const fenceMatch = text.match(/```json?\s*([\s\S]*?)\s*```/);
+  if (fenceMatch) { 
+    try { 
+      const parsed = JSON.parse(fenceMatch[1]);
+      return normalizeConfig(parsed);
+    } catch { return null; } 
+  }
   const rawMatch = text.match(/\{\s*"ready_to_generate"\s*:\s*true[\s\S]*\}/);
-  if (rawMatch) { try { return JSON.parse(rawMatch[0]); } catch { return null; } }
+  if (rawMatch) { 
+    try { 
+      const parsed = JSON.parse(rawMatch[0]);
+      return normalizeConfig(parsed);
+    } catch { return null; } 
+  }
   return null;
+}
+
+// Normalize different JSON formats from AI
+function normalizeConfig(config: any): any {
+  if (!config?.ready_to_generate) return config;
+  
+  // Handle substrate as object or string
+  let substrate = 'silicon';
+  if (typeof config.substrate === 'string') {
+    substrate = config.substrate;
+  } else if (config.substrate?.material) {
+    substrate = config.substrate.material.toLowerCase().includes('silicon') ? 'silicon' : config.substrate.material;
+  }
+
+  // Handle environment as object or string
+  let environment = 'air';
+  if (typeof config.environment === 'string') {
+    environment = config.environment;
+  } else if (config.environment?.material) {
+    environment = config.environment.material.toLowerCase();
+  }
+
+  // Normalize layers - handle different formats
+  let layers = config.layers || [];
+  layers = layers.map((layer: any) => ({
+    name: layer.name || layer.material || 'layer',
+    thickness: layer.thickness || 100,
+    sld: layer.sld || 1.0,
+    roughness: layer.roughness || 5
+  }));
+
+  return {
+    ...config,
+    substrate,
+    environment,
+    layers
+  };
 }
 
 function isTestCommand(text: string): boolean {
@@ -460,7 +507,7 @@ export default function ChatPage() {
       setGraphData(result);
       
       const historyItem: HistoryItem = {
-        id: result.model_id ?? `generation_${Date.now()}`,
+        id: result.model_id,
         config,
         result,
         timestamp: new Date(),
@@ -494,11 +541,28 @@ export default function ChatPage() {
 
   const sendMessage = async (messageText?: string) => {
     const text = messageText || input;
-    if (!text.trim() || isLoading) return;
+    if (!text.trim() && uploadedFiles.length === 0) return;
+    if (isLoading) return;
     if (isTestCommand(text)) { setInput(''); handleQuickTest(); return; }
 
-    setMessages(prev => [...prev, { role: 'user', content: text }]);
+    // Build message with file contents
+    let fullMessage = text;
+    if (uploadedFiles.length > 0) {
+      const fileContents = uploadedFiles
+        .filter(f => typeof f.data === 'string')
+        .map(f => `--- File: ${f.name} ---\n${f.data}`)
+        .join('\n\n');
+      
+      if (fileContents) {
+        fullMessage = `Here is my uploaded data:\n\n${fileContents}\n\n${text || 'Please analyze this data.'}`;
+      }
+    }
+
+    // Show user message - include file content in history so AI remembers it
+    const displayMessage = uploadedFiles.length > 0 ? `📎 ${uploadedFiles.map(f => f.name).join(', ')}\n\n${text || 'Analyze this data'}` : text;
+    setMessages(prev => [...prev, { role: 'user', content: fullMessage }]); // Store full message with data for AI context
     setInput('');
+    setUploadedFiles([]); // Clear files after sending
     setIsLoading(true);
 
     try {
@@ -514,9 +578,9 @@ export default function ChatPage() {
             enabled: true
           },
           messages: [
-            { role: 'system', content: `You are PyReflect AI. Help users set up neutron reflectivity experiments. Ask ONE question at a time. When ready, output JSON with ready_to_generate: true, substrate, layers array, and environment. Common SLDs: Silicon 2.07, SiO2 3.47, Air 0, D2O 6.36, Gold 4.5, PMMA 1.0` },
+            { role: 'system', content: `You are PyReflect AI. Help users set up neutron reflectivity experiments. You can analyze CSV data containing Q values and reflectivity measurements. When analyzing data, describe what you see (number of points, Q range, reflectivity decay pattern). Ask ONE question at a time. When ready to generate, output JSON with ready_to_generate: true, substrate, layers array, and environment. Common SLDs: Silicon 2.07, SiO2 3.47, Air 0, D2O 6.36, Gold 4.5, PMMA 1.0` },
             ...messages.map(m => ({ role: m.role, content: m.content })),
-            { role: 'user', content: text }
+            { role: 'user', content: fullMessage }
           ],
         }),
       });
