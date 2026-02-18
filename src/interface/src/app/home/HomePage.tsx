@@ -658,6 +658,11 @@ export default function HomePage() {
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Unknown error';
         addLog(`Upload error: ${errorMsg}`);
+        if (errorMsg.includes('NR q-range out of bounds')) {
+          addLog(
+            'warning: experimental_nr q must stay in [0.0081, 0.1975]. Crop out-of-range rows, then re-upload.'
+          );
+        }
       } finally {
         setIsUploading(false);
       }
