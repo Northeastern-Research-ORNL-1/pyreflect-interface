@@ -784,6 +784,8 @@ Shape handling and canonicalization:
   - minimum point count
   - finite values only (no NaN/Inf)
   - strict NR q-range gate: `[0.0081, 0.1975]` (out-of-range is rejected)
+- If an `experimental_nr` upload fails q-range validation, the UI console now adds a targeted warning:
+  - `warning: experimental_nr q must stay in [0.0081, 0.1975]. Crop out-of-range rows, then re-upload.`
 - Curves are resampled to fixed grids (`308` NR, `900` SLD).
 - NR preprocessing remains training-compatible: `log10(clip(R, 1e-8))`.
 
