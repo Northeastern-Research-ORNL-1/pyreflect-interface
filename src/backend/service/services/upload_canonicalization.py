@@ -228,7 +228,9 @@ def _coerce_curve_array(payload: Any) -> tuple[np.ndarray, list[str], list[str]]
     if curves.shape[1] == 3:
         curves = curves[:, :2, :]
         actions.append("dropped_third_channel")
-        warnings.append("Dropped third channel (assumed uncertainty/error channel)")
+        warnings.append(
+            "Dropped third channel (assumed uncertainty/error). Verify column 3 is not a signal channel."
+        )
 
     if not np.all(np.isfinite(curves)):
         raise ValueError("Curve array contains NaN/Inf values")
