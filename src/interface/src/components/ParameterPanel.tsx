@@ -49,6 +49,11 @@ interface BackendStatus {
       file?: Record<string, boolean>;
     };
   };
+  huggingface?: {
+    repo_id?: string;
+    dataset_url?: string;
+    models_url?: string;
+  } | null;
 }
 
 export interface ParameterPanelProps {
@@ -68,10 +73,14 @@ export interface ParameterPanelProps {
   workflow: Workflow;
   nrSldMode: NrSldMode;
   autoGenerateModelStats: boolean;
+  reuseExistingModelStats?: boolean;
+  reuseModelOnlyFirstRun?: boolean;
   onDataSourceChange: (value: DataSource) => void;
   onWorkflowChange: (value: Workflow) => void;
   onNrSldModeChange: (value: NrSldMode) => void;
   onAutoGenerateModelStatsChange: (value: boolean) => void;
+  onReuseExistingModelStatsChange?: (value: boolean) => void;
+  onReuseModelOnlyFirstRunChange?: (value: boolean) => void;
   limits?: Limits;
   isProduction?: boolean;
   isCollapsed?: boolean;
@@ -137,10 +146,14 @@ export default function ParameterPanel({
   workflow,
   nrSldMode,
   autoGenerateModelStats,
+  reuseExistingModelStats = false,
+  reuseModelOnlyFirstRun = false,
   onDataSourceChange,
   onWorkflowChange,
   onNrSldModeChange,
   onAutoGenerateModelStatsChange,
+  onReuseExistingModelStatsChange = () => {},
+  onReuseModelOnlyFirstRunChange = () => {},
   limits = DEFAULT_LIMITS,
   isProduction = false,
   isCollapsed = false,
@@ -395,7 +408,7 @@ export default function ParameterPanel({
     nr_train: 'NR Train (.npy)',
     sld_train: 'SLD Train (.npy)',
     experimental_nr: 'Experimental NR (.npy)',
-    normalization_stats: 'Normalization Stats (.npz/.json)',
+    normalization_stats: 'Normalization Stats (.npy/.npz/.json)',
     nr_sld_model: 'NR→SLD Model (.pth/.pt)',
     sld_chi_experimental_profile: 'SLD→Chi Experimental (.npy)',
     sld_chi_model_sld_file: 'SLD→Chi SLD Train (.npy)',
@@ -403,6 +416,11 @@ export default function ParameterPanel({
   };
 
   const requiredUploads = (() => {
+    const requireExistingModel = reuseExistingModelStats || !autoGenerateModelStats;
+    const requireExistingStats =
+      (reuseExistingModelStats || !autoGenerateModelStats) &&
+      !(reuseExistingModelStats && reuseModelOnlyFirstRun);
+
     if (dataSource !== 'real') return [];
     if (workflow === 'sld_chi') {
       return ['sld_chi_experimental_profile', 'sld_chi_model_sld_file', 'sld_chi_model_chi_params_file'] as const;
@@ -414,7 +432,8 @@ export default function ParameterPanel({
       return [
         'nr_train',
         'sld_train',
-        ...(autoGenerateModelStats ? [] : ['nr_sld_model', 'normalization_stats']),
+        ...(requireExistingModel ? ['nr_sld_model'] : []),
+        ...(requireExistingStats ? ['normalization_stats'] : []),
         'sld_chi_model_sld_file',
         'sld_chi_model_chi_params_file',
       ] as const;
@@ -422,7 +441,12 @@ export default function ParameterPanel({
     if (nrSldMode === 'infer') {
       return ['experimental_nr', 'nr_sld_model', 'normalization_stats'] as const;
     }
-    return ['nr_train', 'sld_train', ...(autoGenerateModelStats ? [] : ['nr_sld_model', 'normalization_stats'])] as const;
+    return [
+      'nr_train',
+      'sld_train',
+      ...(requireExistingModel ? ['nr_sld_model'] : []),
+      ...(requireExistingStats ? ['normalization_stats'] : []),
+    ] as const;
   })() as UploadRole[];
 
   const pipelineRoles = (() => {
@@ -460,6 +484,8 @@ export default function ParameterPanel({
   const generateBlockReason = missingUploads.length
     ? `Missing: ${missingUploads.map((role) => uploadRequirementLabels[role]).join(', ')}`
     : undefined;
+  const hfRepoId = backendStatus?.huggingface?.repo_id || process.env.NEXT_PUBLIC_HF_REPO_ID || 'Northeastern-Research-ORNL-1/models';
+  const hfModelsUrl = `https://huggingface.co/datasets/${hfRepoId}/tree/main/models`;
 
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const [pendingUploadRole, setPendingUploadRole] = useState<UploadRole | null>(null);
@@ -469,7 +495,7 @@ export default function ParameterPanel({
     nr_train: '.npy',
     sld_train: '.npy',
     experimental_nr: '.npy',
-    normalization_stats: '.npz,.json',
+    normalization_stats: '.npy,.npz,.json',
     nr_sld_model: '.pth,.pt',
     sld_chi_experimental_profile: '.npy',
     sld_chi_model_sld_file: '.npy',
@@ -697,7 +723,7 @@ export default function ParameterPanel({
                 <div className="control__label">
                   <span>
                     Mode
-                    <InfoTooltip hint={"Train: uses nr_train/sld_train to train NR→SLD and (if enabled) generate model + stats. In NR→SLD→Chi, chi is predicted from the trained SLD output.\n\nInfer: uses experimental_nr with existing model + stats to predict SLD. In NR→SLD→Chi, chi is predicted from that inferred SLD."} />
+                    <InfoTooltip hint={"Train: uses nr_train/sld_train. You can either train a fresh NR→SLD model (auto-generate) or reuse an existing uploaded model + stats. In NR→SLD→Chi, chi is predicted from the resulting SLD output.\n\nInfer: uses experimental_nr with existing model + stats to predict SLD. In NR→SLD→Chi, chi is predicted from that inferred SLD."} />
                   </span>
                 </div>
                 <select
@@ -1398,6 +1424,15 @@ export default function ParameterPanel({
         <div className="section">
           <div className="section__header">
             <h3 className="section__title">Data & Models</h3>
+            <a
+              href="https://huggingface.co/Northeastern-Research-ORNL-1"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn btn--outline"
+              style={{ height: '26px', padding: '0 8px', fontSize: '11px', display: 'inline-flex', alignItems: 'center' }}
+            >
+              Hugging Face
+            </a>
           </div>
 
           <div className={styles.uploadArea}>
@@ -1440,10 +1475,47 @@ export default function ParameterPanel({
                         type="checkbox"
                         className={styles.toggleInput}
                         checked={autoGenerateModelStats}
-                        onChange={(e) => onAutoGenerateModelStatsChange(e.target.checked)}
+                        disabled={reuseExistingModelStats}
+                        onChange={(e) => {
+                          const enabled = e.target.checked;
+                          onAutoGenerateModelStatsChange(enabled);
+                          if (enabled) {
+                            onReuseExistingModelStatsChange(false);
+                            onReuseModelOnlyFirstRunChange(false);
+                          }
+                        }}
                       />
                       <span>Auto-generate model + stats</span>
-                      <InfoTooltip hint="If missing, NR→SLD training generates a model (.pth) and normalization stats (.npy) from nr_train/sld_train and saves them to settings.yml paths." />
+                      <InfoTooltip hint="Train a new NR→SLD model and write fresh model/stats files to settings.yml paths." />
+                    </label>
+                    <label className={styles.toggleLabel}>
+                      <input
+                        type="checkbox"
+                        className={styles.toggleInput}
+                        checked={reuseExistingModelStats}
+                        onChange={(e) => {
+                          const enabled = e.target.checked;
+                          onReuseExistingModelStatsChange(enabled);
+                          if (enabled) {
+                            onAutoGenerateModelStatsChange(false);
+                          } else {
+                            onReuseModelOnlyFirstRunChange(false);
+                          }
+                        }}
+                      />
+                      <span>Reuse existing model + stats</span>
+                      <InfoTooltip hint="Skip NR→SLD retraining and use the uploaded model/stats for prediction during train-mode runs." />
+                    </label>
+                    <label className={styles.toggleLabel}>
+                      <input
+                        type="checkbox"
+                        className={styles.toggleInput}
+                        checked={reuseModelOnlyFirstRun}
+                        disabled={!reuseExistingModelStats}
+                        onChange={(e) => onReuseModelOnlyFirstRunChange(e.target.checked)}
+                      />
+                      <span>First run: model-only bootstrap</span>
+                      <InfoTooltip hint="Use when you only uploaded a model. If stats are missing, build normalization stats from nr_train/sld_train once, then reuse model." />
                     </label>
                   </div>
                 )}

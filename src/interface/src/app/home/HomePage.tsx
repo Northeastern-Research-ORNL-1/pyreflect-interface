@@ -62,6 +62,11 @@ interface BackendStatus {
       file?: Record<string, boolean>;
     };
   };
+  huggingface?: {
+    repo_id?: string;
+    dataset_url?: string;
+    models_url?: string;
+  } | null;
 }
 
 const DEFAULT_LAYERS: FilmLayer[] = [
@@ -153,6 +158,8 @@ export default function HomePage() {
   const [workflow, setWorkflow] = useState<Workflow>('nr_sld');
   const [nrSldMode, setNrSldMode] = useState<NrSldMode>('train');
   const [autoGenerateModelStats, setAutoGenerateModelStats] = useState(true);
+  const [reuseExistingModelStats, setReuseExistingModelStats] = useState(false);
+  const [reuseModelOnlyFirstRun, setReuseModelOnlyFirstRun] = useState(false);
   const [gpu, setGpu] = useState<GpuTier>('T4');
 
   const [isGenerating, setIsGenerating] = useState(false);
@@ -307,6 +314,8 @@ export default function HomePage() {
     setWorkflow('nr_sld');
     setNrSldMode('train');
     setAutoGenerateModelStats(true);
+    setReuseExistingModelStats(false);
+    setReuseModelOnlyFirstRun(false);
 
     if (typeof window !== 'undefined') {
       localStorage.removeItem(`${STORAGE_KEY}_layers`);
@@ -318,6 +327,8 @@ export default function HomePage() {
       localStorage.removeItem(`${STORAGE_KEY}_workflow`);
       localStorage.removeItem(`${STORAGE_KEY}_mode`);
       localStorage.removeItem(`${STORAGE_KEY}_autoGenerate`);
+      localStorage.removeItem(`${STORAGE_KEY}_reuseExistingModelStats`);
+      localStorage.removeItem(`${STORAGE_KEY}_reuseModelOnlyFirstRun`);
     }
   }, [closeBundleConfirm, resetPngs]);
 
@@ -332,6 +343,8 @@ export default function HomePage() {
       const storedWorkflow = localStorage.getItem(`${STORAGE_KEY}_workflow`);
       const storedMode = localStorage.getItem(`${STORAGE_KEY}_mode`);
       const storedAutoGenerate = localStorage.getItem(`${STORAGE_KEY}_autoGenerate`);
+      const storedReuseModelStats = localStorage.getItem(`${STORAGE_KEY}_reuseExistingModelStats`);
+      const storedReuseFirstRun = localStorage.getItem(`${STORAGE_KEY}_reuseModelOnlyFirstRun`);
 
       if (storedLayers) setFilmLayers(JSON.parse(storedLayers));
       if (storedGenerator) setGeneratorParams(JSON.parse(storedGenerator));
@@ -342,6 +355,8 @@ export default function HomePage() {
       if (storedWorkflow) setWorkflow(storedWorkflow as Workflow);
       if (storedMode) setNrSldMode(storedMode as NrSldMode);
       if (storedAutoGenerate !== null) setAutoGenerateModelStats(storedAutoGenerate === 'true');
+      if (storedReuseModelStats !== null) setReuseExistingModelStats(storedReuseModelStats === 'true');
+      if (storedReuseFirstRun !== null) setReuseModelOnlyFirstRun(storedReuseFirstRun === 'true');
     } catch {
       // ignore parse errors
     }
@@ -412,6 +427,16 @@ export default function HomePage() {
     if (!isHydrated) return;
     localStorage.setItem(`${STORAGE_KEY}_autoGenerate`, String(autoGenerateModelStats));
   }, [autoGenerateModelStats, isHydrated]);
+
+  useEffect(() => {
+    if (!isHydrated) return;
+    localStorage.setItem(`${STORAGE_KEY}_reuseExistingModelStats`, String(reuseExistingModelStats));
+  }, [reuseExistingModelStats, isHydrated]);
+
+  useEffect(() => {
+    if (!isHydrated) return;
+    localStorage.setItem(`${STORAGE_KEY}_reuseModelOnlyFirstRun`, String(reuseModelOnlyFirstRun));
+  }, [reuseModelOnlyFirstRun, isHydrated]);
 
   useEffect(() => {
     if (!isHydrated) return;
@@ -525,6 +550,8 @@ export default function HomePage() {
         workflow,
         mode: nrSldMode,
         autoGenerateModelStats,
+        reuseExistingModelStats,
+        reuseModelOnlyFirstRun,
         gpu,
       };
 
@@ -572,6 +599,8 @@ export default function HomePage() {
     [
       addLog,
       autoGenerateModelStats,
+      reuseExistingModelStats,
+      reuseModelOnlyFirstRun,
       dataSource,
       resetPngs,
       filmLayers,
@@ -588,8 +617,8 @@ export default function HomePage() {
   const handleUploadFiles = useCallback(
     async (uploads: { file: File; role: UploadRole }[]) => {
       if (uploads.length === 0) return;
-      if (!sessionUserId) {
-        addLog('Please sign in to upload files.');
+      if (!sessionUserId && isProduction) {
+        addLog('Please sign in to upload files in production.');
         return;
       }
       setIsUploading(true);
@@ -602,27 +631,72 @@ export default function HomePage() {
       });
 
       try {
+        const headers: Record<string, string> = {};
+        if (sessionUserId) headers['X-User-ID'] = sessionUserId;
+
         const response = await fetch(`${API_URL}/api/upload`, {
           method: 'POST',
-          headers: {
-            'X-User-ID': sessionUserId,
-          },
+          headers,
           body: formData,
         });
 
-        if (!response.ok) throw new Error(`Upload failed: ${response.statusText}`);
+        if (!response.ok) {
+          let detail = '';
+          try {
+            const errorPayload = await response.json();
+            if (typeof errorPayload?.detail === 'string') {
+              detail = errorPayload.detail;
+            } else if (errorPayload?.detail) {
+              detail = JSON.stringify(errorPayload.detail);
+            }
+          } catch {
+            // ignore parse errors
+          }
+          const statusText = `${response.status} ${response.statusText}`.trim();
+          throw new Error(detail ? detail : `Upload failed: ${statusText}`);
+        }
 
         const result = await response.json();
         const savedCount = Array.isArray(result.saved) ? result.saved.length : 0;
-        addLog(`Uploaded ${savedCount} file(s) to backend data folder`);
+        addLog(`Uploaded ${savedCount} file(s)`);
+
+        const metaRows = Array.isArray(result.metadata) ? result.metadata : [];
+        for (const meta of metaRows) {
+          const name = typeof meta?.filename === 'string' ? meta.filename : 'file';
+          const shape = Array.isArray(meta?.shape) ? ` shape=${meta.shape.join('x')}` : '';
+          addLog(`- ${name}${shape}`);
+
+          const warnings = Array.isArray(meta?.warnings) ? meta.warnings : [];
+          for (const warning of warnings) {
+            if (typeof warning === 'string' && warning.trim()) {
+              addLog(`  warning: ${warning}`);
+            }
+          }
+        }
+
+        // Refresh status immediately so required upload indicators update without waiting.
+        try {
+          const statusRes = await fetch(`${API_URL}/api/status`, { cache: 'no-store' });
+          if (statusRes.ok) {
+            const status: BackendStatus = await statusRes.json();
+            setBackendStatus(status);
+          }
+        } catch {
+          // ignore status refresh errors
+        }
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Unknown error';
         addLog(`Upload error: ${errorMsg}`);
+        if (errorMsg.includes('NR q-range out of bounds')) {
+          addLog(
+            'warning: experimental_nr q must stay in [0.0081, 0.1975]. Crop out-of-range rows, then re-upload.'
+          );
+        }
       } finally {
         setIsUploading(false);
       }
     },
-    [addLog, sessionUserId]
+    [addLog, isProduction, sessionUserId]
   );
 
   const handleImportJSON = useCallback(() => {
@@ -717,10 +791,14 @@ export default function HomePage() {
             workflow={workflow}
             nrSldMode={nrSldMode}
             autoGenerateModelStats={autoGenerateModelStats}
+            reuseExistingModelStats={reuseExistingModelStats}
+            reuseModelOnlyFirstRun={reuseModelOnlyFirstRun}
             onDataSourceChange={setDataSource}
             onWorkflowChange={setWorkflow}
             onNrSldModeChange={setNrSldMode}
             onAutoGenerateModelStatsChange={setAutoGenerateModelStats}
+            onReuseExistingModelStatsChange={setReuseExistingModelStats}
+            onReuseModelOnlyFirstRunChange={setReuseModelOnlyFirstRun}
             isCollapsed={sidebarCollapsed}
             onToggleCollapse={() => setSidebarCollapsed((prev) => !prev)}
             gpu={gpu}

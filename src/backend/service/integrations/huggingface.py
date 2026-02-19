@@ -26,6 +26,38 @@ def init_huggingface(token: str | None, repo_id: str | None) -> HuggingFaceInteg
         return HuggingFaceIntegration(available=False, repo_id=repo_id, api=None)
 
 
+def upload_artifact_file(
+    hf: HuggingFaceIntegration,
+    *,
+    file_path: str | Path,
+    path_in_repo: str,
+) -> bool:
+    """Upload a local artifact to the configured HF dataset repo."""
+    if not hf.available or not hf.api or not hf.repo_id:
+        return False
+    try:
+        local_path = Path(file_path)
+        if not local_path.exists():
+            return False
+        try:
+            hf.api.create_repo(
+                repo_id=hf.repo_id, repo_type="dataset", exist_ok=True, private=False
+            )
+        except Exception:
+            pass
+
+        hf.api.upload_file(
+            path_or_fileobj=str(local_path),
+            path_in_repo=path_in_repo,
+            repo_id=hf.repo_id,
+            repo_type="dataset",
+        )
+        return True
+    except Exception as exc:
+        print(f"Error uploading artifact to Hugging Face ({path_in_repo}): {exc}")
+        return False
+
+
 def upload_model(hf: HuggingFaceIntegration, file_path: Any, model_id: str) -> bool:
     if not hf.available or not hf.api or not hf.repo_id:
         return False

@@ -141,3 +141,130 @@ export type UploadRole =
   | 'sld_chi_experimental_profile'
   | 'sld_chi_model_sld_file'
   | 'sld_chi_model_chi_params_file';
+
+// ============================================================
+// API Request / Response Types
+// ============================================================
+
+// --- Error ---
+export interface ApiErrorResponse {
+  message?: string;
+  detail?: string;
+}
+
+// --- Core ---
+export interface HealthResponse {
+  status: string;
+  version?: string;
+  uptime?: number;
+}
+
+export interface DefaultsResponse {
+  layers: FilmLayer[];
+  generator: GeneratorParams;
+  training: TrainingParams;
+}
+
+export interface StatusResponse {
+  status: string;
+  data_files?: string[];
+}
+
+// --- Generation ---
+export interface GenerateParams {
+  layers: FilmLayer[];
+  generator: GeneratorParams;
+  training: TrainingParams;
+}
+
+export interface StreamProgressEvent {
+  type: 'progress';
+  message?: string;
+  percent?: number;
+}
+
+export interface StreamCompleteEvent {
+  type: 'complete';
+  [key: string]: unknown;
+}
+
+export type StreamEvent = StreamProgressEvent | StreamCompleteEvent;
+
+// --- History ---
+export interface HistoryEntry {
+  id: string;
+  name: string;
+  created_at: string;
+  model_id?: string;
+}
+
+export interface HistoryListResponse {
+  items: HistoryEntry[];
+}
+
+export interface SaveGenerationData {
+  name: string;
+  result: GenerateResponse;
+  config: Record<string, unknown>;
+}
+
+// --- Models ---
+export interface ModelUploadResponse {
+  model_id: string;
+  size_mb?: number;
+}
+
+export interface ModelInfoResponse {
+  model_id: string;
+  size_mb: number;
+  source: string;
+}
+
+// --- Jobs ---
+export type JobStatus =
+  | 'queued'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'paused'
+  | 'stopped';
+
+export interface JobStatusResponse {
+  job_id: string;
+  status: JobStatus;
+  progress?: number;
+  error?: string;
+  result?: unknown;
+  name?: string;
+}
+
+export interface JobSubmitData {
+  [key: string]: unknown;
+}
+
+// --- Checkpoints ---
+export interface CheckpointEntry {
+  job_id: string;
+  created_at: string;
+}
+
+export interface CheckpointsListResponse {
+  checkpoints: CheckpointEntry[];
+}
+
+// --- Queue ---
+export interface QueueStatusResponse {
+  queue_length: number;
+  workers: number;
+  active_jobs: number;
+}
+
+export interface SpawnWorkerResponse {
+  success: boolean;
+  message?: string;
+}
+
+export interface CleanupQueueResponse {
+  deleted: number;
+  dry_run: boolean;
+}
