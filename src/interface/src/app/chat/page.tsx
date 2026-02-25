@@ -484,6 +484,13 @@ function extractJSON(text: string): any | null {
   return null;
 }
 
+function stripConfigJSON(text: string): string {
+  let cleaned = text.replace(/```json\s*[\s\S]*?ready_to_generate[\s\S]*?```/gi, '');
+  cleaned = cleaned.replace(/\{\s*"ready_to_generate"\s*:\s*true[\s\S]*?\}(?:\s*\})?/g, '');
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
+  return cleaned;
+}
+
 function normalizeAIConfig(raw: any): GenerationConfig | null {
   if (!raw?.ready_to_generate) return null;
   const subRaw = raw.substrate;
@@ -860,12 +867,16 @@ export default function ChatPage() {
 
       const suggestions = generateSmartSuggestions(assistantContent, 'assistant', isGenReady);
 
+      
+      const displayContent = stripConfigJSON(assistantContent);
+
       const assistantMessage: MessageType = {
         role: 'assistant',
-        content: assistantContent,
+        content: displayContent || (genConfig
+          ? 'Great, I have all the parameters. Starting generation now...'
+          : assistantContent),
         suggestions,
       };
-      setMessages(prev => [...prev, assistantMessage]);
 
       const assistantParams = extractParametersFromMessage(assistantContent, 'assistant');
       setCollectedParams(prev => [...prev, ...assistantParams]);
