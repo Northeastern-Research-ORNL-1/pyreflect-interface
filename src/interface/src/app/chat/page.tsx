@@ -877,7 +877,7 @@ export default function ChatPage() {
           : assistantContent),
         suggestions,
       };
-
+      setMessages(prev => [...prev, assistantMessage]);
       const assistantParams = extractParametersFromMessage(assistantContent, 'assistant');
       setCollectedParams(prev => [...prev, ...assistantParams]);
 
