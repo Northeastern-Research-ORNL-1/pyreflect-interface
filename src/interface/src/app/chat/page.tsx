@@ -943,18 +943,6 @@ export default function ChatPage() {
             style={{ color: 'black', background: '#10b981', border: 'none', padding: '6px 12px', cursor: isGenerating ? 'not-allowed' : 'pointer', fontSize: '11px', fontFamily: 'inherit', textTransform: 'uppercase', fontWeight: 600, opacity: isGenerating ? 0.5 : 1 }}>
             Quick Test
           </button>
-          <button
-            onClick={async () => {
-              try {
-                const health = await pyreflectAPI.healthCheck();
-                alert('API Connected!\n\n' + JSON.stringify(health, null, 2));
-              } catch (error) {
-                alert('API Connection Failed!\n\n' + (error instanceof Error ? error.message : String(error)));
-              }
-            }}
-            style={{ color: '#888', background: 'none', border: '1px solid #333', padding: '6px 12px', cursor: 'pointer', fontSize: '11px', fontFamily: 'inherit', textTransform: 'uppercase' }}>
-            Test API
-          </button>
           <button onClick={handleReset}
             style={{ color: '#888', background: 'none', border: '1px solid #333', padding: '6px 12px', cursor: 'pointer', fontSize: '11px', fontFamily: 'inherit', textTransform: 'uppercase' }}>
             New Chat
