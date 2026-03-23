@@ -1,0 +1,26 @@
+{
+  "role": "experimental_nr_csv",
+  "filename": "Sample Data - Sheet1.csv",
+  "original_rows": 16,
+  "parsed_points": 15,
+  "skipped_rows": 0,
+  "q_range": [
+    0.01,
+    0.08
+  ],
+  "r_range": [
+    0.004,
+    0.95
+  ],
+  "has_errors": true,
+  "actions": [
+    "detected_header_row",
+    "found_error_column"
+  ],
+  "warnings": [],
+  "total_warnings": 0,
+  "upload_id": "8c5dad211ba944eb858efb03c4870647",
+  "stored_as": "Sample Data - Sheet1_8c5dad211ba944eb858efb03c4870647.npy",
+  "stored_path": "data/curves/expt/Sample Data - Sheet1_8c5dad211ba944eb858efb03c4870647.npy",
+  "created_at": "2026-02-25T20:22:43.737415+00:00"
+}

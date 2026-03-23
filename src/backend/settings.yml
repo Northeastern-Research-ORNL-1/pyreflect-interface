@@ -1,7 +1,4 @@
-# Configuration file for PyReflect GUI backend
 root: .
-
-### SLD-Chi settings ###
 sld_predict_chi:
   file:
     model_experimental_sld_profile: data/mod_expt.npy
@@ -12,13 +9,11 @@ sld_predict_chi:
     batch_size: 16
     ae_epochs: 20
     mlp_epochs: 20
-
-### NR-SLD profile settings ###
 nr_predict_sld:
   file:
-    nr_train: data/curves/nr_train.npy
+    nr_train: data/curves/np_out_REFL_194438_combined_data_auto.npy
     sld_train: data/curves/sld_train.npy
-    experimental_nr_file: data/combined_expt_denoised_nr.npy
+    experimental_nr_file: data/curves/expt/Sample Data - Sheet1.csv
   models:
     model: data/trained_nr_sld_model.pth
     num_film_layers: 5
