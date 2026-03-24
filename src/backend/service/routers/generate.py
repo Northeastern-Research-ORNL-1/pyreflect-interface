@@ -30,6 +30,11 @@ async def generate(
             status_code=400,
             detail="Real data mode is only supported on /api/generate/stream",
         )
+    if request.mode == "infer":
+        raise HTTPException(
+            status_code=400,
+            detail="Inference mode is only supported on /api/generate/stream",
+        )
     effective_limits, _, _ = get_effective_limits(user_id=x_user_id)
     try:
         validate_limits(request.generator, request.training, limits=effective_limits)
@@ -70,6 +75,35 @@ async def generate_stream(
             media_type="text/event-stream",
         )
 
+    # Inference-only mode for synthetic data source: skip validation of training
+    # limits (epochs/batchSize irrelevant) but still validate layer bounds.
+    if request.mode == "infer":
+        try:
+            validate_layer_bounds(request.layers, request.generator)
+        except ValueError as exc:
+            def error_stream():
+                yield f'event: error\ndata: "{str(exc)}"\n\n'
+            return StreamingResponse(error_stream(), media_type="text/event-stream")
+        if not PYREFLECT.available:
+            def error_stream():
+                yield 'event: error\ndata: "pyreflect not available. Please install pyreflect dependencies."\n\n'
+            return StreamingResponse(error_stream(), media_type="text/event-stream")
+        return StreamingResponse(
+            generate_with_pyreflect_streaming(
+                layers=request.layers,
+                gen_params=request.generator,
+                train_params=request.training,
+                user_id=x_user_id,
+                name=request.name,
+                mongo_generations=mongo_generations,
+                hf=hf,
+                mode="infer",
+                model_id=request.model_id,
+                normalization_stats_path=request.normalization_stats_path,
+            ),
+            media_type="text/event-stream",
+        )
+
     effective_limits, _, _ = get_effective_limits(user_id=x_user_id)
     try:
         validate_limits(request.generator, request.training, limits=effective_limits)
@@ -93,6 +127,7 @@ async def generate_stream(
             name=request.name,
             mongo_generations=mongo_generations,
             hf=hf,
+            mode="train",
         ),
         media_type="text/event-stream",
     )
