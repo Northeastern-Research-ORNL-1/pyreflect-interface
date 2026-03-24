@@ -7,6 +7,7 @@ import threading
 import time
 import warnings
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 from typing import Any, Generator, TextIO, cast
 
 import numpy as np
@@ -47,6 +48,289 @@ def compute_norm_stats(curves: np.ndarray) -> dict:
     }
 
 
+def _resolve_model_path(model_id: str | None) -> Path | None:
+    """Resolve a model_id to a local .pth path. Returns None if not found."""
+    if not model_id:
+        return None
+    safe_id = model_id.replace("/", "").replace("\\", "")
+    candidate = MODELS_DIR / f"{safe_id}.pth"
+    return candidate if candidate.exists() else None
+
+
+def _load_normalization_stats_file(stats_path: Path) -> dict:
+    """Load normalization stats from a .npy file.
+
+    Supports two formats:
+    1. Object-array wrapping a dict with 'nr'/'sld' or 'x'/'y' keys
+    2. Structured array with named fields
+    """
+    data = np.load(stats_path, allow_pickle=True)
+    if data.dtype == object:
+        item = data.item()
+        if isinstance(item, dict):
+            # Check if it has the expected nested structure (nr/sld stats)
+            if "nr" in item:
+                return item["nr"]
+            if "x" in item and "y" in item:
+                return item
+            return item
+    raise ValueError(
+        f"Could not parse normalization stats from {stats_path}. "
+        "Expected a .npy file containing a dict with 'x'/'y' min/max keys."
+    )
+
+
+def generate_with_pyreflect_infer_streaming(
+    *,
+    layers,
+    gen_params: GeneratorParams,
+    train_params: TrainingParams,
+    model_id: str | None,
+    normalization_stats_path: str | None,
+    user_id: str | None,
+    name: str | None,
+    mongo_generations,
+    hf: HuggingFaceIntegration,
+) -> Generator[str, None, None]:
+    """Inference-only streaming path for the synthetic pipeline.
+
+    Skips training entirely. Loads a pre-trained model (.pth) and normalization
+    stats (.npy), generates a small set of synthetic test curves, and runs
+    inference to predict SLD profiles.
+    """
+
+    def emit(event: str, data: Any) -> str:
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+    if not PYREFLECT.available:
+        yield emit("error", "pyreflect not available. Please install pyreflect dependencies.")
+        return
+
+    ReflectivityDataGenerator = PYREFLECT.ReflectivityDataGenerator
+    DataProcessor = PYREFLECT.DataProcessor
+    CNN = PYREFLECT.CNN
+    runtime_device = PYREFLECT.DEVICE
+    torch = PYREFLECT.torch
+    compute_nr_from_sld = PYREFLECT.compute_nr_from_sld
+
+    device, device_reason = resolve_torch_device(
+        torch, runtime_device=runtime_device, prefer_cuda=True
+    )
+    if device_reason:
+        yield emit("log", f"Warning: {device_reason}")
+    yield emit("log", f"[Inference Mode] Device: {device!s}")
+
+    # --- Resolve model path ---
+    model_path = _resolve_model_path(model_id)
+    if model_path is None:
+        from ..settings_store import load_settings, resolve_setting_path
+        settings = load_settings()
+        nr_sld = settings.get("nr_predict_sld", {})
+        model_rel = nr_sld.get("models", {}).get("model")
+        if model_rel:
+            candidate = resolve_setting_path(model_rel)
+            if candidate and candidate.exists():
+                model_path = candidate
+    if model_path is None:
+        yield emit("error", "Pre-trained model not found. Upload a .pth model file first (role: nr_sld_model) or provide a valid model_id.")
+        return
+
+    # --- Resolve normalization stats path ---
+    norm_path: Path | None = None
+    if normalization_stats_path:
+        p = Path(normalization_stats_path)
+        if p.exists():
+            norm_path = p
+    if norm_path is None:
+        from ..settings_store import load_settings, resolve_setting_path
+        settings = load_settings()
+        nr_sld = settings.get("nr_predict_sld", {})
+        stats_rel = nr_sld.get("models", {}).get("normalization_stats")
+        if stats_rel:
+            candidate = resolve_setting_path(stats_rel)
+            if candidate and candidate.exists():
+                norm_path = candidate
+    if norm_path is None:
+        yield emit("error", "Normalization stats not found. Upload a normalization_stat.npy file first (role: normalization_stats) or provide a valid path.")
+        return
+
+    yield emit("log", f"[Inference Mode] Loading model from: {model_path.name}")
+    yield emit("log", f"[Inference Mode] Loading normalization stats from: {norm_path.name}")
+
+    # --- Load normalization stats ---
+    try:
+        nr_stats = _load_normalization_stats_file(norm_path)
+    except Exception as exc:
+        yield emit("error", f"Failed to load normalization stats: {exc}")
+        return
+
+    # --- Load model ---
+    try:
+        model = CNN(layers=train_params.layers, dropout_prob=train_params.dropout).to(device)
+        state_dict = torch.load(str(model_path), map_location=device)
+        model.load_state_dict(state_dict)
+        model.eval()
+        yield emit("log", f"[Inference Mode] Model loaded â CNN(layers={train_params.layers}, dropout={train_params.dropout})")
+    except Exception as exc:
+        yield emit("error", f"Failed to load model: {exc}")
+        return
+
+    # --- Generate synthetic curves for inference ---
+    num_test_curves = max(1, min(gen_params.numCurves, 100))
+    yield emit("log", f"[Inference Mode] Generating {num_test_curves} synthetic test curve(s) for inference...")
+
+    layer_desc = None
+    layer_bound = None
+    if gen_params.layerBound:
+        layer_desc = [
+            layer.model_dump() if hasattr(layer, "model_dump") else layer
+            for layer in layers
+        ]
+        layer_bound = [
+            b.model_dump() if hasattr(b, "model_dump") else b
+            for b in gen_params.layerBound
+        ]
+
+    try:
+        data_generator = ReflectivityDataGenerator(
+            num_layers=gen_params.numFilmLayers,
+            layer_desc=layer_desc,
+            layer_bound=layer_bound,
+        )
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            nr_curves, sld_curves = data_generator.generate(num_test_curves)
+    except Exception as exc:
+        yield emit("error", f"Failed to generate test curves: {exc}")
+        return
+
+    yield emit("log", f"[Inference Mode] Generated NR shape: {nr_curves.shape}, SLD shape: {sld_curves.shape}")
+
+    # --- Normalize using loaded stats ---
+    try:
+        normalized_nr = DataProcessor.normalize_xy_curves(
+            nr_curves, apply_log=True, min_max_stats=nr_stats
+        )
+        sld_stats = compute_norm_stats(sld_curves)
+        normalized_sld = DataProcessor.normalize_xy_curves(
+            sld_curves, apply_log=False, min_max_stats=sld_stats
+        )
+    except Exception as exc:
+        yield emit("error", f"Failed to normalize curves: {exc}")
+        return
+
+    # --- Run inference on first test sample ---
+    test_idx = 0
+    gt_nr = nr_curves[test_idx]
+    gt_sld = sld_curves[test_idx]
+
+    yield emit("log", "[Inference Mode] Running inference...")
+
+    try:
+        with torch.no_grad():
+            test_nr_normalized = normalized_nr[test_idx: test_idx + 1, 1:2, :]
+            test_input = torch.tensor(test_nr_normalized, dtype=torch.float32).to(device)
+            pred_sld_normalized = model(test_input).cpu().numpy()
+
+        pred_sld_denorm = DataProcessor.denormalize_xy_curves(
+            pred_sld_normalized,
+            stats=sld_stats,
+            apply_exp=False,
+        )
+        pred_sld_y = pred_sld_denorm[0, 1, :]
+        pred_sld_z = pred_sld_denorm[0, 0, :]
+    except Exception as exc:
+        yield emit("error", f"Inference failed: {exc}")
+        return
+
+    sld_z = np.linspace(0, 450, len(gt_sld[1]))
+
+    # --- Compute NR from predicted SLD ---
+    if PYREFLECT.compute_nr_available and compute_nr_from_sld is not None:
+        yield emit("log", "[Inference Mode] Computing NR from predicted SLD...")
+        try:
+            pred_sld_profile = (pred_sld_z, pred_sld_y)
+            with warnings.catch_warnings(record=True):
+                warnings.simplefilter("always")
+                _, computed_r = compute_nr_from_sld(
+                    pred_sld_profile,
+                    Q=gt_nr[0],
+                    order="substrate_to_air",
+                )
+            computed_nr = computed_r.tolist()
+        except Exception as exc:
+            yield emit("log", f"Warning: Could not compute NR from predicted SLD: {exc}")
+            computed_nr = gt_nr[1].tolist()
+    else:
+        yield emit("log", "Warning: compute_nr_from_sld not available; using ground truth NR.")
+        computed_nr = gt_nr[1].tolist()
+
+    # --- Build result ---
+    sample_indices = np.linspace(0, len(pred_sld_y) - 1, 50, dtype=int)
+    chi = [
+        {
+            "x": int(i),
+            "predicted": float(pred_sld_y[idx]),
+            "actual": float(gt_sld[1][idx]),
+        }
+        for i, idx in enumerate(sample_indices)
+    ]
+
+    mae = float(np.mean(np.abs(pred_sld_y - gt_sld[1])))
+    mse = float(np.mean((pred_sld_y - gt_sld[1]) ** 2))
+    var = float(np.var(gt_sld[1]))
+    r2 = float(np.clip(1 - mse / var if var > 0 else 0.0, 0, 1))
+
+    result = {
+        "nr": {
+            "q": gt_nr[0].tolist(),
+            "groundTruth": gt_nr[1].tolist(),
+            "computed": computed_nr,
+        },
+        "sld": {
+            "z": sld_z.tolist(),
+            "groundTruth": gt_sld[1].tolist(),
+            "predicted": pred_sld_y.tolist(),
+        },
+        "training": {
+            "epochs": [],
+            "trainingLoss": [],
+            "validationLoss": [],
+        },
+        "chi": chi,
+        "metrics": {
+            "mse": mse,
+            "r2": r2,
+            "mae": mae,
+        },
+        "name": name,
+        "model_id": model_id,
+    }
+
+    yield emit("log", f"[Inference Mode] Done â MAE: {mae:.6f}, RÂ²: {r2:.4f}")
+    yield emit("result", result)
+
+    if mongo_generations is not None and user_id:
+        from datetime import datetime, timezone
+        try:
+            doc = {
+                "user_id": user_id,
+                "name": name,
+                "created_at": datetime.now(timezone.utc),
+                "mode": "infer",
+                "params": {
+                    "layers": [layer.model_dump() for layer in layers],
+                    "generator": gen_params.model_dump(),
+                    "training": train_params.model_dump(),
+                },
+                "result": result,
+            }
+            mongo_generations.insert_one(doc)
+            yield emit("log", "Results saved to database.")
+        except Exception as exc:
+            yield emit("log", f"Warning: Could not save to database: {exc}")
+
+
 def generate_with_pyreflect_streaming(
     *,
     layers,
@@ -56,7 +340,25 @@ def generate_with_pyreflect_streaming(
     name: str | None,
     mongo_generations,
     hf: HuggingFaceIntegration,
+    mode: str = "train",
+    model_id: str | None = None,
+    normalization_stats_path: str | None = None,
 ) -> Generator[str, None, None]:
+    # Route to inference-only path when mode == "infer"
+    if mode == "infer":
+        yield from generate_with_pyreflect_infer_streaming(
+            layers=layers,
+            gen_params=gen_params,
+            train_params=train_params,
+            model_id=model_id,
+            normalization_stats_path=normalization_stats_path,
+            user_id=user_id,
+            name=name,
+            mongo_generations=mongo_generations,
+            hf=hf,
+        )
+        return
+
     def emit(event: str, data: Any) -> str:
         return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
@@ -190,8 +492,8 @@ def generate_with_pyreflect_streaming(
                     redirect_stderr(cast(TextIO, writer)),
                 ):
                     result = data_generator.generate(gen_params.numCurves)
-            gen_warnings.extend(warn_list)
-            gen_result["data"] = result
+                gen_warnings.extend(warn_list)
+                gen_result["data"] = result
         except Exception as exc:
             gen_error.append(exc)
         finally:
@@ -215,7 +517,7 @@ def generate_with_pyreflect_streaming(
     gen_time = time.perf_counter() - gen_start
     yield emit(
         "log",
-        f"   Generated NR shape: {nr_curves.shape}, SLD shape: {sld_curves.shape}",
+        f" Generated NR shape: {nr_curves.shape}, SLD shape: {sld_curves.shape}",
     )
     yield emit("log", f"Generation took {gen_time:.2f}s")
     for warning_msg in emit_warnings("generation", gen_warnings):
@@ -305,7 +607,7 @@ def generate_with_pyreflect_streaming(
 
         yield emit(
             "log",
-            f"   Epoch {epoch + 1}/{train_params.epochs} - Train: {train_loss:.6f}, Val: {val_loss:.6f}",
+            f" Epoch {epoch + 1}/{train_params.epochs} - Train: {train_loss:.6f}, Val: {val_loss:.6f}",
         )
 
     training_time = time.perf_counter() - training_start
@@ -540,7 +842,7 @@ def generate_with_pyreflect(
         layer_bound=layer_bound,
     )
     nr_curves, sld_curves = data_generator.generate(gen_params.numCurves)
-    print(f"   Generated NR shape: {nr_curves.shape}, SLD shape: {sld_curves.shape}")
+    print(f" Generated NR shape: {nr_curves.shape}, SLD shape: {sld_curves.shape}")
 
     print("Preprocessing data...")
     nr_log = np.array(nr_curves, copy=True)
@@ -610,7 +912,7 @@ def generate_with_pyreflect(
 
         if (epoch + 1) % 5 == 0 or epoch == 0:
             print(
-                f"   Epoch {epoch + 1}/{train_params.epochs} - Train: {train_loss:.6f}, Val: {val_loss:.6f}"
+                f" Epoch {epoch + 1}/{train_params.epochs} - Train: {train_loss:.6f}, Val: {val_loss:.6f}"
             )
 
     import uuid
