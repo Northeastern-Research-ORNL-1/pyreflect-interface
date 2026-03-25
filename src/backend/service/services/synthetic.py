@@ -138,9 +138,15 @@ def generate_with_pyreflect_infer_streaming(
     # --- Resolve normalization stats path ---
     norm_path: Path | None = None
     if normalization_stats_path:
-        p = Path(normalization_stats_path)
-        if p.exists():
-            norm_path = p
+        # Reject paths that escape the backend root (path traversal guard)
+        try:
+            p = (BACKEND_ROOT / normalization_stats_path).resolve()
+            p.relative_to(BACKEND_ROOT.resolve())  # raises ValueError if outside
+            if p.exists():
+                norm_path = p
+        except (ValueError, OSError):
+            yield emit("error", "Invalid normalization_stats_path: path must remain within the backend data directory.")
+            return
     if norm_path is None:
         from ..settings_store import load_settings, resolve_setting_path
         settings = load_settings()
@@ -171,12 +177,23 @@ def generate_with_pyreflect_infer_streaming(
         return
 
     # --- Load model ---
+    # Architecture params must come from app settings (matching training config),
+    # not from the request's train_params, which reflect user UI state and may differ.
     try:
-        model = CNN(layers=train_params.layers, dropout_prob=train_params.dropout).to(device)
+        from ..settings_store import load_settings as _load_settings
+        _settings = _load_settings()
+        _model_cfg = _settings.get("nr_predict_sld", {}).get("models", {})
+        _cnn_layers = int(_model_cfg.get("layers", 6))
+        _cnn_dropout = float(_model_cfg.get("dropout", 0.0873))
+    except Exception:
+        _cnn_layers, _cnn_dropout = 6, 0.0873  # Optuna best-found defaults
+
+    try:
+        model = CNN(layers=_cnn_layers, dropout_prob=_cnn_dropout).to(device)
         state_dict = torch.load(str(model_path), map_location=device)
         model.load_state_dict(state_dict)
         model.eval()
-        yield emit("log", f"[Inference Mode] Model loaded - CNN(layers={train_params.layers}, dropout={train_params.dropout})")
+        yield emit("log", f"[Inference Mode] Model loaded - CNN(layers={_cnn_layers}, dropout={_cnn_dropout})")
     except Exception as exc:
         yield emit("error", f"Failed to load model: {exc}")
         return
