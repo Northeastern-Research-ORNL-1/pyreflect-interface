@@ -52,8 +52,10 @@ def _resolve_model_path(model_id: str | None) -> Path | None:
     """Resolve a model_id to a local .pth path. Returns None if not found."""
     if not model_id:
         return None
-    safe_id = model_id.replace("/", "").replace("\\", "")
-    candidate = MODELS_DIR / f"{safe_id}.pth"
+    # Reject model IDs containing path separators rather than mutating them.
+    if "/" in model_id or "\\" in model_id:
+        return None
+    candidate = MODELS_DIR / f"{model_id}.pth"
     return candidate if candidate.exists() else None
 
 
@@ -68,11 +70,9 @@ def _load_normalization_stats_file(stats_path: Path) -> dict:
     if data.dtype == object:
         item = data.item()
         if isinstance(item, dict):
-            # Check if it has the expected nested structure (nr/sld stats)
-            if "nr" in item:
-                return item["nr"]
-            if "x" in item and "y" in item:
-                return item
+            # Return the full stats dict so callers can access both 'nr' and
+            # 'sld' sub-dicts. Callers that only need the NR sub-dict should
+            # index with item["nr"] themselves.
             return item
     raise ValueError(
         f"Could not parse normalization stats from {stats_path}. "
@@ -159,7 +159,13 @@ def generate_with_pyreflect_infer_streaming(
 
     # --- Load normalization stats ---
     try:
-        nr_stats = _load_normalization_stats_file(norm_path)
+        full_stats = _load_normalization_stats_file(norm_path)
+        # The .npy file may contain {'nr': {...}, 'sld': {...}} or a flat
+        # {'x': ..., 'y': ...} dict.  Pull out sub-dicts when present so that
+        # both NR normalisation and SLD *de*normalisation use the correct
+        # training-time statistics — never freshly-computed test-curve stats.
+        nr_stats = full_stats.get("nr", full_stats)
+        sld_stats_from_file: dict | None = full_stats.get("sld")
     except Exception as exc:
         yield emit("error", f"Failed to load normalization stats: {exc}")
         return
@@ -170,7 +176,7 @@ def generate_with_pyreflect_infer_streaming(
         state_dict = torch.load(str(model_path), map_location=device)
         model.load_state_dict(state_dict)
         model.eval()
-        yield emit("log", f"[Inference Mode] Model loaded â CNN(layers={train_params.layers}, dropout={train_params.dropout})")
+        yield emit("log", f"[Inference Mode] Model loaded - CNN(layers={train_params.layers}, dropout={train_params.dropout})")
     except Exception as exc:
         yield emit("error", f"Failed to load model: {exc}")
         return
@@ -211,7 +217,10 @@ def generate_with_pyreflect_infer_streaming(
         normalized_nr = DataProcessor.normalize_xy_curves(
             nr_curves, apply_log=True, min_max_stats=nr_stats
         )
-        sld_stats = compute_norm_stats(sld_curves)
+        # Use training-time SLD stats for denormalisation.  Fall back to
+        # freshly-computed stats only when the .npy file predates the
+        # nr/sld split and contains no 'sld' key.
+        sld_stats: dict = sld_stats_from_file if sld_stats_from_file is not None else compute_norm_stats(sld_curves)
         normalized_sld = DataProcessor.normalize_xy_curves(
             sld_curves, apply_log=False, min_max_stats=sld_stats
         )
@@ -307,7 +316,7 @@ def generate_with_pyreflect_infer_streaming(
         "model_id": model_id,
     }
 
-    yield emit("log", f"[Inference Mode] Done â MAE: {mae:.6f}, RÂ²: {r2:.4f}")
+    yield emit("log", f"[Inference Mode] Done — MAE: {mae:.6f}, R²: {r2:.4f}")
     yield emit("result", result)
 
     if mongo_generations is not None and user_id:
