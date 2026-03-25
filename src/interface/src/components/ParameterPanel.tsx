@@ -748,22 +748,20 @@ export default function ParameterPanel({
       {dataSource === 'synthetic' && (
         <>
           {/* Inference Mode Toggle for Synthetic */}
-          <div className={styles.section}>
-            <div className={styles.sectionHeader}>
-              <label className={styles.label}>
+          <div className="control">
+            <div className="control__label">
+              <span>
                 Mode
-              </label>
+              </span>
             </div>
-            <div className={styles.field}>
-              <select
-                className={styles.select}
-                value={nrSldMode}
-                onChange={(e) => onNrSldModeChange(e.target.value as NrSldMode)}
-              >
-                <option value="train">Train</option>
-                <option value="infer">Infer (use pre-trained model)</option>
-              </select>
-            </div>
+            <select
+              className="control__input"
+              value={nrSldMode}
+              onChange={(e) => onNrSldModeChange(e.target.value as NrSldMode)}
+            >
+              <option value="train">Train</option>
+              <option value="infer">Infer (use pre-trained model)</option>
+            </select>
           </div>
 
           {/* Film Layers Section */}

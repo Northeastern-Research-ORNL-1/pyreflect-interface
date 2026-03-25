@@ -13,6 +13,7 @@ from typing import Any, Generator, TextIO, cast
 import numpy as np
 
 from ..config import (
+    BACKEND_ROOT,
     LEARNING_RATE,
     LOCAL_MODEL_WAIT_POLL_S,
     LOCAL_MODEL_WAIT_TIMEOUT_S,
@@ -269,7 +270,9 @@ def generate_with_pyreflect_infer_streaming(
         yield emit("error", f"Inference failed: {exc}")
         return
 
-    sld_z = np.linspace(0, 450, len(gt_sld[1]))
+    # Use the z-grid from the denormalized predictions so the z axis is
+    # consistent with the predicted SLD values (same grid used during training).
+    sld_z = pred_sld_z
 
     # --- Compute NR from predicted SLD ---
     if PYREFLECT.compute_nr_available and compute_nr_from_sld is not None:
