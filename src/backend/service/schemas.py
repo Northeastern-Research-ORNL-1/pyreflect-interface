@@ -160,6 +160,10 @@ class GenerateRequest(BaseModel):
     reuseExistingModelStats: bool = False
     reuseModelOnlyFirstRun: bool = False
     gpu: GPU_TIERS = "T4"  # GPU tier for Modal training
+    # Inference mode fields: provide either model_id (for a stored model) or
+    # the path to a locally uploaded model file + normalization stats.
+    model_id: str | None = None
+    normalization_stats_path: str | None = None
 
 
 class NRData(BaseModel):

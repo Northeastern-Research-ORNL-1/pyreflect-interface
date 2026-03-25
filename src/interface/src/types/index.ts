@@ -175,6 +175,9 @@ export interface GenerateParams {
   layers: FilmLayer[];
   generator: GeneratorParams;
   training: TrainingParams;
+  mode?: 'train' | 'infer';
+  model_id?: string;
+  normalization_stats_path?: string;
 }
 
 export interface StreamProgressEvent {

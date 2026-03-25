@@ -336,7 +336,7 @@ export default function ParameterPanel({
   };
 
   const shouldShowTraining =
-    dataSource === 'synthetic' ||
+    (dataSource === 'synthetic' && nrSldMode !== 'infer') ||
     (dataSource === 'real' && (workflow === 'sld_chi' || workflow === 'nr_sld_chi' || nrSldMode === 'train'));
 
   const trainingTooltip =
@@ -747,6 +747,23 @@ export default function ParameterPanel({
 
       {dataSource === 'synthetic' && (
         <>
+          {/* Inference Mode Toggle for Synthetic */}
+          <div className="control">
+            <div className="control__label">
+              <span>
+                Mode
+              </span>
+            </div>
+            <select
+              className="control__input"
+              value={nrSldMode}
+              onChange={(e) => onNrSldModeChange(e.target.value as NrSldMode)}
+            >
+              <option value="train">Train</option>
+              <option value="infer">Infer (use pre-trained model)</option>
+            </select>
+          </div>
+
           {/* Film Layers Section */}
           <div className="section">
             <div className="section__header">
