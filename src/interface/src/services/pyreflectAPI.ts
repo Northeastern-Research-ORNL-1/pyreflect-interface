@@ -19,6 +19,8 @@ import type {
   // Models
   ModelUploadResponse,
   ModelInfoResponse,
+  // Upload
+  FileUploadResponse,
   // Jobs
   JobStatusResponse,
   JobSubmitData,
@@ -258,27 +260,42 @@ class PyReflectAPI {
   }
 
   // POST /api/upload - Upload files (+ optional roles)
-  async uploadFiles(files: File[], roles?: string[] | null): Promise<ModelUploadResponse> {
+  async uploadFiles(
+    files: File[],
+    roles?: string[] | null,
+    userId?: string | null,
+  ): Promise<FileUploadResponse> {
     const formData = new FormData();
 
     files.forEach((file, index) => {
       formData.append('files', file);
       if (roles && roles[index]) {
-        formData.append(`roles[${index}]`, roles[index]);
+        formData.append('roles', roles[index]);
       }
     });
 
     const url = `${this.baseURL}/api/upload`;
+    const headers: Record<string, string> = {};
+    if (userId) {
+      headers['X-User-ID'] = userId;
+    }
+
     const response = await fetch(url, {
       method: 'POST',
+      headers,
       body: formData,
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      let detail = '';
+      try {
+        const err = await response.json();
+        detail = typeof err?.detail === 'string' ? err.detail : '';
+      } catch { /* ignore */ }
+      throw new Error(detail || `HTTP error! status: ${response.status}`);
     }
 
-    return response.json() as Promise<ModelUploadResponse>;
+    return response.json() as Promise<FileUploadResponse>;
   }
 
   // ========================================

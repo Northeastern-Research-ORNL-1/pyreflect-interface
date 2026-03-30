@@ -14,6 +14,7 @@ from .. import config as cfg
 from ..config import IS_PRODUCTION
 from ..integrations.huggingface import HuggingFaceIntegration, upload_artifact_file
 from ..services.guards import require_user_id
+from ..services.csv_parser import parse_csv_file
 from ..services.upload_canonicalization import (
     canonicalize_npy_payload,
     load_normalization_stats,
@@ -121,6 +122,45 @@ async def upload_files(
                     if canonical_result.metadata.get("canonicalized"):
                         if hf_available:
                             ensure_raw_snapshot(target_path)
+                        np.save(target_path, payload)
+                elif target_path.suffix.lower() in (
+                    ".csv",
+                    ".txt",
+                    ".dat",
+                ) and resolved_role in {
+                    "experimental_nr",
+                    "nr_train",
+                    "sld_train",
+                }:
+                    csv_result = parse_csv_file(target_path)
+                    payload = csv_result.payload
+                    file_meta.update(csv_result.metadata)
+                    report_payload = csv_result.report
+
+                    if hf_available:
+                        ensure_raw_snapshot(target_path)
+
+                    npy_path = target_path.with_suffix(".npy")
+                    np.save(npy_path, payload)
+                    try:
+                        if npy_path != target_path:
+                            target_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    target_path = npy_path
+                    file_meta["stored_as"] = target_path.name
+
+                    canonical_result = canonicalize_npy_payload(
+                        resolved_role, payload
+                    )
+                    payload = canonical_result.payload
+                    file_meta.update(canonical_result.metadata)
+                    if canonical_result.report:
+                        report_payload = {
+                            **report_payload,
+                            "canonicalization": canonical_result.report,
+                        }
+                    if canonical_result.metadata.get("canonicalized"):
                         np.save(target_path, payload)
                 else:
                     payload = None

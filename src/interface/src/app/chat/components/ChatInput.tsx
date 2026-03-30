@@ -2,12 +2,13 @@
 
 interface ChatInputProps {
   onSend: (message: string) => void;
+  onAttach?: () => void;
   disabled: boolean;
   value: string;
   onChange: (value: string) => void;
 }
 
-export default function ChatInput({ onSend, disabled, value, onChange }: ChatInputProps) {
+export default function ChatInput({ onSend, onAttach, disabled, value, onChange }: ChatInputProps) {
   const handleSubmit = () => {
     if (value.trim() && !disabled) {
       onSend(value);
@@ -29,12 +30,12 @@ export default function ChatInput({ onSend, disabled, value, onChange }: ChatInp
           padding: '4px'
         }}>
           {/* Attach button */}
-          <button style={{
+          <button onClick={onAttach} style={{
             padding: '12px',
             color: '#888',
             background: 'none',
             border: 'none',
-            cursor: 'pointer',
+            cursor: onAttach ? 'pointer' : 'default',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center'
