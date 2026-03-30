@@ -217,6 +217,20 @@ export interface ModelUploadResponse {
   size_mb?: number;
 }
 
+export interface FileUploadResponse {
+  saved: string[];
+  metadata: Array<{
+    filename: string;
+    role: string;
+    path: string;
+    shape?: number[];
+    stored_as?: string;
+    warnings?: string[];
+    [key: string]: unknown;
+  }>;
+  settings_updated: boolean;
+}
+
 export interface ModelInfoResponse {
   model_id: string;
   size_mb: number;

@@ -1,10 +1,12 @@
 'use client';
 import { pyreflectAPI } from '../../services/pyreflectAPI';
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useSession } from 'next-auth/react';
 import WelcomeScreen from './components/WelcomeScreen';
 import Message from './components/Message';
 import GraphDisplay from '@/components/GraphDisplay';
 import { GenerateResponse } from '@/types';
+import type { UploadRole } from '@/types';
 
 // ============================================================
 // INTERFACES
@@ -490,10 +492,36 @@ function StatusBar({ history, isGenerating, lastDuration, activeModel, onHistory
 }
 
 // ============================================================
+// UPLOAD ROLE INFERENCE
+// ============================================================
+
+function inferUploadRole(filename: string): UploadRole {
+  const fname = filename.toLowerCase();
+  const ext = fname.split('.').pop() ?? '';
+
+  if (ext === 'pth' || ext === 'pt') return 'nr_sld_model';
+  if (fname.includes('norm')) return 'normalization_stats';
+  if (fname.includes('chi') && fname.includes('param')) return 'sld_chi_model_chi_params_file';
+  if (fname.includes('mod_sld') || (fname.includes('chi') && fname.includes('sld'))) return 'sld_chi_model_sld_file';
+  if (fname.includes('mod_expt') || (fname.includes('chi') && fname.includes('expt'))) return 'sld_chi_experimental_profile';
+  if (fname.includes('sld')) return 'sld_train';
+  if (['csv', 'txt', 'dat'].includes(ext)) return 'experimental_nr';
+  return 'nr_train';
+}
+
+// ============================================================
 // MAIN COMPONENT
 // ============================================================
 
 export default function ChatPage() {
+  const { data: session } = useSession();
+  const sessionUserId = (() => {
+    const user = session?.user as unknown;
+    if (!user || typeof user !== 'object') return undefined;
+    const maybeId = (user as Record<string, unknown>).id;
+    return typeof maybeId === 'string' ? maybeId : undefined;
+  })();
+
   const [messages, setMessages] = useState<MessageType[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -537,74 +565,27 @@ export default function ChatPage() {
         }
         setUploadedFiles(prev => [...prev, newFile]);
 
-        // ---- NPY FILES → /api/upload ----
-        if (file.name.toLowerCase().endsWith('.npy')) {
+        // ---- Upload supported files via pyreflectAPI ----
+        const supportedExts = ['.npy', '.csv', '.txt', '.dat', '.pth', '.pt', '.npz', '.json'];
+        if (supportedExts.some(ext => file.name.toLowerCase().endsWith(ext))) {
           try {
-            const formData = new FormData();
-            formData.append('files', file);
-            // Infer role from filename
-            let role = 'nr_train';
-            const fname = file.name.toLowerCase();
-            if (fname.includes('sld')) role = 'sld_train';
-
-            else if (fname.includes('norm')) role = 'normalization_stats';
-            formData.append('roles', role);
-            const response = await fetch('http://localhost:8000/api/upload', { method: 'POST', body: formData, headers: { 'X-User-Id': 'anonymous' } });
-            if (response.ok) {
-              const result = await response.json();
-              console.log('✅ NPY uploaded:', result);
-              setHasUploadedData(true);
-              setMessages(prev => [...prev, {
-                role: 'assistant',
-                content: '📊 **NPY file uploaded successfully!**\n\n- **File:** ' + file.name + '\n- **Role:** ' + role + '\n\nYour data is ready for analysis.',
-                suggestions: [
-                  { text: 'Fit this data', category: 'analysis', confidence: 0.9 },
-                  { text: 'Set up a model for fitting', category: 'analysis', confidence: 0.8 },
-                  { text: 'What substrate should I use?', category: 'quick', confidence: 0.7 }
-                ]
-              }]);
-            } else {
-              const errMsg = await parseErrorResponse(response);
-              console.error('❌ NPY upload failed:', errMsg);
-              setMessages(prev => [...prev, { role: 'assistant', content: '❌ **Upload failed:** ' + errMsg }]);
-            }
+            const role = inferUploadRole(file.name);
+            const result = await pyreflectAPI.uploadFiles([file], [role], sessionUserId);
+            console.log('✅ Upload succeeded:', result);
+            setHasUploadedData(true);
+            const meta = result.metadata?.[0] || {};
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: '**File uploaded successfully!**\n\n- **File:** ' + (meta.filename || file.name) + '\n- **Role:** ' + (meta.role || role) + (meta.stored_as ? '\n- **Stored as:** ' + meta.stored_as : '') + '\n\nYour data is ready for analysis.',
+              suggestions: [
+                { text: 'Fit this data', category: 'analysis', confidence: 0.9 },
+                { text: 'Set up a model for fitting', category: 'analysis', confidence: 0.8 },
+                { text: 'What substrate should I use?', category: 'quick', confidence: 0.7 }
+              ]
+            }]);
           } catch (error) {
-            console.error('❌ NPY upload error:', error);
-            setMessages(prev => [...prev, { role: 'assistant', content: '❌ **Upload error:** ' + (error instanceof Error ? error.message : 'Network error') }]);
-          }
-        }
-
-        // ---- CSV/TXT/DAT FILES → /api/upload (same endpoint, role: experimental_nr) ----
-        else if (file.name.toLowerCase().endsWith('.csv') || file.name.toLowerCase().endsWith('.txt') || file.name.toLowerCase().endsWith('.dat')) {
-          try {
-            const formData = new FormData();
-            formData.append('files', file);
-            formData.append('roles', 'experimental_nr');
-            const response = await fetch('http://localhost:8000/api/upload', { method: 'POST', body: formData, headers: { 'X-User-Id': 'anonymous' } });
-            if (response.ok) {
-              const result = await response.json();
-              console.log('✅ CSV uploaded:', result);
-              setHasUploadedData(true);
-              // /api/upload returns { saved: [...], metadata: [...] }
-              const meta = result.metadata?.[0] || {};
-              setMessages(prev => [...prev, {
-                role: 'assistant',
-                content: '📊 **File uploaded successfully!**\n\n- **File:** ' + (meta.filename || file.name) + '\n- **Role:** ' + (meta.role || 'experimental_nr') + '\n\nYour data is ready for analysis.',
-                suggestions: [
-                  { text: 'Fit this data', category: 'analysis', confidence: 0.9 },
-                  { text: 'Show me the Q-R plot', category: 'analysis', confidence: 0.8 },
-                  { text: 'Set up a model for fitting', category: 'analysis', confidence: 0.8 },
-                  { text: 'What substrate should I use?', category: 'quick', confidence: 0.7 }
-                ]
-              }]);
-            } else {
-              const errMsg = await parseErrorResponse(response);
-              console.error('❌ CSV upload failed:', errMsg);
-              setMessages(prev => [...prev, { role: 'assistant', content: '❌ **Upload failed:** ' + errMsg }]);
-            }
-          } catch (error) {
-            console.error('❌ CSV upload error:', error);
-            setMessages(prev => [...prev, { role: 'assistant', content: '❌ **Upload error:** ' + (error instanceof Error ? error.message : 'Network error') }]);
+            console.error('❌ Upload error:', error);
+            setMessages(prev => [...prev, { role: 'assistant', content: '**Upload failed:** ' + (error instanceof Error ? error.message : 'Network error') }]);
           }
         }
       };
@@ -612,7 +593,7 @@ export default function ChatPage() {
       else reader.readAsArrayBuffer(file);
     }
     e.target.value = '';
-  }, []);
+  }, [sessionUserId]);
 
   const removeFile = useCallback((id: string) => { setUploadedFiles(prev => prev.filter(f => f.id !== id)); if (showFilePreview?.id === id) setShowFilePreview(null); }, [showFilePreview]);
   const formatFileSize = (b: number) => { if (b < 1024) return b + ' B'; if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB'; return (b / (1024 * 1024)).toFixed(1) + ' MB'; };
