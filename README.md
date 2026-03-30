@@ -686,6 +686,40 @@ NEXT_PUBLIC_API_URL=http://<baremetal-host>:8000 bun dev
 
 Note: Modal workers do not share your bare-metal filesystem. If you need model files to persist, configure Hugging Face uploads (`HF_TOKEN`, `HF_REPO_ID`) or another shared storage mechanism.
 
+### Mac Mini Redeployment
+
+The production backend runs on a Mac Mini (`lexie@100.77.36.51`) accessible via Tailscale. The repo is cloned at `~/pyreflect-backend`.
+
+**Quick redeploy (pull latest + restart):**
+
+```bash
+ssh -i ~/.ssh/macmini lexie@100.77.36.51
+
+cd ~/pyreflect-backend
+git pull origin main
+cd src/backend
+uv sync
+kill $(lsof -ti:8000) 2>/dev/null
+nohup uv run uvicorn main:app --host 0.0.0.0 --port 8000 > ~/logs/pyreflect-backend.log 2>&1 &
+
+# Verify
+curl -sf http://localhost:8000/api/health
+```
+
+**One-liner from local machine:**
+
+```bash
+ssh -i ~/.ssh/macmini lexie@100.77.36.51 \
+  "cd ~/pyreflect-backend && git pull origin main && cd src/backend && uv sync && kill \$(lsof -ti:8000) 2>/dev/null; sleep 1 && nohup uv run uvicorn main:app --host 0.0.0.0 --port 8000 > ~/logs/pyreflect-backend.log 2>&1 & sleep 2 && curl -sf http://localhost:8000/api/health"
+```
+
+**Notes:**
+
+- The `.env` file at `src/backend/.env` is already configured (CORS, MongoDB, HF, Redis, Modal, limits). Do not overwrite it on redeploy.
+- The frontend is deployed separately on Vercel (see below) — no frontend process runs on the Mac Mini.
+- Logs: `~/logs/pyreflect-backend.log`
+- SSH key: `~/.ssh/macmini` (Tailscale IP: `100.77.36.51`)
+
 ## Vercel Deployment (Frontend)
 
 ### 1. Deploy frontend to Vercel
