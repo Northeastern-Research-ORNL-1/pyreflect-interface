@@ -1,0 +1,18 @@
+{
+  "role": "experimental_nr",
+  "original_shape": [
+    308,
+    2
+  ],
+  "canonical_shape": [
+    308,
+    2
+  ],
+  "canonicalized": false,
+  "actions": [],
+  "warnings": [],
+  "upload_id": "1229a599e9954bebaad4ed5430c18cdf",
+  "filename": "np_out_REFL_194446_combined_data_auto.npy",
+  "stored_path": "data/curves/expt/np_out_REFL_194446_combined_data_auto.npy",
+  "created_at": "2026-04-01T02:55:24.217092+00:00"
+}

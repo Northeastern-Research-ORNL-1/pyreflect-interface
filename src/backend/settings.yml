@@ -3,7 +3,7 @@ nr_predict_sld:
   file:
     nr_train: data/curves/np_out_REFL_194455_combined_data_auto.npy
     sld_train: data/curves/y_train_5_layers.npy
-    experimental_nr_file: data/curves/expt/np_out_REFL_194446_combined_data_auto.npy
+    experimental_nr_file: data/curves/expt/np_out_REFL_194438_combined_data_auto.npy
   models:
     model: data/pretrained/trained_model.pth
     normalization_stats: data/pretrained/normalization_stat.npy

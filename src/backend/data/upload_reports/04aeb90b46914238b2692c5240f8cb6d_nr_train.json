@@ -1,0 +1,32 @@
+{
+  "role": "nr_train",
+  "original_shape": [
+    1,
+    2,
+    308
+  ],
+  "canonical_shape": [
+    1,
+    2,
+    308
+  ],
+  "canonicalized": true,
+  "actions": [
+    "transposed_2d_curve",
+    "added_batch_dimension",
+    "resampled_to_308"
+  ],
+  "warnings": [],
+  "checks": {
+    "min_points": 10,
+    "q_range_expected": [
+      0.0081,
+      0.1975
+    ],
+    "grid_points": 308
+  },
+  "upload_id": "04aeb90b46914238b2692c5240f8cb6d",
+  "filename": "np_out_REFL_194438_combined_data_auto.npy",
+  "stored_path": "data/curves/np_out_REFL_194438_combined_data_auto.npy",
+  "created_at": "2026-04-01T01:25:26.599915+00:00"
+}

@@ -17,7 +17,9 @@ interface SavedGeneration {
   result?: {
       metrics: {
         mse: number;
-        r2: number;
+        r2?: number;
+        r2_sld?: number;
+        r2_nr?: number;
         mae: number;
       };
       model_id?: string;
@@ -1168,10 +1170,21 @@ export default function ExploreSidebar({
                       <span className={styles.metricLabel}>MSE</span>
                       <span className={styles.metricValue}>{item.result.metrics.mse.toFixed(4)}</span>
                     </div>
-                    <div className={styles.metric}>
-                      <span className={styles.metricLabel}>R²</span>
-                      <span className={styles.metricValue}>{item.result.metrics.r2.toFixed(3)}</span>
-                    </div>
+                    {item.result.metrics.r2_sld != null || item.result.metrics.r2_nr != null ? (<>
+                      <div className={styles.metric}>
+                        <span className={styles.metricLabel}>R² SLD</span>
+                        <span className={styles.metricValue}>{(item.result.metrics.r2_sld ?? 0).toFixed(3)}</span>
+                      </div>
+                      <div className={styles.metric}>
+                        <span className={styles.metricLabel}>R² NR</span>
+                        <span className={styles.metricValue}>{(item.result.metrics.r2_nr ?? 0).toFixed(3)}</span>
+                      </div>
+                    </>) : (
+                      <div className={styles.metric}>
+                        <span className={styles.metricLabel}>R²</span>
+                        <span className={styles.metricValue}>{(item.result.metrics.r2 ?? 0).toFixed(3)}</span>
+                      </div>
+                    )}
                      <div className={styles.metric}>
                       <span className={styles.metricLabel}>MAE</span>
                       <span className={styles.metricValue}>{item.result.metrics.mae.toFixed(4)}</span>

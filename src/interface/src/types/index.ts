@@ -56,7 +56,9 @@ export interface ChiData {
 
 export interface Metrics {
   mse: number;
-  r2: number;
+  r2?: number;
+  r2_sld?: number;
+  r2_nr?: number;
   mae: number;
 }
 

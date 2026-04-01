@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\([p for p in d.get\\(''''paths'''',{}\\).keys\\(\\) if ''''upload'''' in p.lower\\(\\)]\\)\")",
+      "Bash(curl -s http://localhost:8000/)",
+      "Bash(curl -s http://localhost:8000/docs)"
+    ]
+  }
+}

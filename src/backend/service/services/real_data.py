@@ -390,7 +390,7 @@ def _real_nr_sld_train_core(
         for i, idx in enumerate(sample_indices)
     ]
 
-    # R² on NR in log-space (compare computed NR from predicted SLD vs input NR)
+    # R² NR: compare computed NR (from predicted SLD) vs input NR in log-space
     gt_nr_y = gt_nr[1]
     if isinstance(computed_nr, list):
         computed_nr_arr = np.array(computed_nr)
@@ -400,16 +400,19 @@ def _real_nr_sld_train_core(
     comp_log = np.log10(np.clip(computed_nr_arr, 1e-12, None))
     nr_ss_res = np.sum((gt_log - comp_log) ** 2)
     nr_ss_tot = np.sum((gt_log - np.mean(gt_log)) ** 2)
-    r2 = float(np.clip(1 - nr_ss_res / nr_ss_tot if nr_ss_tot > 0 else 0.0, 0, 1))
+    r2_nr = float(np.clip(1 - nr_ss_res / nr_ss_tot if nr_ss_tot > 0 else 0.0, 0, 1))
     mae = float(np.mean(np.abs(gt_log - comp_log)))
     mse = float(np.mean((gt_log - comp_log) ** 2))
+
+    # R² SLD: predicted SLD vs ground-truth SLD (0.0 if no GT available)
+    r2_sld = 0.0
 
     result = {
         "nr": {"q": gt_nr[0].tolist(), "groundTruth": gt_nr[1].tolist(), "computed": computed_nr},
         "sld": {"z": pred_sld_z.tolist(), "groundTruth": pred_sld_y.tolist(), "predicted": pred_sld_y.tolist()},
         "training": {"epochs": [], "trainingLoss": [], "validationLoss": []},
         "chi": [],
-        "metrics": {"mse": mse, "r2": r2, "mae": mae},
+        "metrics": {"mse": mse, "r2_sld": r2_sld, "r2_nr": r2_nr, "mae": mae},
         "name": request.name,
         "model_id": Path(model_rel).stem,
     }
@@ -492,8 +495,17 @@ def _reuse_existing_nr_sld_train_model(
 
     mse = float(np.mean((pred_sld_y - gt_sld[1]) ** 2))
     sld_var = float(np.var(gt_sld[1]))
-    r2 = 1 - (mse / sld_var) if sld_var > 0 else 0.0
+    r2_sld = 1 - (mse / sld_var) if sld_var > 0 else 0.0
     mae = float(np.mean(np.abs(pred_sld_y - gt_sld[1])))
+
+    # R² NR: compare computed NR (from predicted SLD) vs input NR in log-space
+    computed_nr_arr = np.array(computed_nr) if isinstance(computed_nr, list) else computed_nr
+    gt_log = np.log10(np.clip(gt_nr[1], 1e-12, None))
+    comp_log = np.log10(np.clip(computed_nr_arr, 1e-12, None))
+    nr_ss_res = float(np.sum((gt_log - comp_log) ** 2))
+    nr_ss_tot = float(np.sum((gt_log - np.mean(gt_log)) ** 2))
+    r2_nr = float(np.clip(1 - nr_ss_res / nr_ss_tot if nr_ss_tot > 0 else 0.0, 0, 1))
+
     model_size_mb = model_path.stat().st_size / (1024 * 1024)
 
     result = {
@@ -505,7 +517,7 @@ def _reuse_existing_nr_sld_train_model(
         },
         "training": {"epochs": [], "trainingLoss": [], "validationLoss": []},
         "chi": chi,
-        "metrics": {"mse": mse, "r2": float(np.clip(r2, 0, 1)), "mae": mae},
+        "metrics": {"mse": mse, "r2_sld": float(np.clip(r2_sld, 0, 1)), "r2_nr": r2_nr, "mae": mae},
         "name": request.name,
         "model_id": model_path.stem,
         "model_size_mb": model_size_mb,
@@ -674,10 +686,25 @@ def _real_nr_sld_infer_core(
     #   2. Interpolate predicted SLD onto GT z-grid (align_arrays)
     #   3. R² on y-values
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # R² NR: compare computed NR (from predicted SLD) vs input NR in log-space
+    # ------------------------------------------------------------------
+    computed_nr_arr = np.array(computed_nr) if isinstance(computed_nr, list) else computed_nr
+    gt_log = np.log10(np.clip(gt_nr[1], 1e-12, None))
+    comp_log = np.log10(np.clip(computed_nr_arr, 1e-12, None))
+    nr_ss_res = float(np.sum((gt_log - comp_log) ** 2))
+    nr_ss_tot = float(np.sum((gt_log - np.mean(gt_log)) ** 2))
+    r2_nr = float(np.clip(1 - nr_ss_res / nr_ss_tot if nr_ss_tot > 0 else 0.0, 0, 1))
+    mse = float(np.mean((gt_log - comp_log) ** 2))
+    mae = float(np.mean(np.abs(gt_log - comp_log)))
+    yield emit("log", f"R² NR (reconstructed vs experimental): {r2_nr:.4f}")
+
+    # ------------------------------------------------------------------
+    # R² SLD: predicted SLD vs ground-truth SLD (Krishna's method)
+    # ------------------------------------------------------------------
     gt_sld_path = _find_ground_truth_sld(nr_file)
     gt_sld_interp = None
-    r2_method = "nr_log_space"
-    r2, mse, mae = 0.0, 0.0, 0.0
+    r2_sld = 0.0
 
     if gt_sld_path is not None:
         try:
@@ -696,27 +723,12 @@ def _real_nr_sld_infer_core(
 
             ss_res = float(np.sum((gt_y - pred_y_aligned) ** 2))
             ss_tot = float(np.sum((gt_y - np.mean(gt_y)) ** 2))
-            r2 = float(np.clip(1 - ss_res / ss_tot if ss_tot > 0 else 0.0, 0, 1))
-            mae = float(np.mean(np.abs(gt_y - pred_y_aligned)))
-            mse = float(np.mean((gt_y - pred_y_aligned) ** 2))
-            r2_method = "sld_vs_ground_truth"
+            r2_sld = float(np.clip(1 - ss_res / ss_tot if ss_tot > 0 else 0.0, 0, 1))
 
-            yield emit("log", f"R² computed via SLD vs ground-truth SLD: R²={r2:.4f}")
+            yield emit("log", f"R² SLD (predicted vs ground-truth): {r2_sld:.4f}")
         except Exception as exc:
-            yield emit("log", f"Warning: Failed to load/process ground-truth SLD ({exc}), falling back to NR log-space R²")
+            yield emit("log", f"Warning: Failed to load/process ground-truth SLD ({exc})")
             gt_sld_interp = None
-
-    if gt_sld_interp is None:
-        gt_nr_y = gt_nr[1]
-        computed_nr_arr = np.array(computed_nr) if isinstance(computed_nr, list) else computed_nr
-        gt_log = np.log10(np.clip(gt_nr_y, 1e-12, None))
-        comp_log = np.log10(np.clip(computed_nr_arr, 1e-12, None))
-        nr_ss_res = np.sum((gt_log - comp_log) ** 2)
-        nr_ss_tot = np.sum((gt_log - np.mean(gt_log)) ** 2)
-        r2 = float(np.clip(1 - nr_ss_res / nr_ss_tot if nr_ss_tot > 0 else 0.0, 0, 1))
-        mae = float(np.mean(np.abs(gt_log - comp_log)))
-        mse = float(np.mean((gt_log - comp_log) ** 2))
-        yield emit("log", f"R² computed via NR log-space (no ground-truth SLD found): R²={r2:.4f}")
 
     gt_sld_z_out = pred_sld_z.tolist()
     gt_sld_y_out = pred_sld_y.tolist()
@@ -731,7 +743,7 @@ def _real_nr_sld_infer_core(
         "sld": {"z": gt_sld_z_out, "groundTruth": gt_sld_y_out, "predicted": pred_sld_y.tolist()},
         "training": {"epochs": [], "trainingLoss": [], "validationLoss": []},
         "chi": [],
-        "metrics": {"mse": mse, "r2": r2, "mae": mae, "r2_method": r2_method},
+        "metrics": {"mse": mse, "r2_sld": r2_sld, "r2_nr": r2_nr, "mae": mae},
         "name": request.name,
         "model_id": Path(model_rel).stem,
     }
@@ -911,7 +923,7 @@ def _run_sld_chi_workflow(
         },
         "training": {"epochs": [], "trainingLoss": [], "validationLoss": []},
         "chi": chi_data,
-        "metrics": {"mse": 0.0, "r2": 0.0, "mae": 0.0},
+        "metrics": {"mse": 0.0, "r2_sld": 0.0, "r2_nr": 0.0, "mae": 0.0},
         "name": request.name,
     }
 

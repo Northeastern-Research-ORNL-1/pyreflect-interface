@@ -112,8 +112,8 @@ If you have tools available, use them:
    - Use dataSource "real" when they have uploaded experimental NR data.
    - Use dataSource "synthetic" with layer parameters when they describe a sample.
 2. When the user asks about uploaded files or system readiness — call get_backend_status.
-3. After a tool returns results, summarize the R² score and key findings in 1-2 sentences.
-   The inference pipeline: (1) user uploads experimental NR data, (2) CNN predicts SLD profile from NR, (3) model reconstructs NR from predicted SLD, (4) R² measures how well reconstructed NR matches original input NR. When reporting results, say "R² = X (reconstructed vs experimental reflectivity)" — it is NOT a direct SLD comparison.
+3. After a tool returns results, summarize the R² scores and key findings in 1-2 sentences.
+   The inference pipeline: (1) user uploads experimental NR data, (2) CNN predicts SLD profile from NR, (3) model reconstructs NR from predicted SLD. Two R² metrics are reported: R² SLD = predicted SLD vs ground-truth SLD, R² NR = NR reconstructed from predicted SLD vs original input NR. Report both when available.
 
 If tools are NOT available, output a JSON code block instead:
 \`\`\`json
@@ -456,11 +456,12 @@ async function callGenerateAPI(config: GenerationConfig, onProgress?: (m: string
   try {
     if (onProgress) onProgress(hasRealData ? '🔬 Fitting model to your experimental data...' : '🚀 Starting neutron reflectivity analysis...');
     if (onProgress) onProgress(hasRealData ? '📈 Optimizing layer parameters...' : '🧪 Running inference with pre-trained model...');
-    const payload = {
+    const payload: Record<string, unknown> = {
       layers,
       generator: { numCurves: Math.min(config.numCurves, 100), numFilmLayers: config.layers.length },
       training: { batchSize: DEFAULT_BATCH_SIZE, epochs: config.epochs, layers: DEFAULT_CNN_LAYERS, dropout: DEFAULT_DROPOUT, latentDim: DEFAULT_LATENT_DIM, aeEpochs: 50, mlpEpochs: 50 },
       mode: 'infer',
+      ...(hasRealData ? { dataSource: 'real' } : {}),
     };
     console.log('GENERATE PAYLOAD:', JSON.stringify(payload, null, 2));
     const response = await fetch('http://127.0.0.1:8000/api/generate/stream', {
@@ -643,7 +644,7 @@ function ParameterPanel({ config, onChange, onGenerate, isGenerating, isCollapse
 }
 
 function HistoryPanel({ history, isOpen, onClose, onSelect }: { history: HistoryItem[]; isOpen: boolean; onClose: () => void; onSelect: (i: HistoryItem) => void }) {
-  return (<>{isOpen && <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 40 }} />}<div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: '320px', background: '#0d0d0d', borderLeft: '1px solid #2a2a2a', transform: isOpen ? 'translateX(0)' : 'translateX(100%)', transition: 'transform 0.3s ease', zIndex: 50, display: 'flex', flexDirection: 'column' }}><div style={{ padding: '16px', borderBottom: '1px solid #2a2a2a', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><span style={{ fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Generation History</span><button onClick={onClose} style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '18px' }}>×</button></div><div style={{ flex: 1, overflow: 'auto', padding: '12px' }}>{history.length === 0 ? (<div style={{ color: '#666', fontSize: '12px', textAlign: 'center', padding: '40px 20px' }}>No generations yet.</div>) : (<div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>{history.map((item, i) => (<button key={item.id + '_' + i} onClick={() => onSelect(item)} style={{ background: '#1a1a1a', border: '1px solid #333', padding: '12px', cursor: 'pointer', textAlign: 'left' }} onMouseOver={e => e.currentTarget.style.borderColor = '#10b981'} onMouseOut={e => e.currentTarget.style.borderColor = '#333'}><div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600 }}>Run #{history.length - i}</span><span style={{ fontSize: '10px', color: '#666' }}>{formatDuration(item.duration)}</span></div><div style={{ fontSize: '11px', color: '#ccc', marginBottom: '4px' }}>{item.config.layers.map(l => l.name).join(' → ')}</div><div style={{ fontSize: '10px', color: '#666' }}>R² {item.result.metrics.r2.toFixed(3)} · MSE {item.result.metrics.mse.toFixed(4)}</div></button>))}</div>)}</div></div></>);
+  return (<>{isOpen && <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 40 }} />}<div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: '320px', background: '#0d0d0d', borderLeft: '1px solid #2a2a2a', transform: isOpen ? 'translateX(0)' : 'translateX(100%)', transition: 'transform 0.3s ease', zIndex: 50, display: 'flex', flexDirection: 'column' }}><div style={{ padding: '16px', borderBottom: '1px solid #2a2a2a', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><span style={{ fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Generation History</span><button onClick={onClose} style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '18px' }}>×</button></div><div style={{ flex: 1, overflow: 'auto', padding: '12px' }}>{history.length === 0 ? (<div style={{ color: '#666', fontSize: '12px', textAlign: 'center', padding: '40px 20px' }}>No generations yet.</div>) : (<div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>{history.map((item, i) => (<button key={item.id + '_' + i} onClick={() => onSelect(item)} style={{ background: '#1a1a1a', border: '1px solid #333', padding: '12px', cursor: 'pointer', textAlign: 'left' }} onMouseOver={e => e.currentTarget.style.borderColor = '#10b981'} onMouseOut={e => e.currentTarget.style.borderColor = '#333'}><div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600 }}>Run #{history.length - i}</span><span style={{ fontSize: '10px', color: '#666' }}>{formatDuration(item.duration)}</span></div><div style={{ fontSize: '11px', color: '#ccc', marginBottom: '4px' }}>{item.config.layers.map(l => l.name).join(' → ')}</div><div style={{ fontSize: '10px', color: '#666' }}>{item.result.metrics.r2_sld != null ? 'R² SLD ' + item.result.metrics.r2_sld.toFixed(3) + (item.result.metrics.r2_nr != null ? ' · R² NR ' + item.result.metrics.r2_nr.toFixed(3) : '') : 'R² ' + (item.result.metrics.r2 ?? 0).toFixed(3)} · MSE {item.result.metrics.mse.toFixed(4)}</div></button>))}</div>)}</div></div></>);
 }
 
 function StatusBar({ history, isGenerating, lastDuration, activeModel, onHistoryClick }: { history: HistoryItem[]; isGenerating: boolean; lastDuration: number | null; activeModel: string | null; onHistoryClick: () => void }) {
@@ -774,9 +775,12 @@ export default function ChatPage() {
     setIsGenerating(true); setParamsCollapsed(true); const start = Date.now(); setGenerationStart(start);
     try {
       const result = await callGenerateAPI(config, msg => setMessages(prev => [...prev, { role: 'assistant', content: msg }]), hasUploadedData);
-      const duration = Date.now() - start; setLastDuration(duration); setGraphData(result);
+      const duration = Date.now() - start; setLastDuration(duration); console.log('metrics:', result.metrics); setGraphData(result);
       setHistory(prev => [{ id: result.model_id ?? 'gen_' + Date.now(), config, result, timestamp: new Date(), duration }, ...prev]);
-      setMessages(prev => [...prev, { role: 'assistant', content: '🎉 **Generation complete!** (' + formatDuration(duration) + ')\n\nModel ID: `' + result.model_id + '`\nR²: ' + result.metrics.r2.toFixed(4) + ' • MSE: ' + result.metrics.mse.toFixed(4) }]);
+      const r2Text = result.metrics.r2_sld != null || result.metrics.r2_nr != null
+        ? 'R² SLD: ' + (result.metrics.r2_sld ?? 0).toFixed(4) + ' • R² NR: ' + (result.metrics.r2_nr ?? 0).toFixed(4)
+        : 'R²: ' + (result.metrics.r2 ?? 0).toFixed(4);
+      setMessages(prev => [...prev, { role: 'assistant', content: '🎉 **Generation complete!** (' + formatDuration(duration) + ')\n\nModel ID: `' + result.model_id + '`\n' + r2Text + ' • MSE: ' + result.metrics.mse.toFixed(4) }]);
     } catch (error) {
       setMessages(prev => [...prev, { role: 'assistant', content: '💥 **Generation failed:** ' + (error instanceof Error ? error.message : 'Unknown error') }]);
     } finally { setIsGenerating(false); setGenerationStart(null); }
@@ -804,7 +808,7 @@ export default function ChatPage() {
     const toolCallbacks: ToolCallbacks = {
       onProgress: (msg) => setMessages(prev => { const u = [...prev]; const i = u.length - 1; if (i >= 0 && u[i].role === 'assistant') u[i] = { ...u[i], content: '⏳ ' + msg }; return u; }),
       onGraphData: (data) => {
-        setGraphData(data);
+        console.log('metrics:', data.metrics); setGraphData(data);
         setParamsCollapsed(true);
         const duration = Date.now() - (generationStart ?? Date.now());
         setLastDuration(duration);
@@ -939,7 +943,12 @@ export default function ChatPage() {
             <LiveTimer startTime={generationStart} isRunning={isGenerating} />
             {graphData && !isGenerating ? (<><div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '24px', padding: '10px 16px', background: '#111', borderBottom: '1px solid #2a2a2a', fontFamily: "'JetBrains Mono', monospace" }}>
               <div style={{ textAlign: 'center' }}><div style={{ fontSize: '10px', color: '#666', textTransform: 'uppercase', letterSpacing: '0.5px' }}>MSE</div><div style={{ fontSize: '14px', color: '#ccc', fontWeight: 500 }}>{graphData.metrics.mse.toFixed(6)}</div></div>
-              <div style={{ textAlign: 'center' }}><div style={{ fontSize: '10px', color: '#10b981', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>R²</div><div style={{ fontSize: '24px', color: '#10b981', fontWeight: 700, lineHeight: 1 }}>{graphData.metrics.r2.toFixed(4)}</div></div>
+              {graphData.metrics.r2_sld != null || graphData.metrics.r2_nr != null ? (<>
+                <div style={{ textAlign: 'center' }}><div style={{ fontSize: '10px', color: '#10b981', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>R² SLD</div><div style={{ fontSize: '24px', color: '#10b981', fontWeight: 700, lineHeight: 1 }}>{(graphData.metrics.r2_sld ?? 0).toFixed(4)}</div></div>
+                <div style={{ textAlign: 'center' }}><div style={{ fontSize: '10px', color: '#3b82f6', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>R² NR</div><div style={{ fontSize: '24px', color: '#3b82f6', fontWeight: 700, lineHeight: 1 }}>{(graphData.metrics.r2_nr ?? 0).toFixed(4)}</div></div>
+              </>) : (
+                <div style={{ textAlign: 'center' }}><div style={{ fontSize: '10px', color: '#10b981', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>R²</div><div style={{ fontSize: '24px', color: '#10b981', fontWeight: 700, lineHeight: 1 }}>{(graphData.metrics.r2 ?? 0).toFixed(4)}</div></div>
+              )}
               <div style={{ textAlign: 'center' }}><div style={{ fontSize: '10px', color: '#666', textTransform: 'uppercase', letterSpacing: '0.5px' }}>MAE</div><div style={{ fontSize: '14px', color: '#ccc', fontWeight: 500 }}>{graphData.metrics.mae.toFixed(6)}</div></div>
               {(graphData.model_id || (lastDuration != null && lastDuration > 0)) && <div style={{ borderLeft: '1px solid #2a2a2a', paddingLeft: '16px', display: 'flex', flexDirection: 'column', gap: '2px' }}>{graphData.model_id && <div style={{ fontSize: '10px', color: '#555' }}>model: <span style={{ color: '#777' }}>{graphData.model_id}</span></div>}{lastDuration != null && lastDuration > 0 && <div style={{ fontSize: '10px', color: '#555' }}>{formatDuration(lastDuration)}</div>}</div>}
             </div><GraphDisplay data={graphData} /></>) : !isGenerating && (<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#444', fontSize: '12px', textAlign: 'center' }}><div><div style={{ fontSize: '48px', marginBottom: '16px', opacity: 0.3 }}>◇</div><div>Click <strong>Quick Test</strong> or chat with AI</div></div></div>)}

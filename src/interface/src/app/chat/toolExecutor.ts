@@ -56,6 +56,7 @@ async function runInference(
   args: { dataSource: string; layers?: Array<{ name: string; sld: number; thickness: number; roughness: number }> },
   callbacks: ToolCallbacks,
 ): Promise<ToolExecutionResult> {
+  console.log('[toolExecutor] runInference called, dataSource:', args.dataSource);
   callbacks.setIsGenerating(true);
   try {
     let payload: Record<string, unknown>;
@@ -109,10 +110,13 @@ async function runInference(
     }
 
     const result = await readGenerateStream(response, callbacks.onProgress);
+    console.log('[toolExecutor] run_inference result.metrics:', JSON.stringify(result.metrics));
     callbacks.onGraphData(result);
 
     const summary = {
       r2: result.metrics.r2,
+      r2_sld: result.metrics.r2_sld,
+      r2_nr: result.metrics.r2_nr,
       mse: result.metrics.mse,
       mae: result.metrics.mae,
       dataSource: args.dataSource,
