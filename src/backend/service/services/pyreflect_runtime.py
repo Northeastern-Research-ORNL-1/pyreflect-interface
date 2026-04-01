@@ -19,6 +19,7 @@ class PyreflectRuntime:
     chi_pred_trainer: Any | None
     chi_pred_runner: Any | None
     compute_nr_from_sld: Callable[..., Any] | None
+    reverse_y_order: Callable[..., Any] | None
     torch: Any | None
 
 
@@ -139,11 +140,15 @@ def load_pyreflect_runtime() -> PyreflectRuntime:
 
         compute_nr_from_sld = None
         compute_nr_available = False
+        reverse_y_order_fn = None
         try:
             from pyreflect.pipelines import helper as pipelines_helper
 
             compute_nr_from_sld = pipelines_helper.compute_nr_from_sld
             compute_nr_available = True
+            reverse_y_order_fn = getattr(pipelines_helper, "reverse_y_order", None)
+            if reverse_y_order_fn is None:
+                print("Warning: reverse_y_order not found in pyreflect.pipelines.helper")
         except ImportError as exc:
             print(f"Warning: compute_nr_from_sld not available: {exc}")
 
@@ -162,6 +167,7 @@ def load_pyreflect_runtime() -> PyreflectRuntime:
             chi_pred_trainer=_chi_pred_trainer,
             chi_pred_runner=_chi_pred_runner,
             compute_nr_from_sld=compute_nr_from_sld,
+            reverse_y_order=reverse_y_order_fn,
             torch=torch,
         )
     except ImportError as exc:
@@ -180,6 +186,7 @@ def load_pyreflect_runtime() -> PyreflectRuntime:
             chi_pred_trainer=None,
             chi_pred_runner=None,
             compute_nr_from_sld=None,
+            reverse_y_order=None,
             torch=None,
         )
 

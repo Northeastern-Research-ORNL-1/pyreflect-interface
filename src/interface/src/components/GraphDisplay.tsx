@@ -188,28 +188,6 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
 
   return (
     <div className={styles.container}>
-      {/* Metrics Row */}
-      <div className="metrics">
-        <div className="metric">
-          <div className="metric__label">MSE</div>
-          <div className="metric__value">
-            {data.metrics.mse.toFixed(4)}
-          </div>
-        </div>
-        <div className="metric">
-          <div className="metric__label">R²</div>
-          <div className="metric__value">
-            {data.metrics.r2.toFixed(4)}
-          </div>
-        </div>
-        <div className="metric">
-          <div className="metric__label">MAE</div>
-          <div className="metric__value">
-            {data.metrics.mae.toFixed(4)}
-          </div>
-        </div>
-      </div>
-
       {/* Fullscreen Backdrop */}
       {expandedCard && !isExporting && (
         <div 
@@ -219,7 +197,7 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
       )}
 
       {/* Graphs Grid */}
-      <div className={expandedCard ? `graph-container ${styles.expandedContainer}` : 'graph-container'}>
+      <div className={expandedCard ? `graph-container ${styles.expandedContainer}` : 'graph-container'} style={trainingChartData.length === 0 && chiChartData.length === 0 ? { gridTemplateColumns: 'repeat(2, 1fr)', gridTemplateRows: '1fr' } : undefined}>
         {/* NR Curve */}
         <div className={getCardClassName('nr')} ref={nrCardRef} data-export-id="nr">
           <div className="graph-card__header">
@@ -373,8 +351,8 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
           </div>
         </div>
 
-        {/* Training Loss */}
-        <div className={getCardClassName('training')} ref={trainingCardRef} data-export-id="training">
+        {/* Training Loss — hidden when no training data */}
+        {trainingChartData.length > 0 && <div className={getCardClassName('training')} ref={trainingCardRef} data-export-id="training">
           <div className="graph-card__header">
             <span className="graph-card__title">Training Loss</span>
             <div className={styles.headerActions}>
@@ -444,10 +422,10 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
               </LineChart>
             </ResponsiveContainer>
           </div>
-        </div>
+        </div>}
 
-        {/* Chi Parameters */}
-        <div className={getCardClassName('chi')} ref={chiCardRef} data-export-id="chi">
+        {/* Chi Parameters — hidden when no chi data */}
+        {chiChartData.length > 0 && <div className={getCardClassName('chi')} ref={chiCardRef} data-export-id="chi">
           <div className="graph-card__header">
             <span className="graph-card__title">Chi Parameters</span>
             <div className={styles.headerActions}>
@@ -509,7 +487,7 @@ export default function GraphDisplay({ data }: GraphDisplayProps) {
               </ScatterChart>
             </ResponsiveContainer>
           </div>
-        </div>
+        </div>}
       </div>
     </div>
   );

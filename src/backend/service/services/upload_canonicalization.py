@@ -16,7 +16,7 @@ MAX_TRUSTED_NORM_NPY_MB = 5.0
 
 _NR_Q_GRID = np.logspace(np.log10(NR_Q_MIN), np.log10(NR_Q_MAX), num=NR_GRID_POINTS)
 
-NR_CANONICAL_ROLES = {"nr_train", "experimental_nr"}
+NR_CANONICAL_ROLES = {"nr_train"}
 SLD_CANONICAL_ROLES = {"sld_train"}
 
 

@@ -612,7 +612,12 @@ def _real_nr_sld_infer_core(
     # pretrained weights were trained WITHOUT sigmoid.  We run all layers
     # except sigmoid, then denormalise ourselves.
     # ------------------------------------------------------------------
-    nr_arr = nr_curves.copy() if nr_curves.ndim == 3 else nr_curves[np.newaxis, :, :]
+    # Handle both (308, 2) and (1, 2, 308) NR formats
+    nr_arr = nr_curves.copy()
+    if nr_arr.ndim == 2 and nr_arr.shape[1] == 2:
+        nr_arr = nr_arr.T  # (308, 2) → (2, 308)
+    if nr_arr.ndim == 2:
+        nr_arr = nr_arr[np.newaxis, :, :]  # (2, 308) → (1, 2, 308)
     nr_arr = nr_arr.astype(np.float64)
 
     # Normalise NR: log10 on reflectivity, then min-max
@@ -639,7 +644,15 @@ def _real_nr_sld_infer_core(
     pred_sld_y = raw_output[0, 1, :] * (sld_stats["y"]["max"] - sld_stats["y"]["min"]) + sld_stats["y"]["min"]
     pred_curve_2d = np.stack([pred_sld_z, pred_sld_y])  # (2, 900)
 
-    gt_nr = nr_curves[0] if nr_curves.ndim == 3 else nr_curves
+    # Use nr_arr which is already normalised to (1, 2, 308) — extract (2, 308)
+    # for plotting.  Row 0 = Q, row 1 = R (original, NOT log-scaled — log was
+    # applied in-place to nr_arr for the model, so reload for the plot).
+    nr_plot = nr_curves.copy()
+    if nr_plot.ndim == 2 and nr_plot.shape[1] == 2:
+        nr_plot = nr_plot.T  # (308, 2) → (2, 308)
+    if nr_plot.ndim == 3:
+        nr_plot = nr_plot[0]  # (1, 2, 308) → (2, 308)
+    gt_nr = nr_plot  # (2, 308): row 0 = Q, row 1 = R
 
     # NOTE: do NOT apply reverse_y_order or zero-shift to the prediction.
     # Krishna's notebook applies those only to the ground-truth SLD.
@@ -678,10 +691,11 @@ def _real_nr_sld_infer_core(
             gt_y = gt_sld_interp[1]
 
             # align_arrays: interpolate predicted y onto ground-truth z-grid
+            # Uses all points (Krishna's method) — no overlap masking.
             pred_y_aligned = np.interp(gt_sld_interp[0], pred_curve_2d[0], pred_curve_2d[1])
 
-            ss_res = np.sum((gt_y - pred_y_aligned) ** 2)
-            ss_tot = np.sum((gt_y - np.mean(gt_y)) ** 2)
+            ss_res = float(np.sum((gt_y - pred_y_aligned) ** 2))
+            ss_tot = float(np.sum((gt_y - np.mean(gt_y)) ** 2))
             r2 = float(np.clip(1 - ss_res / ss_tot if ss_tot > 0 else 0.0, 0, 1))
             mae = float(np.mean(np.abs(gt_y - pred_y_aligned)))
             mse = float(np.mean((gt_y - pred_y_aligned) ** 2))

@@ -133,9 +133,12 @@ def generate_with_pyreflect_infer_streaming(
             if candidate and candidate.exists():
                 model_path = candidate
     if model_path is None:
-        yield emit("error", "Pre-trained model not found. Upload a .pth model file first (role: nr_sld_model) or provide a valid model_id.")
-        return
-
+        pretrained = BACKEND_ROOT / "data" / "pretrained" / "trained_model.pth"
+        if pretrained.exists():
+            model_path = pretrained
+        else:
+            yield emit("error", "Pre-trained model not found. Upload a .pth model file first (role: nr_sld_model) or provide a valid model_id.")
+            return
     # --- Resolve normalization stats path ---
     norm_path: Path | None = None
     if normalization_stats_path:
@@ -158,8 +161,12 @@ def generate_with_pyreflect_infer_streaming(
             if candidate and candidate.exists():
                 norm_path = candidate
     if norm_path is None:
-        yield emit("error", "Normalization stats not found. Upload a normalization_stat.npy file first (role: normalization_stats) or provide a valid path.")
-        return
+        pretrained_norm = BACKEND_ROOT / "data" / "pretrained" / "normalization_stat.npy"
+        if pretrained_norm.exists():
+            norm_path = pretrained_norm
+        else:
+            yield emit("error", "Normalization stats not found. Upload a normalization_stat.npy file first (role: normalization_stats) or provide a valid path.")
+            return
 
     yield emit("log", f"[Inference Mode] Loading model from: {model_path.name}")
     yield emit("log", f"[Inference Mode] Loading normalization stats from: {norm_path.name}")
@@ -305,11 +312,20 @@ def generate_with_pyreflect_infer_streaming(
         for i, idx in enumerate(sample_indices)
     ]
 
-    mae = float(np.mean(np.abs(pred_sld_y - gt_sld[1])))
-    mse = float(np.mean((pred_sld_y - gt_sld[1]) ** 2))
-    var = float(np.var(gt_sld[1]))
-    r2 = float(np.clip(1 - mse / var if var > 0 else 0.0, 0, 1))
-
+    # R² on NR in log-space (standard reflectometry comparison)
+    gt_nr_y = gt_nr[1]
+    if isinstance(computed_nr, list):
+        computed_nr_arr = np.array(computed_nr)
+    else:
+        computed_nr_arr = computed_nr
+    # Clamp to avoid log(0), then compare in log10 space
+    gt_log = np.log10(np.clip(gt_nr_y, 1e-12, None))
+    comp_log = np.log10(np.clip(computed_nr_arr, 1e-12, None))
+    nr_ss_res = np.sum((gt_log - comp_log) ** 2)
+    nr_ss_tot = np.sum((gt_log - np.mean(gt_log)) ** 2)
+    r2 = float(np.clip(1 - nr_ss_res / nr_ss_tot if nr_ss_tot > 0 else 0.0, 0, 1))
+    mae = float(np.mean(np.abs(gt_log - comp_log)))
+    mse = float(np.mean((gt_log - comp_log) ** 2))
     result = {
         "nr": {
             "q": gt_nr[0].tolist(),

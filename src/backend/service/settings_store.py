@@ -153,6 +153,10 @@ def validate_npy_payload(role: str, payload: Any) -> dict:
             raise ValueError("SLD curve must be (2, L) when 2D")
         return {"shape": payload.shape}
 
+    # Raw experimental NR files may be (L, 2) — accept as-is, no reshape
+    if payload.ndim == 2 and role == "experimental_nr" and payload.shape[1] == 2:
+        return {"shape": payload.shape}
+
     if payload.ndim != 3 or payload.shape[1] != 2:
         raise ValueError("Curve data must have shape (N, 2, L)")
 

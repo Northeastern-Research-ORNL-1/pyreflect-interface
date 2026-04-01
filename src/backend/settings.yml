@@ -1,4 +1,18 @@
-root: .
+"\xEF\xBB\xBFroot": .
+nr_predict_sld:
+  file:
+    nr_train: data/curves/np_out_REFL_194455_combined_data_auto.npy
+    sld_train: data/curves/y_train_5_layers.npy
+    experimental_nr_file: data/curves/expt/np_out_REFL_194446_combined_data_auto.npy
+  models:
+    model: data/pretrained/trained_model.pth
+    normalization_stats: data/pretrained/normalization_stat.npy
+    num_film_layers: 5
+    num_curves: 1000
+    epochs: 20
+    batch_size: 64
+    layers: 6
+    dropout: 0.0873
 sld_predict_chi:
   file:
     model_experimental_sld_profile: data/mod_expt.npy
@@ -9,17 +23,3 @@ sld_predict_chi:
     batch_size: 16
     ae_epochs: 20
     mlp_epochs: 20
-nr_predict_sld:
-  file:
-    nr_train: data/curves/np_out_REFL_194438_combined_data_auto.npy
-    sld_train: data/curves/sld_train.npy
-    experimental_nr_file: data/curves/expt/Sample Data - Sheet1.csv
-  models:
-    model: data/trained_nr_sld_model.pth
-    num_film_layers: 5
-    num_curves: 1000
-    epochs: 10
-    batch_size: 32
-    layers: 12
-    dropout: 0.5
-    normalization_stats: data/normalization_stat.npy

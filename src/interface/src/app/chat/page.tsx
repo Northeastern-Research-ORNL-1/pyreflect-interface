@@ -7,17 +7,30 @@ import Message from './components/Message';
 import GraphDisplay from '@/components/GraphDisplay';
 import { GenerateResponse } from '@/types';
 import type { UploadRole } from '@/types';
+import { TOOL_DEFINITIONS, TOOL_CAPABLE_MODELS } from './tools';
+import type { ToolCall, ToolCallDelta, AssistantToolMessage, ToolMessage } from './tools';
+import { executeToolCall } from './toolExecutor';
+import type { ToolCallbacks } from './toolExecutor';
 
 // ============================================================
 // INTERFACES
 // ============================================================
 
+interface MessageAttachment {
+  name: string;
+  size: number;
+}
+
 interface MessageType {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'tool';
   content: string;
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
+  name?: string;
   suggestions?: SmartSuggestion[];
   isLatest?: boolean;
   model?: string;
+  attachments?: MessageAttachment[];
 }
 
 interface LayerConfig {
@@ -69,27 +82,40 @@ interface SmartSuggestion {
 }
 
 // ============================================================
+// TRAINING DEFAULTS — tune these for R² vs speed tradeoff
+// ============================================================
+const DEFAULT_NUM_CURVES = 125000;
+const DEFAULT_EPOCHS = 20;
+const DEFAULT_LATENT_DIM = 16;
+const DEFAULT_DROPOUT = 0.0873;
+const DEFAULT_BATCH_SIZE = 64;
+const DEFAULT_CNN_LAYERS = 6;
+
+// ============================================================
 // AI ROUTER
 // ============================================================
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
-const MODEL_CHAIN = [
+const MODEL_CHAIN: string[] = [
   'z-ai/glm-4.5-air:free',
+  'openrouter/auto',
   'meta-llama/llama-3.3-70b-instruct:free',
   'qwen/qwen3-coder:free',
   'openrouter/free',
-] as const;
+];
 
 const SYSTEM_PROMPT = `You are PyReflect AI, a neutron reflectivity experiment assistant.
 
-RULES:
-1. When the user describes a sample, extract layer parameters and respond with ONLY a JSON code block.
-2. Do NOT ask clarifying questions unless critical info is missing (substrate, layer material).
-3. If the user says "generate", "run", "go", or "fit", output the JSON immediately.
-4. Keep all text responses under 3 sentences.
+If you have tools available, use them:
+1. When the user wants to fit data, run inference, or generate — call the run_inference tool.
+   - Use dataSource "real" when they have uploaded experimental NR data.
+   - Use dataSource "synthetic" with layer parameters when they describe a sample.
+2. When the user asks about uploaded files or system readiness — call get_backend_status.
+3. After a tool returns results, summarize the R² score and key findings in 1-2 sentences.
+   The inference pipeline: (1) user uploads experimental NR data, (2) CNN predicts SLD profile from NR, (3) model reconstructs NR from predicted SLD, (4) R² measures how well reconstructed NR matches original input NR. When reporting results, say "R² = X (reconstructed vs experimental reflectivity)" — it is NOT a direct SLD comparison.
 
-OUTPUT FORMAT (follow exactly):
+If tools are NOT available, output a JSON code block instead:
 \`\`\`json
 {
   "ready_to_generate": true,
@@ -101,11 +127,13 @@ OUTPUT FORMAT (follow exactly):
 }
 \`\`\`
 
-SLD VALUES (use these, do not guess):
-silicon: 2.07, sio2: 3.47, air: 0, d2o: 6.36, h2o: -0.56, gold: 4.5, pmma: 1.0, polystyrene: 1.04, titanium: -1.95
+RULES:
+- Keep all text responses under 3 sentences.
+- Do NOT ask clarifying questions unless critical info is missing.
+- If the user says "generate", "run", "go", or "fit", act immediately.
 
-If user uploaded experimental data, add "fitToData": true
-NEVER output anything outside the JSON block when generating.`;
+SLD VALUES (use these, do not guess):
+silicon: 2.07, sio2: 3.47, air: 0, d2o: 6.36, h2o: -0.56, gold: 4.5, pmma: 1.0, polystyrene: 1.04, titanium: -1.95`;
 
 function backoffMs(attempt: number): number {
   return Math.min(1000 * 2 ** attempt, 8000) + Math.random() * 500;
@@ -128,7 +156,7 @@ async function diagnoseAPIKey(apiKey: string): Promise<{ ok: boolean; error?: st
   const modelResults: string[] = [];
   let lastRateInfo = '';
   for (const model of MODEL_CHAIN) {
-    const shortName = model.split('/').pop()?.replace(':free', '') || model;
+    const shortName = String(model || '').split('/').pop()?.replace(':free', '') || model;
     try {
       const res = await fetch(OPENROUTER_URL, {
         method: 'POST',
@@ -157,16 +185,29 @@ async function diagnoseAPIKey(apiKey: string): Promise<{ ok: boolean; error?: st
   return { ok: false, status: 429, error: 'All models returned errors', rateInfo: lastRateInfo, modelResults };
 }
 
+interface StreamResult {
+  text: string;
+  toolCalls: ToolCall[];
+}
+
 async function streamCompletion(
   model: string,
-  messages: Array<{ role: string; content: string }>,
+  messages: Array<Record<string, unknown>>,
   apiKey: string,
   timeoutMs: number,
   onToken: (token: string) => void,
-): Promise<string> {
+  tools?: typeof TOOL_DEFINITIONS,
+): Promise<StreamResult> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    const body: Record<string, unknown> = {
+      model, messages, temperature: 0.3, top_p: 0.85, max_tokens: 800, stream: true,
+      ...(model.includes('glm') ? { reasoning: { enabled: true } } : {}),
+    };
+    if (tools && tools.length > 0 && TOOL_CAPABLE_MODELS.has(model)) {
+      body.tools = tools;
+    }
     const res = await fetch(OPENROUTER_URL, {
       method: 'POST',
       headers: {
@@ -175,10 +216,7 @@ async function streamCompletion(
         'HTTP-Referer': typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000',
         'X-Title': 'PyReflect AI',
       },
-      body: JSON.stringify({
-        model, messages, temperature: 0.3, top_p: 0.85, max_tokens: 800, stream: true,
-        ...(model.includes('glm') ? { reasoning: { enabled: true } } : {}),
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
     if (!res.ok) {
@@ -195,16 +233,21 @@ async function streamCompletion(
     }
     const contentType = res.headers.get('content-type') || '';
     if (contentType.includes('application/json') && !contentType.includes('stream')) {
-      const body = await res.json();
-      if (body.error) throw new Error(body.error.message || 'Unknown API error');
-      const content = body.choices?.[0]?.message?.content;
-      if (content) { onToken(content); return content; }
-      throw new Error('EMPTY_RESPONSE');
+      const respBody = await res.json();
+      if (respBody.error) throw new Error(respBody.error.message || 'Unknown API error');
+      const msg = respBody.choices?.[0]?.message;
+      const content = msg?.content || '';
+      const tc: ToolCall[] = msg?.tool_calls || [];
+      if (content) onToken(content);
+      if (!content && tc.length === 0) throw new Error('EMPTY_RESPONSE');
+      return { text: content, toolCalls: tc };
     }
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
     let fullText = '';
     let buffer = '';
+    // Accumulate tool call chunks indexed by their position
+    const tcBuffers = new Map<number, { id: string; name: string; arguments: string }>();
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -218,27 +261,50 @@ async function streamCompletion(
         try {
           const parsed = JSON.parse(data);
           if (parsed.error) throw new Error(parsed.error.message || 'Stream error');
-          const token = parsed.choices?.[0]?.delta?.content;
-          if (token) { fullText += token; onToken(token); }
+          const delta = parsed.choices?.[0]?.delta;
+          if (!delta) continue;
+          // Accumulate content tokens
+          if (delta.content) { fullText += delta.content; onToken(delta.content); }
+          // Accumulate tool call deltas
+          if (delta.tool_calls) {
+            for (const tc of delta.tool_calls as ToolCallDelta[]) {
+              const idx = tc.index;
+              if (!tcBuffers.has(idx)) {
+                tcBuffers.set(idx, { id: tc.id || '', name: tc.function?.name || '', arguments: '' });
+              }
+              const buf = tcBuffers.get(idx)!;
+              if (tc.id) buf.id = tc.id;
+              if (tc.function?.name) buf.name = tc.function.name;
+              if (tc.function?.arguments) buf.arguments += tc.function.arguments;
+            }
+          }
         } catch (e: any) {
           if (e.message && !e.message.includes('JSON')) throw e;
         }
       }
     }
-    if (!fullText.trim()) throw new Error('EMPTY_RESPONSE');
-    return fullText;
+    // Build finalized tool calls
+    const toolCalls: ToolCall[] = [];
+    for (const [, buf] of Array.from(tcBuffers.entries()).sort((a, b) => a[0] - b[0])) {
+      if (buf.id && buf.name) {
+        toolCalls.push({ id: buf.id, type: 'function', function: { name: buf.name, arguments: buf.arguments } });
+      }
+    }
+    if (!fullText.trim() && toolCalls.length === 0) throw new Error('EMPTY_RESPONSE');
+    return { text: fullText, toolCalls };
   } finally {
     clearTimeout(timeout);
   }
 }
 
 async function sendToAI(
-  messages: Array<{ role: string; content: string }>,
+  messages: Array<Record<string, unknown>>,
   apiKey: string,
   onToken: (token: string) => void,
   onModelSwitch?: (model: string, attempt: number) => void,
   onStatus?: (msg: string) => void,
-): Promise<{ text: string; model: string }> {
+  tools?: typeof TOOL_DEFINITIONS,
+): Promise<{ text: string; model: string; toolCalls: ToolCall[] }> {
   const TIMEOUT_MS = 90000;
   const MAX_RETRIES = 1;
   const errors: string[] = [];
@@ -247,14 +313,14 @@ async function sendToAI(
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
         if (onModelSwitch) onModelSwitch(model, attempt);
-        const shortName = model.split('/').pop()?.replace(':free', '') || model;
+        const shortName = String(model || '').split('/').pop()?.replace(':free', '') || model;
         console.log('[aiRouter] Trying ' + shortName + ' (attempt ' + (attempt + 1) + ')');
-        const text = await streamCompletion(model, messages, apiKey, TIMEOUT_MS, onToken);
+        const result = await streamCompletion(model, messages, apiKey, TIMEOUT_MS, onToken, tools);
         console.log('[aiRouter] ✅ ' + shortName + ' succeeded');
-        return { text, model };
+        return { text: result.text, model, toolCalls: result.toolCalls };
       } catch (err: any) {
         const msg = err?.message || 'Unknown error';
-        const shortName = model.split('/').pop()?.replace(':free', '') || model;
+        const shortName = String(model || '').split('/').pop()?.replace(':free', '') || model;
         console.warn('[aiRouter] ❌ ' + shortName + ': ' + msg);
         errors.push(shortName + ': ' + msg);
         if (msg.startsWith('AUTH_ERROR')) throw new Error('API key invalid or expired. Check .env.local.\n\n' + msg);
@@ -301,8 +367,8 @@ const SLD_VALUES: Record<string, number> = {
 };
 
 const TEST_CONFIGS: GenerationConfig[] = [
-  { substrate: 'silicon', layers: [{ name: 'SiO2', thickness: 15, sld: 3.47, roughness: 3 }, { name: 'PMMA', thickness: 100, sld: 1.0, roughness: 5 }], environment: 'air', numCurves: 100, epochs: 10 },
-  { substrate: 'silicon', layers: [{ name: 'Gold', thickness: 50, sld: 4.5, roughness: 2 }, { name: 'Polymer', thickness: 150, sld: 1.2, roughness: 8 }], environment: 'd2o', numCurves: 100, epochs: 10 }
+  { substrate: 'silicon', layers: [{ name: 'layer1', thickness: 100, sld: 1.5, roughness: 10 }, { name: 'layer2', thickness: 80, sld: 2.5, roughness: 8 }, { name: 'layer3', thickness: 120, sld: 1.8, roughness: 12 }, { name: 'layer4', thickness: 90, sld: 3.0, roughness: 7 }, { name: 'layer5', thickness: 110, sld: 2.0, roughness: 9 }], environment: 'air', numCurves: 10, epochs: DEFAULT_EPOCHS },
+  { substrate: 'silicon', layers: [{ name: 'polymer1', thickness: 150, sld: 1.0, roughness: 5 }, { name: 'polymer2', thickness: 100, sld: 2.0, roughness: 8 }, { name: 'polymer3', thickness: 80, sld: 1.5, roughness: 6 }, { name: 'polymer4', thickness: 120, sld: 2.5, roughness: 10 }, { name: 'polymer5', thickness: 90, sld: 1.8, roughness: 7 }], environment: 'air', numCurves: 10, epochs: DEFAULT_EPOCHS },
 ];
 
 function extractParametersFromMessage(message: string, role: 'user' | 'assistant'): CollectedParameter[] {
@@ -326,6 +392,7 @@ function deduplicateParams(params: CollectedParameter[]): CollectedParameter[] {
 
 function generateSmartSuggestions(lastMessage: string, role: 'user' | 'assistant'): SmartSuggestion[] {
   const l = lastMessage.toLowerCase();
+  if (role === 'assistant' && (l.includes('r²') || l.includes('r2') || l.includes('inference') || l.includes('fit') || l.includes('sld profile'))) return [{ text: 'Export results to CSV', category: 'analysis', confidence: 0.95 }, { text: 'Run inference on another dataset', category: 'analysis', confidence: 0.9 }, { text: 'Show predicted layer thicknesses', category: 'analysis', confidence: 0.85 }, { text: 'Compare with synthetic model', category: 'analysis', confidence: 0.8 }];
   if (role === 'assistant' && (l.includes('material') || l.includes('layer'))) return [{ text: 'PMMA polymer (SLD: 1.0)', category: 'material', confidence: 0.9 }, { text: 'Silicon dioxide (SLD: 3.47)', category: 'material', confidence: 0.9 }, { text: 'Gold (SLD: 4.5)', category: 'material', confidence: 0.8 }, { text: 'Polystyrene (SLD: 1.04)', category: 'material', confidence: 0.8 }];
   if (role === 'assistant' && (l.includes('thick') || l.includes('dimension'))) return [{ text: '50 Å (thin layer)', category: 'thickness', confidence: 0.9 }, { text: '100 Å (medium)', category: 'thickness', confidence: 0.9 }, { text: '200 Å (thick)', category: 'thickness', confidence: 0.8 }, { text: '500 Å (very thick)', category: 'thickness', confidence: 0.7 }];
   if (role === 'assistant' && (l.includes('environment') || l.includes('solvent'))) return [{ text: 'Air', category: 'environment', confidence: 0.9 }, { text: 'D₂O (heavy water)', category: 'environment', confidence: 0.9 }, { text: 'H₂O (water)', category: 'environment', confidence: 0.8 }, { text: 'Vacuum', category: 'environment', confidence: 0.7 }];
@@ -388,16 +455,109 @@ async function callGenerateAPI(config: GenerationConfig, onProgress?: (m: string
   const layers = buildLayersPayload(config);
   try {
     if (onProgress) onProgress(hasRealData ? '🔬 Fitting model to your experimental data...' : '🚀 Starting neutron reflectivity analysis...');
-    if (onProgress) onProgress(hasRealData ? '📈 Optimizing layer parameters...' : '🧪 Generating synthetic curves...');
-    const response = await fetch('http://127.0.0.1:8000/api/generate', {
+    if (onProgress) onProgress(hasRealData ? '📈 Optimizing layer parameters...' : '🧪 Running inference with pre-trained model...');
+    const payload = {
+      layers,
+      generator: { numCurves: Math.min(config.numCurves, 100), numFilmLayers: config.layers.length },
+      training: { batchSize: DEFAULT_BATCH_SIZE, epochs: config.epochs, layers: DEFAULT_CNN_LAYERS, dropout: DEFAULT_DROPOUT, latentDim: DEFAULT_LATENT_DIM, aeEpochs: 50, mlpEpochs: 50 },
+      mode: 'infer',
+    };
+    console.log('GENERATE PAYLOAD:', JSON.stringify(payload, null, 2));
+    const response = await fetch('http://127.0.0.1:8000/api/generate/stream', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ layers, generator: { numCurves: config.numCurves, numFilmLayers: layers.length - 2 }, training: { batchSize: 32, epochs: config.epochs, layers: 12, dropout: 0, latentDim: 16, aeEpochs: 50, mlpEpochs: 50 } })
+      body: JSON.stringify(payload),
     });
-    if (!response.ok) { const err = await response.json(); throw new Error(err.detail || 'Generation failed'); }
-    if (onProgress) onProgress('✅ Analysis complete!');
-    return response.json();
+    if (!response.ok) {
+      const errBody = await response.text();
+      console.error('GENERATE ERROR BODY:', errBody);
+      throw new Error('Generate API returned ' + response.status + ': ' + errBody);
+    }
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('No response body');
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let result: GenerateResponse | null = null;
+    let eventType = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim();
+        } else if (line.startsWith('data: ')) {
+          const data = JSON.parse(line.slice(6));
+          if (eventType === 'log' && onProgress) {
+            onProgress(data);
+          } else if (eventType === 'error') {
+            throw new Error(typeof data === 'string' ? data : JSON.stringify(data));
+          } else if (eventType === 'result') {
+            result = data as GenerateResponse;
+          }
+        }
+      }
+    }
+    if (!result) throw new Error('No result received from server');
+    return result;
   } catch (error) {
-    if (onProgress) onProgress('❌ Failed: ' + (error instanceof Error ? error.message : 'Unknown'));
+    console.error('Generate API error:', error);
+    throw error;
+  }
+}
+
+async function callRealDataInferAPI(onProgress?: (m: string) => void): Promise<GenerateResponse> {
+  try {
+    if (onProgress) onProgress('🔬 Running inference with pre-trained model on your uploaded data...');
+    const payload = {
+      layers: [
+        { name: 'substrate', sld: 2.07, isld: 0, thickness: 0, roughness: 5 },
+        { name: 'siox', sld: 3.47, isld: 0, thickness: 15, roughness: 3 },
+        { name: 'film', sld: 1.0, isld: 0, thickness: 100, roughness: 10 },
+        { name: 'air', sld: 0, isld: 0, thickness: 0, roughness: 0 },
+      ],
+      generator: { numCurves: 10, numFilmLayers: 1 },
+      training: { batchSize: 64, epochs: 20, layers: 6, dropout: 0.0873, latentDim: 16, aeEpochs: 50, mlpEpochs: 50 },
+      dataSource: 'real',
+      mode: 'infer',
+    };
+    const response = await fetch('http://127.0.0.1:8000/api/generate/stream', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const errBody = await response.text();
+      console.error('REAL DATA INFER ERROR:', errBody);
+      throw new Error('Generate API returned ' + response.status + ': ' + errBody);
+    }
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('No response body');
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let result: GenerateResponse | null = null;
+    let eventType = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim();
+        } else if (line.startsWith('data: ')) {
+          const data = JSON.parse(line.slice(6));
+          if (eventType === 'log' && onProgress) onProgress(data);
+          else if (eventType === 'error') throw new Error(typeof data === 'string' ? data : JSON.stringify(data));
+          else if (eventType === 'result') result = data as GenerateResponse;
+        }
+      }
+    }
+    if (!result) throw new Error('No result received from server');
+    return result;
+  } catch (error) {
+    console.error('Real data infer error:', error);
     throw error;
   }
 }
@@ -483,11 +643,11 @@ function ParameterPanel({ config, onChange, onGenerate, isGenerating, isCollapse
 }
 
 function HistoryPanel({ history, isOpen, onClose, onSelect }: { history: HistoryItem[]; isOpen: boolean; onClose: () => void; onSelect: (i: HistoryItem) => void }) {
-  return (<>{isOpen && <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 40 }} />}<div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: '320px', background: '#0d0d0d', borderLeft: '1px solid #2a2a2a', transform: isOpen ? 'translateX(0)' : 'translateX(100%)', transition: 'transform 0.3s ease', zIndex: 50, display: 'flex', flexDirection: 'column' }}><div style={{ padding: '16px', borderBottom: '1px solid #2a2a2a', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><span style={{ fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Generation History</span><button onClick={onClose} style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '18px' }}>×</button></div><div style={{ flex: 1, overflow: 'auto', padding: '12px' }}>{history.length === 0 ? (<div style={{ color: '#666', fontSize: '12px', textAlign: 'center', padding: '40px 20px' }}>No generations yet.</div>) : (<div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>{history.map((item, i) => (<button key={item.id} onClick={() => onSelect(item)} style={{ background: '#1a1a1a', border: '1px solid #333', padding: '12px', cursor: 'pointer', textAlign: 'left' }} onMouseOver={e => e.currentTarget.style.borderColor = '#10b981'} onMouseOut={e => e.currentTarget.style.borderColor = '#333'}><div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600 }}>Run #{history.length - i}</span><span style={{ fontSize: '10px', color: '#666' }}>{formatDuration(item.duration)}</span></div><div style={{ fontSize: '11px', color: '#ccc', marginBottom: '4px' }}>{item.config.layers.map(l => l.name).join(' → ')}</div><div style={{ fontSize: '10px', color: '#666' }}>R² {item.result.metrics.r2.toFixed(3)} · MSE {item.result.metrics.mse.toFixed(4)}</div></button>))}</div>)}</div></div></>);
+  return (<>{isOpen && <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 40 }} />}<div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: '320px', background: '#0d0d0d', borderLeft: '1px solid #2a2a2a', transform: isOpen ? 'translateX(0)' : 'translateX(100%)', transition: 'transform 0.3s ease', zIndex: 50, display: 'flex', flexDirection: 'column' }}><div style={{ padding: '16px', borderBottom: '1px solid #2a2a2a', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><span style={{ fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Generation History</span><button onClick={onClose} style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '18px' }}>×</button></div><div style={{ flex: 1, overflow: 'auto', padding: '12px' }}>{history.length === 0 ? (<div style={{ color: '#666', fontSize: '12px', textAlign: 'center', padding: '40px 20px' }}>No generations yet.</div>) : (<div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>{history.map((item, i) => (<button key={item.id + '_' + i} onClick={() => onSelect(item)} style={{ background: '#1a1a1a', border: '1px solid #333', padding: '12px', cursor: 'pointer', textAlign: 'left' }} onMouseOver={e => e.currentTarget.style.borderColor = '#10b981'} onMouseOut={e => e.currentTarget.style.borderColor = '#333'}><div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600 }}>Run #{history.length - i}</span><span style={{ fontSize: '10px', color: '#666' }}>{formatDuration(item.duration)}</span></div><div style={{ fontSize: '11px', color: '#ccc', marginBottom: '4px' }}>{item.config.layers.map(l => l.name).join(' → ')}</div><div style={{ fontSize: '10px', color: '#666' }}>R² {item.result.metrics.r2.toFixed(3)} · MSE {item.result.metrics.mse.toFixed(4)}</div></button>))}</div>)}</div></div></>);
 }
 
 function StatusBar({ history, isGenerating, lastDuration, activeModel, onHistoryClick }: { history: HistoryItem[]; isGenerating: boolean; lastDuration: number | null; activeModel: string | null; onHistoryClick: () => void }) {
-  const short = activeModel ? activeModel.split('/').pop()?.replace(':free', '') || activeModel : null;
+  const short = activeModel ? String(activeModel || '').split('/').pop()?.replace(':free', '') || activeModel : null;
   return (<div style={{ height: '40px', borderTop: '1px solid #2a2a2a', background: '#0d0d0d', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px', fontSize: '11px', fontFamily: "'JetBrains Mono', monospace" }}><div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}><span style={{ color: isGenerating ? '#10b981' : '#666' }}>{isGenerating ? '● RUNNING' : '○ IDLE'}</span>{lastDuration && !isGenerating && <span style={{ color: '#666' }}>Last: {formatDuration(lastDuration)}</span>}{short && <span style={{ color: '#444', fontSize: '10px' }}>via {short}</span>}</div><button onClick={onHistoryClick} style={{ background: 'none', border: '1px solid #333', color: '#888', padding: '4px 12px', cursor: 'pointer', fontSize: '10px', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: '6px' }}><span>📊</span> History ({history.length})</button></div>);
 }
 
@@ -506,7 +666,7 @@ function inferUploadRole(filename: string): UploadRole {
   if (fname.includes('mod_expt') || (fname.includes('chi') && fname.includes('expt'))) return 'sld_chi_experimental_profile';
   if (fname.includes('sld')) return 'sld_train';
   if (['csv', 'txt', 'dat'].includes(ext)) return 'experimental_nr';
-  return 'nr_train';
+  return 'experimental_nr';
 }
 
 // ============================================================
@@ -621,27 +781,86 @@ export default function ChatPage() {
     const text = messageText || input;
     if (!text.trim() || isLoading) return;
     if (isTestCommand(text)) { setInput(''); handleQuickTest(); return; }
-    setMessages(prev => [...prev, { role: 'user', content: text }]);
+
+    const currentAttachments: MessageAttachment[] = uploadedFiles.map(f => ({ name: f.name, size: f.size }));
+    setMessages(prev => [...prev, { role: 'user', content: text, attachments: currentAttachments.length > 0 ? currentAttachments : undefined }]);
+    setUploadedFiles([]);
     setInput(''); setIsLoading(true);
     setCollectedParams(prev => [...prev, ...extractParametersFromMessage(text, 'user')]);
     setMessages(prev => [...prev, { role: 'assistant', content: '', suggestions: [] }]);
+
+    const toolCallbacks: ToolCallbacks = {
+      onProgress: (msg) => setMessages(prev => { const u = [...prev]; const i = u.length - 1; if (i >= 0 && u[i].role === 'assistant') u[i] = { ...u[i], content: '⏳ ' + msg }; return u; }),
+      onGraphData: (data) => {
+        setGraphData(data);
+        setParamsCollapsed(true);
+        const duration = Date.now() - (generationStart ?? Date.now());
+        setLastDuration(duration);
+        setHistory(prev => [{ id: data.model_id ?? 'tool_' + Date.now(), config: { substrate: 'silicon', layers: [{ name: 'film', thickness: 100, sld: 1.0, roughness: 10 }], environment: 'air', numCurves: 10, epochs: 20 }, result: data, timestamp: new Date(), duration }, ...prev]);
+      },
+      setIsGenerating,
+    };
+
     try {
       const apiKey = process.env.NEXT_PUBLIC_OPENROUTER_API_KEY;
       if (!apiKey) throw new Error('API key not found');
-      const history = messages.map(m => ({ role: m.role, content: m.content }));
-      const apiMessages = [{ role: 'system', content: SYSTEM_PROMPT }, ...compressHistory(history), { role: 'user', content: text }];
-      const { text: fullResponse, model: usedModel } = await sendToAI(apiMessages, apiKey,
-        token => { setMessages(prev => { const u = [...prev]; const i = u.length - 1; if (i >= 0 && u[i].role === 'assistant') u[i] = { ...u[i], content: u[i].content + token }; return u; }); },
-        (model, attempt) => { setActiveModel(model); },
-        statusMsg => { setMessages(prev => { const u = [...prev]; const i = u.length - 1; if (i >= 0 && u[i].role === 'assistant') u[i] = { ...u[i], content: '⏳ ' + statusMsg }; return u; }); }
-      );
+      // Build message history for the API (exclude tool messages from display-only messages)
+      const history = messages.filter(m => m.role !== 'tool').map(m => ({ role: m.role, content: m.content }));
+      const systemPrompt = SYSTEM_PROMPT;
+      const apiMessages: Array<Record<string, unknown>> = [
+        { role: 'system', content: systemPrompt },
+        ...compressHistory(history),
+        { role: 'user', content: text },
+      ];
+
+      const MAX_TOOL_ITERATIONS = 3;
+      let finalResponse = '';
+      let usedModel = '';
+
+      for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
+        const { text: responseText, model: modelUsed, toolCalls } = await sendToAI(apiMessages, apiKey,
+          token => { setMessages(prev => { const u = [...prev]; const i = u.length - 1; if (i >= 0 && u[i].role === 'assistant') u[i] = { ...u[i], content: u[i].content + token }; return u; }); },
+          (model) => { setActiveModel(model); },
+          statusMsg => { setMessages(prev => { const u = [...prev]; const i = u.length - 1; if (i >= 0 && u[i].role === 'assistant') u[i] = { ...u[i], content: '⏳ ' + statusMsg }; return u; }); },
+          TOOL_DEFINITIONS,
+        );
+        usedModel = modelUsed;
+
+        if (toolCalls.length === 0) {
+          finalResponse = responseText;
+          break;
+        }
+
+        // Tool calls detected — execute them and continue the loop
+        // Append the assistant message with tool_calls to the API conversation
+        apiMessages.push({ role: 'assistant', content: responseText || null, tool_calls: toolCalls });
+
+        for (const tc of toolCalls) {
+          setMessages(prev => { const u = [...prev]; const i = u.length - 1; if (i >= 0 && u[i].role === 'assistant') u[i] = { ...u[i], content: '🔧 Running **' + tc.function.name + '**...' }; return u; });
+          setGenerationStart(Date.now());
+          try {
+            const result = await executeToolCall(tc.function.name, tc.function.arguments, toolCallbacks);
+            apiMessages.push({ role: 'tool', tool_call_id: tc.id, content: result.content });
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : 'Tool execution failed';
+            apiMessages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: errMsg }) });
+          }
+          setGenerationStart(null);
+        }
+
+        // Clear the assistant placeholder for the next LLM turn
+        setMessages(prev => { const u = [...prev]; const i = u.length - 1; if (i >= 0 && u[i].role === 'assistant') u[i] = { ...u[i], content: '' }; return u; });
+      }
+
       setActiveModel(usedModel);
-      const suggestions = generateSmartSuggestions(fullResponse, 'assistant');
-      setMessages(prev => { const u = [...prev]; const i = u.length - 1; if (i >= 0 && u[i].role === 'assistant') u[i] = { ...u[i], content: fullResponse, suggestions, model: usedModel }; return u; });
-      setCollectedParams(prev => [...prev, ...extractParametersFromMessage(fullResponse, 'assistant')]);
-      const config = extractJSON(fullResponse);
+      const suggestions = generateSmartSuggestions(finalResponse, 'assistant');
+      setMessages(prev => { const u = [...prev]; const i = u.length - 1; if (i >= 0 && u[i].role === 'assistant') u[i] = { ...u[i], content: finalResponse, suggestions, model: usedModel }; return u; });
+      setCollectedParams(prev => [...prev, ...extractParametersFromMessage(finalResponse, 'assistant')]);
+
+      // Fallback for models without tool support: check for JSON config
+      const config = extractJSON(finalResponse);
       if (config?.ready_to_generate) {
-        const gc: GenerationConfig = { substrate: config.substrate || 'silicon', layers: config.layers || [], environment: config.environment || 'air', numCurves: 100, epochs: 10 };
+        const gc: GenerationConfig = { substrate: config.substrate || 'silicon', layers: config.layers || [], environment: config.environment || 'air', numCurves: DEFAULT_NUM_CURVES, epochs: DEFAULT_EPOCHS };
         setPendingConfig(gc); await handleGeneration(gc);
       }
     } catch (error) {
@@ -661,7 +880,7 @@ export default function ChatPage() {
           <button onClick={() => setSidebarOpen(!sidebarOpen)} style={{ width: '32px', height: '32px', background: sidebarOpen ? '#10b981' : '#333', border: 'none', color: sidebarOpen ? 'black' : '#888', cursor: 'pointer', fontSize: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '4px' }}>📋</button>
           <div style={{ width: '32px', height: '32px', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>
           <span style={{ color: 'white', fontWeight: 600, fontSize: '14px' }}>PYREFLECT AI</span>
-          {activeModel && <span style={{ fontSize: '10px', color: '#444', background: '#1a1a1a', padding: '2px 8px', borderRadius: '4px', border: '1px solid #252525' }}>{activeModel.split('/').pop()?.replace(':free', '')}</span>}
+          {activeModel && <span style={{ fontSize: '10px', color: '#444', background: '#1a1a1a', padding: '2px 8px', borderRadius: '4px', border: '1px solid #252525' }}>{String(activeModel || '').split('/').pop()?.replace(':free', '')}</span>}
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
           <button onClick={handleQuickTest} disabled={isGenerating || isLoading} style={{ color: 'black', background: '#10b981', border: 'none', padding: '6px 12px', cursor: isGenerating ? 'not-allowed' : 'pointer', fontSize: '11px', fontFamily: 'inherit', textTransform: 'uppercase', fontWeight: 600, opacity: isGenerating ? 0.5 : 1 }}>🧪 Quick Test</button>
@@ -685,8 +904,8 @@ export default function ChatPage() {
           <div style={{ flex: 1, overflow: 'auto', padding: '16px' }}>
             {messages.length === 0 ? <WelcomeScreen onSuggestionClick={sendMessage} /> : (
               <div>
-                {messages.map((m, i) => (<div key={i}><Message role={m.role} content={m.content} />{m.role === 'assistant' && m.suggestions && m.suggestions.length > 0 && <SmartSuggestions suggestions={m.suggestions} onSuggestionClick={handleSuggestionClick} isLatest={i === lastAssistantIndex} />}</div>))}
-                {isLoading && messages.length > 0 && messages[messages.length - 1].content === '' && (<div style={{ padding: '16px', color: '#10b981', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}><span style={{ animation: 'pulse 1s ease-in-out infinite' }}>●</span>Connecting to {activeModel?.split('/').pop()?.replace(':free', '') || 'AI'}...</div>)}
+                {messages.filter(m => m.role !== 'tool').map((m, i) => (<div key={i}>{m.role === 'user' && m.attachments && m.attachments.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', padding: '4px 16px 0', justifyContent: 'flex-end' }}>{m.attachments.map((a, j) => <span key={j} style={{ background: '#1a1a1a', border: '1px solid #333', borderRadius: '4px', padding: '4px 8px', fontSize: '10px', color: '#888', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>📎 {a.name} <span style={{ color: '#555' }}>({formatFileSize(a.size)})</span></span>)}</div>}<Message role={m.role as 'user' | 'assistant'} content={m.content} />{m.role === 'assistant' && m.suggestions && m.suggestions.length > 0 && <SmartSuggestions suggestions={m.suggestions} onSuggestionClick={handleSuggestionClick} isLatest={i === lastAssistantIndex} />}</div>))}
+                {isLoading && messages.length > 0 && messages[messages.length - 1].content === '' && (<div style={{ padding: '16px', color: '#10b981', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}><span style={{ animation: 'pulse 1s ease-in-out infinite' }}>●</span>Connecting to {String(activeModel || '').split('/').pop()?.replace(':free', '') || 'AI'}...</div>)}
                 <div ref={messagesEndRef} />
               </div>
             )}
@@ -706,7 +925,12 @@ export default function ChatPage() {
           <ParameterPanel config={pendingConfig} onChange={setPendingConfig} onGenerate={() => pendingConfig && handleGeneration(pendingConfig)} isGenerating={isGenerating} isCollapsed={paramsCollapsed} onToggle={() => setParamsCollapsed(!paramsCollapsed)} />
           <div style={{ flex: 1, overflow: 'auto', padding: '16px', paddingTop: '48px', position: 'relative' }}>
             <LiveTimer startTime={generationStart} isRunning={isGenerating} />
-            {graphData && !isGenerating ? <GraphDisplay data={graphData} /> : !isGenerating && (<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#444', fontSize: '12px', textAlign: 'center' }}><div><div style={{ fontSize: '48px', marginBottom: '16px', opacity: 0.3 }}>◇</div><div>Click <strong>Quick Test</strong> or chat with AI</div></div></div>)}
+            {graphData && !isGenerating ? (<><div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '24px', padding: '10px 16px', background: '#111', borderBottom: '1px solid #2a2a2a', fontFamily: "'JetBrains Mono', monospace" }}>
+              <div style={{ textAlign: 'center' }}><div style={{ fontSize: '10px', color: '#666', textTransform: 'uppercase', letterSpacing: '0.5px' }}>MSE</div><div style={{ fontSize: '14px', color: '#ccc', fontWeight: 500 }}>{graphData.metrics.mse.toFixed(6)}</div></div>
+              <div style={{ textAlign: 'center' }}><div style={{ fontSize: '10px', color: '#10b981', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>R²</div><div style={{ fontSize: '24px', color: '#10b981', fontWeight: 700, lineHeight: 1 }}>{graphData.metrics.r2.toFixed(4)}</div></div>
+              <div style={{ textAlign: 'center' }}><div style={{ fontSize: '10px', color: '#666', textTransform: 'uppercase', letterSpacing: '0.5px' }}>MAE</div><div style={{ fontSize: '14px', color: '#ccc', fontWeight: 500 }}>{graphData.metrics.mae.toFixed(6)}</div></div>
+              {(graphData.model_id || (lastDuration != null && lastDuration > 0)) && <div style={{ borderLeft: '1px solid #2a2a2a', paddingLeft: '16px', display: 'flex', flexDirection: 'column', gap: '2px' }}>{graphData.model_id && <div style={{ fontSize: '10px', color: '#555' }}>model: <span style={{ color: '#777' }}>{graphData.model_id}</span></div>}{lastDuration != null && lastDuration > 0 && <div style={{ fontSize: '10px', color: '#555' }}>{formatDuration(lastDuration)}</div>}</div>}
+            </div><GraphDisplay data={graphData} /></>) : !isGenerating && (<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#444', fontSize: '12px', textAlign: 'center' }}><div><div style={{ fontSize: '48px', marginBottom: '16px', opacity: 0.3 }}>◇</div><div>Click <strong>Quick Test</strong> or chat with AI</div></div></div>)}
           </div>
           <StatusBar history={history} isGenerating={isGenerating} lastDuration={lastDuration} activeModel={activeModel} onHistoryClick={() => setHistoryOpen(true)} />
         </div>
