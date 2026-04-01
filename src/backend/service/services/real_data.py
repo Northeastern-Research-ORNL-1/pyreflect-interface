@@ -564,15 +564,16 @@ def _real_nr_sld_infer_core(
     request: GenerateRequest,
     emit,
 ) -> Generator[str, None, dict]:
-    # NOTE: R² on real experimental NR data is expected to be low with the
-    # current pretrained model.  The CNN (sigmoid output, trained on synthetic
-    # NR/SLD pairs) produces a compressed SLD prediction when given
-    # experimental NR input.  A model retrained on experimental data, or
-    # Krishna's specific checkpoint, may be needed to achieve R² > 0.9.
+    # The pretrained model (from pyreflect-new-overfitting) was trained with a
+    # CNN that has NO sigmoid on the output — raw linear values, not [0,1].
+    # The installed pyreflect package has a DIFFERENT cnn.py that adds
+    # torch.sigmoid(x), which compresses the output to ~[0.5, 0.7] and
+    # destroys R².  We work around this by stripping the sigmoid after loading.
     reflectivity_pipeline = PYREFLECT.reflectivity_pipeline
     compute_nr_from_sld = PYREFLECT.compute_nr_from_sld
+    torch = PYREFLECT.torch
 
-    if reflectivity_pipeline is None:
+    if reflectivity_pipeline is None or torch is None:
         yield emit("error", "NR->SLD workflow not available. Check pyreflect install.")
         return {}
 
@@ -602,22 +603,47 @@ def _real_nr_sld_infer_core(
     dropout = settings.get("nr_predict_sld", {}).get("models", {}).get("dropout", request.training.dropout)
     model = reflectivity_pipeline.load_nr_sld_model(model_path, layers=layers, dropout_prob=dropout)
     norm_stats = reflectivity_pipeline.load_normalization_stat(norm_path)
+    sld_stats = norm_stats["sld"]
+    nr_stats = norm_stats["nr"]
 
-    predicted_sld = reflectivity_pipeline.predict_sld_from_nr(model, nr_file, norm_stats)
-    pred_curve = predicted_sld[0] if predicted_sld.ndim == 3 else predicted_sld
+    # ------------------------------------------------------------------
+    # Manual forward pass — bypass predict_sld_from_nr to strip sigmoid.
+    # The installed CNN.forward() ends with torch.sigmoid(x), but the
+    # pretrained weights were trained WITHOUT sigmoid.  We run all layers
+    # except sigmoid, then denormalise ourselves.
+    # ------------------------------------------------------------------
+    nr_arr = nr_curves.copy() if nr_curves.ndim == 3 else nr_curves[np.newaxis, :, :]
+    nr_arr = nr_arr.astype(np.float64)
+
+    # Normalise NR: log10 on reflectivity, then min-max
+    nr_arr[:, 1, :] = np.log10(np.clip(nr_arr[:, 1, :], 1e-8, None))
+    nr_y_norm = (nr_arr[:, 1, :] - nr_stats["y"]["min"]) / (nr_stats["y"]["max"] - nr_stats["y"]["min"])
+    nr_input = torch.tensor(nr_y_norm[:, np.newaxis, :], dtype=torch.float32)
+
+    device = next(model.parameters()).device
+    nr_input = nr_input.to(device)
+    model.eval()
+    with torch.no_grad():
+        # Run conv + linear layers manually, skipping the final sigmoid
+        x = nr_input
+        for layer in model.layers:
+            x = layer(x)
+        x = x.reshape(x.shape[0], -1)
+        x = model.linear1(x)
+        x = x.reshape(-1, 2, 900)
+        # NO sigmoid — raw linear output, matching Krishna's training
+        raw_output = x.cpu().numpy()
+
+    # Denormalise both channels with SLD stats
+    pred_sld_z = raw_output[0, 0, :] * (sld_stats["x"]["max"] - sld_stats["x"]["min"]) + sld_stats["x"]["min"]
+    pred_sld_y = raw_output[0, 1, :] * (sld_stats["y"]["max"] - sld_stats["y"]["min"]) + sld_stats["y"]["min"]
+    pred_curve_2d = np.stack([pred_sld_z, pred_sld_y])  # (2, 900)
 
     gt_nr = nr_curves[0] if nr_curves.ndim == 3 else nr_curves
-    pred_sld_z = pred_curve[0]
-    pred_sld_y = pred_curve[1]
 
-    # Zero-shift depth and apply reverse_y_order for correct orientation
-    pred_sld_z = pred_sld_z - pred_sld_z.min()
-    pred_curve_2d = np.stack([pred_sld_z, pred_sld_y])  # (2, L)
-    reverse_y_order = PYREFLECT.reverse_y_order
-    if reverse_y_order is not None:
-        pred_curve_2d = reverse_y_order(pred_curve_2d)
-        pred_sld_z = pred_curve_2d[0]
-        pred_sld_y = pred_curve_2d[1]
+    # NOTE: do NOT apply reverse_y_order or zero-shift to the prediction.
+    # Krishna's notebook applies those only to the ground-truth SLD.
+    # The predicted SLD is used as-is from denormalisation.
 
     computed_nr = gt_nr[1].tolist()
     if PYREFLECT.compute_nr_available and compute_nr_from_sld is not None:
@@ -630,7 +656,10 @@ def _real_nr_sld_infer_core(
             yield emit("log", f"Warning: Could not compute NR from predicted SLD: {exc}")
 
     # ------------------------------------------------------------------
-    # R² computation: compare against ground-truth SLD if available
+    # R² computation — Krishna's method:
+    #   1. Preprocess GT SLD: transpose → interp to 900 → reverse_y_order → zero-shift z
+    #   2. Interpolate predicted SLD onto GT z-grid (align_arrays)
+    #   3. R² on y-values
     # ------------------------------------------------------------------
     gt_sld_path = _find_ground_truth_sld(nr_file)
     gt_sld_interp = None
@@ -642,40 +671,20 @@ def _real_nr_sld_infer_core(
             gt_sld_raw = np.load(gt_sld_path)
             yield emit("log", f"Found ground-truth SLD: {gt_sld_path.name} (shape {gt_sld_raw.shape})")
 
-            target_len = pred_curve_2d.shape[1]
+            target_len = 900
             gt_sld_interp = _preprocess_ground_truth_sld(gt_sld_raw, target_len, pred_curve_2d)
             if gt_sld_interp.ndim == 3:
                 gt_sld_interp = gt_sld_interp[0]
             gt_y = gt_sld_interp[1]
 
-            # Align predicted SLD onto ground-truth at substrate critical point
-            pred_y = pred_sld_y
-            try:
-                from pyreflect.pipelines.helper import align_points
-                # Both arrays must be (2, L) for align_points
-                pred_for_align = np.asarray(pred_curve_2d)
-                if pred_for_align.ndim != 2:
-                    pred_for_align = pred_for_align.reshape(2, -1)
-                gt_for_align = np.asarray(gt_sld_interp)
-                if gt_for_align.ndim != 2:
-                    gt_for_align = gt_for_align.reshape(2, -1)
-                pred_curve_aligned = align_points(gt_for_align, pred_for_align)
-                pred_y = pred_curve_aligned[1]
-            except Exception:
-                pass  # alignment is optional; fall through with unaligned
+            # align_arrays: interpolate predicted y onto ground-truth z-grid
+            pred_y_aligned = np.interp(gt_sld_interp[0], pred_curve_2d[0], pred_curve_2d[1])
 
-            if len(gt_y) != len(pred_y):
-                pred_y = np.interp(
-                    np.linspace(0, 1, len(gt_y)),
-                    np.linspace(0, 1, len(pred_y)),
-                    pred_y,
-                )
-
-            ss_res = np.sum((gt_y - pred_y) ** 2)
+            ss_res = np.sum((gt_y - pred_y_aligned) ** 2)
             ss_tot = np.sum((gt_y - np.mean(gt_y)) ** 2)
             r2 = float(np.clip(1 - ss_res / ss_tot if ss_tot > 0 else 0.0, 0, 1))
-            mae = float(np.mean(np.abs(gt_y - pred_y)))
-            mse = float(np.mean((gt_y - pred_y) ** 2))
+            mae = float(np.mean(np.abs(gt_y - pred_y_aligned)))
+            mse = float(np.mean((gt_y - pred_y_aligned) ** 2))
             r2_method = "sld_vs_ground_truth"
 
             yield emit("log", f"R² computed via SLD vs ground-truth SLD: R²={r2:.4f}")
@@ -705,7 +714,7 @@ def _real_nr_sld_infer_core(
 
     result = {
         "nr": {"q": gt_nr[0].tolist(), "groundTruth": gt_nr[1].tolist(), "computed": computed_nr},
-        "sld": {"z": pred_sld_z.tolist(), "groundTruth": gt_sld_y_out, "predicted": pred_sld_y.tolist()},
+        "sld": {"z": gt_sld_z_out, "groundTruth": gt_sld_y_out, "predicted": pred_sld_y.tolist()},
         "training": {"epochs": [], "trainingLoss": [], "validationLoss": []},
         "chi": [],
         "metrics": {"mse": mse, "r2": r2, "mae": mae, "r2_method": r2_method},
