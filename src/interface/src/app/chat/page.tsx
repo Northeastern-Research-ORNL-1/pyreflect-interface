@@ -677,9 +677,21 @@ export default function ChatPage() {
   const { data: session } = useSession();
   const sessionUserId = (() => {
     const user = session?.user as unknown;
-    if (!user || typeof user !== 'object') return undefined;
-    const maybeId = (user as Record<string, unknown>).id;
-    return typeof maybeId === 'string' ? maybeId : undefined;
+    if (user && typeof user === 'object') {
+      const maybeId = (user as Record<string, unknown>).id;
+      if (typeof maybeId === 'string') return maybeId;
+    }
+    // Fallback: stable anonymous ID so X-User-ID header is always sent
+    if (typeof window !== 'undefined') {
+      const key = 'pyreflect-anon-user-id';
+      let anonId = sessionStorage.getItem(key);
+      if (!anonId) {
+        anonId = `anon-${crypto.randomUUID()}`;
+        sessionStorage.setItem(key, anonId);
+      }
+      return anonId;
+    }
+    return 'anon';
   })();
 
   const [messages, setMessages] = useState<MessageType[]>([]);
